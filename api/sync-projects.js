@@ -61,7 +61,7 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key");
     if (req.method === "OPTIONS") return res.status(204).end();
 
-  // API key enforcement (required for data-table sync)
+    // API key enforcement (required for data-table sync)
     const configuredKeys = (process.env.API_KEYS || process.env.API_KEY || "")
         .split(",")
         .map((s) => s.trim())

@@ -105,7 +105,7 @@ export default async function handler(req, res) {
         return;
     }
 
-  // No API key required for uploads
+    // No API key required for uploads
 
     try {
         let site = DEFAULT_SITE_URL;

@@ -1,5 +1,6 @@
 import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
+import { logSubmission } from "../lib/kv";
 
 function readEnv(name, required = false) {
     const val = process.env[name];
@@ -118,6 +119,15 @@ export default async function handler(req, res) {
             await uploadSmallFile(token, driveId, folderId, f.filename || deriveFilenameFromUrl(f.url), buffer);
             uploaded += 1;
         }
+
+    await logSubmission({
+      type: "fastfield-submit",
+      folderName,
+      uploaded,
+      files,
+      siteUrl: site,
+      libraryPath: library,
+    });
 
         res.status(200).json({ ok: true, uploaded, folderName, siteUrl: site, libraryPath: library, driveId, folderId });
     } catch (e) {
