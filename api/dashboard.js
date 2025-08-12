@@ -1,4 +1,4 @@
-import { listSubmissions } from "../lib/kv.js";
+import { listSubmissions, kvDiagnostics } from "../lib/kv.js";
 
 function escapeHtml(s) {
   return String(s)
@@ -10,7 +10,7 @@ function escapeHtml(s) {
 }
 
 export default async function handler(_req, res) {
-  const items = await listSubmissions(200);
+  const [diag, items] = await Promise.all([kvDiagnostics(), listSubmissions(200)]);
   const rows = items
     .map((it) => {
       const files = Array.isArray(it.files)
@@ -43,6 +43,8 @@ tr:nth-child(even){background:#fcfcfd}
 </style></head>
 <body>
   <h1 style="margin:0 0 16px 0; font-size:20px; font-weight:700">Webhook Submissions</h1>
+  <div class="muted" style="margin-bottom:8px">KV status: ${diag.ok ? 'OK' : 'ERROR'} (${escapeHtml(diag.info?.provider || 'unknown')})</div>
+  ${diag.ok ? '' : `<pre style="white-space:pre-wrap;background:#fff;padding:8px;border:1px solid #eee;border-radius:8px;margin:0 0 16px 0">${escapeHtml(diag.error || 'not configured')}</pre>`}
   <div class="muted" style="margin-bottom:16px">Showing latest ${items.length} events</div>
   <table>
     <thead>
