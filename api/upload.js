@@ -89,11 +89,7 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buffer });
 }
 
-export const config = {
-    api: {
-        bodyParser: false,
-    },
-};
+export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
@@ -109,45 +105,44 @@ export default async function handler(req, res) {
         return;
     }
 
-    try {
-        const site = req.query.siteUrl || DEFAULT_SITE_URL;
-        const library = req.query.libraryPath || DEFAULT_LIBRARY;
-        const folderName = req.query.folderName; // we will also read from form field
+  try {
+    let site = DEFAULT_SITE_URL;
+    let library = DEFAULT_LIBRARY;
+    let inferredFolderName = undefined;
+    const files = [];
 
-        const files = [];
-        let inferredFolderName = folderName;
-        await new Promise((resolve, reject) => {
-            const bb = Busboy({ headers: req.headers });
-            bb.on("file", (name, file, info) => {
-                const chunks = [];
-                file.on("data", (d) => chunks.push(d));
-                file.on("end", () => {
-                    files.push({ filename: info.filename, buffer: Buffer.concat(chunks) });
-                });
-            });
-            bb.on("field", (name, val) => {
-                if (name === "folderName") inferredFolderName = val;
-                if (name === "siteUrl") site = val;
-                if (name === "libraryPath") library = val;
-            });
-            bb.on("close", resolve);
-            bb.on("error", reject);
-            req.pipe(bb);
+    await new Promise((resolve, reject) => {
+      const bb = new Busboy({ headers: req.headers });
+      bb.on("file", (_name, file, info) => {
+        const chunks = [];
+        file.on("data", (d) => chunks.push(d));
+        file.on("end", () => {
+          files.push({ filename: info.filename, buffer: Buffer.concat(chunks) });
         });
+      });
+      bb.on("field", (name, val) => {
+        if (name === "folderName") inferredFolderName = val;
+        if (name === "siteUrl") site = val;
+        if (name === "libraryPath") library = val;
+      });
+      bb.on("finish", resolve);
+      bb.on("error", reject);
+      req.pipe(bb);
+    });
 
-        if (!inferredFolderName) return res.status(400).json({ error: "Missing folderName" });
-        if (!site || !library) return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
-        if (files.length === 0) return res.status(400).json({ error: "No files uploaded" });
+    if (!inferredFolderName) return res.status(400).json({ error: "Missing folderName" });
+    if (!site || !library) return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
+    if (files.length === 0) return res.status(400).json({ error: "No files uploaded" });
 
-        const token = await getAppToken();
-        const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, inferredFolderName);
+    const token = await getAppToken();
+    const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, inferredFolderName);
 
-        for (const f of files) {
-            await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
-        }
-
-        res.status(200).json({ ok: true, uploaded: files.length, driveId, folderId });
-    } catch (e) {
-        res.status(500).json({ error: e.message || String(e) });
+    for (const f of files) {
+      await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
     }
+
+    res.status(200).json({ ok: true, uploaded: files.length, driveId, folderId });
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
 }
