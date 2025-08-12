@@ -1,4 +1,4 @@
-import { listSubmissions } from "../lib/kv";
+import { listSubmissions } from "../lib/kv.js";
 
 function escapeHtml(s) {
   return String(s)

@@ -1,6 +1,6 @@
 import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
-import { logSubmission } from "../lib/kv";
+import { logSubmission } from "../lib/kv.js";
 
 function readEnv(name, required = false) {
     const val = process.env[name];

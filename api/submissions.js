@@ -1,4 +1,4 @@
-import { listSubmissions } from "../lib/kv";
+import { listSubmissions } from "../lib/kv.js";
 
 export default async function handler(req, res) {
   const origin = process.env.CORS_ORIGIN || "*";
