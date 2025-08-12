@@ -1,15 +1,7 @@
 {
     "version": 2,
     "builds": [
-        { "src": "api/**/*.[jt]s", "use": "@vercel/node" },
-        { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+        { "src": "api/**/*.[jt]s", "use": "@vercel/node" }
     ],
-    "functions": {
-        "api/**/*": {
-            "runtime": "nodejs18.x",
-            "maxDuration": 60,
-            "memory": 1024
-        }
-    },
     "routes": [{ "src": "/api/(.*)", "dest": "/api/$1" }]
 }
