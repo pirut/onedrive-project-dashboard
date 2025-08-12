@@ -96,37 +96,10 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-    // API key enforcement (reuse same scheme)
-  const configuredKeys = (process.env.API_KEYS || process.env.API_KEY || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-    if (configuredKeys.length > 0) {
-    const headerKey = req.headers["x-api-key"]; // preferred
-    const auth = req.headers["authorization"]; // Bearer <key>
-    const urlKey = req.query?.api_key; // allow via query string
-    // Body key supported after body is parsed below
-    let provided = headerKey || (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : null) || urlKey;
-        if (!provided || !configuredKeys.includes(String(provided))) {
-      // Defer final decision until after body parse in case api_key is provided in body
-      req.__pendingAuth = true;
-        }
-    }
-
     try {
         // Flexible body: { folderName, files:[{url,filename}] } or { data: { ... } }
         const body = req.body && typeof req.body === "object" ? req.body : await readJsonBody(req);
         const data = body?.data && typeof body.data === "object" ? body.data : body;
-    if (req.__pendingAuth) {
-      const bodyKey = data?.api_key || body?.api_key;
-      const configuredKeys2 = (process.env.API_KEYS || process.env.API_KEY || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!bodyKey || !configuredKeys2.includes(String(bodyKey))) {
-        return res.status(401).json({ error: "Unauthorized" });
-      }
-    }
         let folderName = data?.folderName || data?.projectFolderName || data?.folder || null;
         const site = data?.siteUrl || DEFAULT_SITE_URL;
         const library = data?.libraryPath || DEFAULT_LIBRARY;
