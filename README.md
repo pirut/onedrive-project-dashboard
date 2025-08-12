@@ -95,7 +95,9 @@ Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**,
 
 -   Front-end: build and deploy the Vite app to the host serving `https://cstonedash.jrbussard.com`.
     -   Ensure SPA redirect URI `https://cstonedash.jrbussard.com` is added to your Entra app registration.
--   Webhook: deploy `server/webhook.js` as a Node 18+ service. Expose `GET /health` and `POST /upload` and set envs above. Enable HTTPS at the edge.
+-   Webhook: either deploy `server/webhook.js` as a Node 18+ service or use Vercel Serverless Functions included in this repo.
+    -   Vercel functions: `api/health.js`, `api/upload.js`. Configure env vars in Vercel (`TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`, `MS_GRAPH_SCOPE`, `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`, `CORS_ORIGIN=https://cstonedash.jrbussard.com`).
+    -   Frontend envs must be set in Vercel (build-time): `VITE_AZURE_AD_CLIENT_ID`, `VITE_AZURE_AD_TENANT_ID`.
 
 ## Notes
 
