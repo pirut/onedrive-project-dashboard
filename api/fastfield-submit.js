@@ -95,7 +95,10 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key");
     if (req.method === "OPTIONS") return res.status(204).end();
-    if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+    if (req.method !== "POST") {
+        await logSubmission({ type: "fastfield-submit", status: "wrong-method", method: req.method });
+        return res.status(405).json({ error: "Method not allowed" });
+    }
 
     try {
         // Flexible body: { folderName, files:[{url,filename}] } or { data: { ... } }
@@ -106,18 +109,18 @@ export default async function handler(req, res) {
         const library = data?.libraryPath || DEFAULT_LIBRARY;
         const files = normalizeFiles(data);
 
-    if (!folderName) {
-      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing folderName", siteUrl: site, libraryPath: library });
-      return res.status(400).json({ error: "Missing folderName in payload" });
-    }
-    if (!site || !library) {
-      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing siteUrl or libraryPath", folderName });
-      return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
-    }
-    if (files.length === 0) {
-      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "No files provided", folderName, siteUrl: site, libraryPath: library });
-      return res.status(400).json({ error: "No files provided" });
-    }
+        if (!folderName) {
+            await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing folderName", siteUrl: site, libraryPath: library });
+            return res.status(400).json({ error: "Missing folderName in payload" });
+        }
+        if (!site || !library) {
+            await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing siteUrl or libraryPath", folderName });
+            return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
+        }
+        if (files.length === 0) {
+            await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "No files provided", folderName, siteUrl: site, libraryPath: library });
+            return res.status(400).json({ error: "No files provided" });
+        }
 
         const token = await getAppToken();
         const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, folderName);
@@ -129,20 +132,20 @@ export default async function handler(req, res) {
             uploaded += 1;
         }
 
-    await logSubmission({
-      type: "fastfield-submit",
-      status: "ok",
-      folderName,
-      uploaded,
-      files,
-      siteUrl: site,
-      libraryPath: library,
-    });
+        await logSubmission({
+            type: "fastfield-submit",
+            status: "ok",
+            folderName,
+            uploaded,
+            files,
+            siteUrl: site,
+            libraryPath: library,
+        });
 
         res.status(200).json({ ok: true, uploaded, folderName, siteUrl: site, libraryPath: library, driveId, folderId });
     } catch (e) {
-    await logSubmission({ type: "fastfield-submit", status: "error", error: e?.message || String(e) });
-    res.status(500).json({ error: e.message || String(e) });
+        await logSubmission({ type: "fastfield-submit", status: "error", error: e?.message || String(e) });
+        res.status(500).json({ error: e.message || String(e) });
     }
 }
 
