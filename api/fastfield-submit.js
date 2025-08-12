@@ -106,9 +106,18 @@ export default async function handler(req, res) {
         const library = data?.libraryPath || DEFAULT_LIBRARY;
         const files = normalizeFiles(data);
 
-        if (!folderName) return res.status(400).json({ error: "Missing folderName in payload" });
-        if (!site || !library) return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
-        if (files.length === 0) return res.status(400).json({ error: "No files provided" });
+    if (!folderName) {
+      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing folderName", siteUrl: site, libraryPath: library });
+      return res.status(400).json({ error: "Missing folderName in payload" });
+    }
+    if (!site || !library) {
+      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "Missing siteUrl or libraryPath", folderName });
+      return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
+    }
+    if (files.length === 0) {
+      await logSubmission({ type: "fastfield-submit", status: "invalid", reason: "No files provided", folderName, siteUrl: site, libraryPath: library });
+      return res.status(400).json({ error: "No files provided" });
+    }
 
         const token = await getAppToken();
         const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, folderName);
@@ -122,6 +131,7 @@ export default async function handler(req, res) {
 
     await logSubmission({
       type: "fastfield-submit",
+      status: "ok",
       folderName,
       uploaded,
       files,
@@ -131,7 +141,8 @@ export default async function handler(req, res) {
 
         res.status(200).json({ ok: true, uploaded, folderName, siteUrl: site, libraryPath: library, driveId, folderId });
     } catch (e) {
-        res.status(500).json({ error: e.message || String(e) });
+    await logSubmission({ type: "fastfield-submit", status: "error", error: e?.message || String(e) });
+    res.status(500).json({ error: e.message || String(e) });
     }
 }
 
