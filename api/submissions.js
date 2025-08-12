@@ -10,6 +10,7 @@ export default async function handler(req, res) {
 
   const limit = parseInt(req.query.limit || "100", 10);
   const items = await listSubmissions(Math.max(1, Math.min(500, limit)));
+  res.setHeader("Cache-Control", "no-store");
   res.status(200).json({ ok: true, items });
 }
 
