@@ -89,7 +89,7 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buffer });
 }
 
-export const config = { api: { bodyParser: false }, runtime: "nodejs18.x" };
+export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
@@ -105,21 +105,21 @@ export default async function handler(req, res) {
         return;
     }
 
-  // Optional API key protection: supports API_KEYS (comma-separated) or API_KEY
-  const configuredKeys = (process.env.API_KEYS || process.env.API_KEY || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (configuredKeys.length > 0) {
-    const headerKey = req.headers["x-api-key"]; // preferred
-    const auth = req.headers["authorization"]; // optional: Bearer <key>
-    const queryKey = req.query?.api_key; // last resort
-    const provided = headerKey || (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : null) || queryKey;
-    if (!provided || !configuredKeys.includes(String(provided))) {
-      res.status(401).json({ error: "Unauthorized" });
-      return;
+    // Optional API key protection: supports API_KEYS (comma-separated) or API_KEY
+    const configuredKeys = (process.env.API_KEYS || process.env.API_KEY || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    if (configuredKeys.length > 0) {
+        const headerKey = req.headers["x-api-key"]; // preferred
+        const auth = req.headers["authorization"]; // optional: Bearer <key>
+        const queryKey = req.query?.api_key; // last resort
+        const provided = headerKey || (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : null) || queryKey;
+        if (!provided || !configuredKeys.includes(String(provided))) {
+            res.status(401).json({ error: "Unauthorized" });
+            return;
+        }
     }
-  }
 
     try {
         let site = DEFAULT_SITE_URL;
