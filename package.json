@@ -10,6 +10,11 @@
         "webhook": "node server/webhook.js"
     },
     "dependencies": {
+        "@azure/msal-node": "^2.6.7",
+        "cors": "^2.8.5",
+        "express": "^4.19.2",
+        "multer": "^1.4.5-lts.1",
+        "dotenv": "^16.4.5",
         "@azure/msal-browser": "^3.16.0",
         "@microsoft/microsoft-graph-client": "^3.0.7",
         "isomorphic-fetch": "^3.0.0",
@@ -20,9 +25,7 @@
         "@vitejs/plugin-react": "^4.3.2",
         "vite": "^5.3.4"
     },
-    "optionalDependencies": {
-        "@azure/msal-node": "^2.6.7",
-        "express": "^4.19.2",
-        "multer": "^1.4.5-lts.1"
+    "engines": {
+        "node": ">=18"
     }
 }

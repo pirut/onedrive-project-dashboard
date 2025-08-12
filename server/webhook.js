@@ -1,13 +1,16 @@
+import "dotenv/config";
 /*
  Minimal webhook to receive files and upload to SharePoint via Microsoft Graph
  Auth: app-only using client credentials (msal-node)
 */
 
-const express = require("express");
-const multer = require("multer");
-const { ConfidentialClientApplication } = require("@azure/msal-node");
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import { ConfidentialClientApplication } from "@azure/msal-node";
 
 const PORT = process.env.PORT || 3001;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // e.g. https://cstonedash.jrbussard.com
 const TENANT_ID = process.env.TENANT_ID; // or domain
 const MSAL_CLIENT_ID = process.env.MSAL_CLIENT_ID;
 const MSAL_CLIENT_SECRET = process.env.MSAL_CLIENT_SECRET;
@@ -97,6 +100,17 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
 }
 
 const app = express();
+app.use(
+    cors({
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            if (CORS_ORIGIN === "*") return callback(null, true);
+            const allowed = CORS_ORIGIN.split(",").map((s) => s.trim());
+            if (allowed.includes(origin)) return callback(null, true);
+            return callback(new Error("Not allowed by CORS"));
+        },
+    })
+);
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
