@@ -105,44 +105,44 @@ export default async function handler(req, res) {
         return;
     }
 
-  try {
-    let site = DEFAULT_SITE_URL;
-    let library = DEFAULT_LIBRARY;
-    let inferredFolderName = undefined;
-    const files = [];
+    try {
+        let site = DEFAULT_SITE_URL;
+        let library = DEFAULT_LIBRARY;
+        let inferredFolderName = undefined;
+        const files = [];
 
-    await new Promise((resolve, reject) => {
-      const bb = new Busboy({ headers: req.headers });
-      bb.on("file", (_name, file, info) => {
-        const chunks = [];
-        file.on("data", (d) => chunks.push(d));
-        file.on("end", () => {
-          files.push({ filename: info.filename, buffer: Buffer.concat(chunks) });
+        await new Promise((resolve, reject) => {
+            const bb = new Busboy({ headers: req.headers });
+            bb.on("file", (_name, file, info) => {
+                const chunks = [];
+                file.on("data", (d) => chunks.push(d));
+                file.on("end", () => {
+                    files.push({ filename: info.filename, buffer: Buffer.concat(chunks) });
+                });
+            });
+            bb.on("field", (name, val) => {
+                if (name === "folderName") inferredFolderName = val;
+                if (name === "siteUrl") site = val;
+                if (name === "libraryPath") library = val;
+            });
+            bb.on("finish", resolve);
+            bb.on("error", reject);
+            req.pipe(bb);
         });
-      });
-      bb.on("field", (name, val) => {
-        if (name === "folderName") inferredFolderName = val;
-        if (name === "siteUrl") site = val;
-        if (name === "libraryPath") library = val;
-      });
-      bb.on("finish", resolve);
-      bb.on("error", reject);
-      req.pipe(bb);
-    });
 
-    if (!inferredFolderName) return res.status(400).json({ error: "Missing folderName" });
-    if (!site || !library) return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
-    if (files.length === 0) return res.status(400).json({ error: "No files uploaded" });
+        if (!inferredFolderName) return res.status(400).json({ error: "Missing folderName" });
+        if (!site || !library) return res.status(400).json({ error: "Missing siteUrl or libraryPath" });
+        if (files.length === 0) return res.status(400).json({ error: "No files uploaded" });
 
-    const token = await getAppToken();
-    const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, inferredFolderName);
+        const token = await getAppToken();
+        const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, inferredFolderName);
 
-    for (const f of files) {
-      await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
+        for (const f of files) {
+            await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
+        }
+
+        res.status(200).json({ ok: true, uploaded: files.length, driveId, folderId });
+    } catch (e) {
+        res.status(500).json({ error: e.message || String(e) });
     }
-
-    res.status(200).json({ ok: true, uploaded: files.length, driveId, folderId });
-  } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
-  }
 }
