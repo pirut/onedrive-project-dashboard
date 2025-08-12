@@ -26,8 +26,8 @@ export default async function handler(req, res) {
             return res.status(400).json({ error: "Body must be valid JSON" });
         }
 
-    const logged = await logSubmission({ type: "json", status: "ok", payload: body });
-    return res.status(200).json({ ok: true, logged, received: body });
+        const logged = await logSubmission({ type: "json", status: "ok", payload: body });
+        return res.status(200).json({ ok: true, logged, received: body });
     } catch (e) {
         await logSubmission({ type: "json", status: "error", error: e?.message || String(e) });
         return res.status(500).json({ error: e?.message || String(e) });
