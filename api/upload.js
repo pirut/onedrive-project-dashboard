@@ -89,7 +89,7 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buffer });
 }
 
-export const config = { api: { bodyParser: false } };
+export const config = { api: { bodyParser: false }, runtime: 'nodejs18.x' };
 
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
