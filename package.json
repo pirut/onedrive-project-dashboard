@@ -4,7 +4,17 @@
     "version": "0.1.0",
     "type": "module",
     "scripts": {
-        "webhook": "node server/webhook.js"
+        "webhook": "node server/webhook.js",
+        "test-sync": "node scripts/test-folder-sync.js",
+        "diagnose": "node scripts/diagnose-auth.js",
+        "test-site": "node scripts/test-site-access.js",
+        "check-perms": "node scripts/check-permissions.js",
+        "test-delegated": "node scripts/test-delegated-auth.js",
+        "verify-perms": "node scripts/verify-permissions.js",
+        "test-simple": "node scripts/test-simple-auth.js",
+        "test-sharepoint": "node scripts/test-sharepoint-rest.js",
+        "discover-sites": "node scripts/test-site-discovery.js",
+        "test-fastfield-auth-header": "node scripts/test-fastfield-with-auth.js"
     },
     "dependencies": {
         "@azure/msal-node": "^2.6.7",
