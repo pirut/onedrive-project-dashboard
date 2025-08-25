@@ -1,6 +1,11 @@
+#!/usr/bin/env node
+
 import "isomorphic-fetch";
+import dotenv from "dotenv";
 import { ConfidentialClientApplication } from "@azure/msal-node";
-import { logSubmission } from "../lib/kv.js";
+
+// Load environment variables
+dotenv.config();
 
 function readEnv(name, required = false) {
     const val = process.env[name];
@@ -8,6 +13,7 @@ function readEnv(name, required = false) {
     return val;
 }
 
+// Environment variables
 const TENANT_ID = readEnv("TENANT_ID", true);
 const MSAL_CLIENT_ID = readEnv("MSAL_CLIENT_ID", true);
 const MSAL_CLIENT_SECRET = readEnv("MSAL_CLIENT_SECRET", true);
@@ -16,9 +22,9 @@ const DEFAULT_SITE_URL = readEnv("DEFAULT_SITE_URL", true);
 const DEFAULT_LIBRARY = readEnv("DEFAULT_LIBRARY", true);
 
 // FastField configuration
-const FASTFIELD_API_URL = readEnv("FASTFIELD_API_URL", true);
-const FASTFIELD_AUTH_HEADER = readEnv("FASTFIELD_AUTH_HEADER", true); // Basic Auth header
-const FASTFIELD_TABLE_ID = readEnv("FASTFIELD_TABLE_ID", true); // We need the table ID, not name
+const FASTFIELD_API_URL = readEnv("FASTFIELD_API_URL");
+const FASTFIELD_AUTH_HEADER = readEnv("FASTFIELD_AUTH_HEADER"); // Basic Auth header
+const FASTFIELD_TABLE_ID = readEnv("FASTFIELD_TABLE_ID"); // We need the table ID, not name
 const FASTFIELD_TABLE_NAME = readEnv("FASTFIELD_TABLE_NAME") || "Cornerstone Active Projects";
 
 const msalApp = new ConfidentialClientApplication({
@@ -59,10 +65,9 @@ function encodeDrivePath(path) {
 }
 
 async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
-    console.log(`Resolving site: ${siteUrl}`);
-    console.log(`Library path: ${libraryPath}`);
+    console.log(`Fetching folders from ${siteUrl}/${libraryPath}...`);
 
-    // Use direct site access (which we know works)
+    // Resolve drive
     const url = new URL(siteUrl);
     const host = url.host;
     const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
@@ -71,10 +76,8 @@ async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
     console.log(`Host: ${host}`);
     console.log(`Site path: ${sitePath}`);
 
-    // Access the site directly using the working method
     const site = await graphFetch(`/sites/${host}:/sites/${encodeURIComponent(sitePath)}`, accessToken);
     console.log(`Site ID: ${site.id}`);
-    console.log(`Site name: ${site.displayName || site.name}`);
 
     const drives = await graphFetch(`/sites/${site.id}/drives`, accessToken);
     console.log(`Found ${drives.value?.length || 0} drives`);
@@ -94,11 +97,9 @@ async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
     // List children (subPath or root)
     let resItems;
     if (subPathParts.length === 0) {
-        console.log(`Fetching root children from drive ${drive.id}`);
         resItems = await graphFetch(`/drives/${drive.id}/root/children`, accessToken);
     } else {
         const subPath = encodeDrivePath(subPathParts.join("/"));
-        console.log(`Fetching children from path: ${subPath}`);
         resItems = await graphFetch(`/drives/${drive.id}/root:/${subPath}:/children`, accessToken);
     }
 
@@ -380,80 +381,51 @@ async function syncToFastField(folders) {
     return { successCount, errorCount, skippedCount, cleanupResult, errors, totalProcessed: folders.length };
 }
 
-export default async function handler(req, res) {
-    // This function can be called manually via HTTP or by Vercel Cron
-    const isCronRequest = req.headers["x-vercel-cron"] === "1";
-
+async function main() {
     try {
-        console.log(`[${new Date().toISOString()}] Starting folder sync to FastField...`);
+        console.log("🚀 Starting full folder sync to FastField...\n");
 
+        // Test Microsoft Graph authentication
+        console.log("1. Testing Microsoft Graph authentication...");
         const accessToken = await getAppToken();
-        const siteUrl = req.query?.siteUrl || DEFAULT_SITE_URL;
-        const libraryPath = req.query?.libraryPath || DEFAULT_LIBRARY;
+        console.log("✅ Authentication successful\n");
 
-        console.log(`Fetching folders from ${siteUrl}/${libraryPath}...`);
-        const folders = await fetchAllFolders(accessToken, siteUrl, libraryPath);
+        // Test folder fetching
+        console.log("2. Fetching all folders from SharePoint...");
+        const folders = await fetchAllFolders(accessToken, DEFAULT_SITE_URL, DEFAULT_LIBRARY);
+        console.log(`✅ Found ${folders.length} folders\n`);
 
-        console.log(`Found ${folders.length} folders, syncing to FastField...`);
-        const fastFieldResult = await syncToFastField(folders);
+        // Sync to FastField
+        if (FASTFIELD_API_URL && FASTFIELD_AUTH_HEADER && FASTFIELD_TABLE_ID) {
+            console.log("3. Syncing all folders to FastField...");
+            const result = await syncToFastField(folders);
 
-        // Log detailed results
-        console.log(`📊 Sync Results:`);
-        console.log(`   ✅ Successfully synced: ${fastFieldResult.successCount} folders`);
-        console.log(`   ⏭️  Skipped (already exist): ${fastFieldResult.skippedCount} folders`);
-        console.log(`   ❌ Failed to sync: ${fastFieldResult.errorCount} folders`);
-        console.log(`   🧹 Duplicates cleaned up: ${fastFieldResult.cleanupResult.deleted} items`);
-        console.log(`   📈 Total processed: ${fastFieldResult.totalProcessed} folders`);
+            console.log("\n🎉 Sync completed!");
+            console.log(`📊 Results:`);
+            console.log(`   ✅ Successfully synced: ${result.successCount} folders`);
+            console.log(`   ⏭️  Skipped (already exist): ${result.skippedCount} folders`);
+            console.log(`   ❌ Failed to sync: ${result.errorCount} folders`);
+            console.log(`   🧹 Duplicates cleaned up: ${result.cleanupResult.deleted} items`);
+            console.log(`   📈 Total processed: ${result.totalProcessed} folders`);
 
-        const result = {
-            success: true,
-            syncedAt: new Date().toISOString(),
-            foldersCount: folders.length,
-            siteUrl,
-            libraryPath,
-            fastFieldResult,
-        };
-
-        // Log the successful sync
-        await logSubmission({
-            type: "folder-sync-cron",
-            status: "ok",
-            foldersCount: folders.length,
-            siteUrl,
-            libraryPath,
-            fastFieldResult,
-        });
-
-        console.log(`[${new Date().toISOString()}] Folder sync completed successfully. Synced ${folders.length} folders.`);
-
-        // Return appropriate response based on how it was called
-        if (isCronRequest) {
-            // For cron jobs, return minimal response
-            return res.status(200).json({ ok: true, synced: folders.length });
+            if (result.errors.length > 0) {
+                console.log("\n❌ Errors encountered:");
+                result.errors.slice(0, 5).forEach((error, index) => {
+                    console.log(`   ${index + 1}. ${error.folder}: ${error.error}`);
+                });
+                if (result.errors.length > 5) {
+                    console.log(`   ... and ${result.errors.length - 5} more errors`);
+                }
+            }
         } else {
-            // For manual calls, return detailed response
-            return res.status(200).json(result);
+            console.log("3. ⚠️  FastField sync skipped (not configured)");
         }
+
+        console.log("\n🎉 Full sync process completed!");
     } catch (error) {
-        console.error(`[${new Date().toISOString()}] Folder sync failed:`, error);
-
-        // Log the error
-        await logSubmission({
-            type: "folder-sync-cron",
-            status: "error",
-            error: error?.message || String(error),
-        });
-
-        if (isCronRequest) {
-            // For cron jobs, return error status
-            return res.status(500).json({ error: error.message || String(error) });
-        } else {
-            // For manual calls, return detailed error
-            return res.status(500).json({
-                success: false,
-                error: error.message || String(error),
-                timestamp: new Date().toISOString(),
-            });
-        }
+        console.error("❌ Sync failed:", error.message);
+        process.exit(1);
     }
 }
+
+main();

@@ -14,7 +14,8 @@
         "test-simple": "node scripts/test-simple-auth.js",
         "test-sharepoint": "node scripts/test-sharepoint-rest.js",
         "discover-sites": "node scripts/test-site-discovery.js",
-        "test-fastfield-auth-header": "node scripts/test-fastfield-with-auth.js"
+        "test-fastfield-auth-header": "node scripts/test-fastfield-with-auth.js",
+        "test-full-sync": "node scripts/test-full-sync.js"
     },
     "dependencies": {
         "@azure/msal-node": "^2.6.7",
