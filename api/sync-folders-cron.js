@@ -2,6 +2,9 @@ import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 
+// Force dynamic rendering to prevent caching issues with cron jobs
+export const dynamic = "force-dynamic";
+
 function readEnv(name, required = false) {
     const val = process.env[name];
     if (required && !val) throw new Error(`Missing env ${name}`);
@@ -192,10 +195,10 @@ async function getExistingItems(sessionToken) {
         if (duplicates.length > 0) {
             console.log(`⚠️  Found ${duplicates.length} items with duplicates`);
         }
-        return { items: existingItems, duplicates };
+        return { items: existingItems, duplicates, allItems };
     } catch (error) {
         console.log(`⚠️  Error fetching existing items: ${error.message}`);
-        return { items: new Set(), duplicates: [] };
+        return { items: new Set(), duplicates: [], allItems: [] };
     }
 }
 
@@ -251,6 +254,109 @@ async function cleanupDuplicates(sessionToken, duplicates) {
     return { deleted: deletedCount, errors };
 }
 
+async function removeOrphanedEntries(sessionToken, currentFolders, allFastFieldItems) {
+    console.log("🔍 Checking for orphaned entries (folders removed from SharePoint)...");
+
+    // Create a set of current folder names for fast lookup
+    const currentFolderNames = new Set(currentFolders.map((folder) => folder.name));
+
+    // Find items in FastField that are no longer in SharePoint
+    const orphanedItems = [];
+    allFastFieldItems.forEach((item) => {
+        if (item.data && item.data["79075b7641bb4bfebd0af28fbc851904"]) {
+            const projectName = item.data["79075b7641bb4bfebd0af28fbc851904"];
+            if (!currentFolderNames.has(projectName)) {
+                orphanedItems.push({
+                    id: item.id,
+                    name: projectName,
+                    item: item,
+                });
+            }
+        }
+    });
+
+    if (orphanedItems.length === 0) {
+        console.log("✅ No orphaned entries found");
+        return { deleted: 0, errors: [] };
+    }
+
+    console.log(`🗑️  Found ${orphanedItems.length} orphaned entries to remove from FastField`);
+
+    let deletedCount = 0;
+    const errors = [];
+
+    // Process orphaned items in batches to avoid overwhelming the API
+    const batchSize = 3;
+    for (let i = 0; i < orphanedItems.length; i += batchSize) {
+        const batch = orphanedItems.slice(i, i + batchSize);
+        console.log(`Removing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(orphanedItems.length / batchSize)} (${batch.length} items)`);
+
+        for (const orphanedItem of batch) {
+            let retries = 0;
+            const maxRetries = 3;
+
+            while (retries < maxRetries) {
+                try {
+                    const response = await fetch(`${FASTFIELD_API_URL}/${FASTFIELD_TABLE_ID}/items/${orphanedItem.id}`, {
+                        method: "DELETE",
+                        headers: {
+                            "Cache-Control": "no-cache",
+                            "FastField-API-Key": "08c75cee57ac40afbad2909ce48c68c4",
+                            "X-Gatekeeper-SessionToken": sessionToken,
+                        },
+                    });
+
+                    if (response.status === 429) {
+                        // Rate limited - wait and retry
+                        const errorText = await response.text();
+                        const match = errorText.match(/Try again in (\d+) seconds/);
+                        const waitTime = match ? parseInt(match[1]) * 1000 : 5000;
+
+                        console.log(`⏳ Rate limited for ${orphanedItem.name}, waiting ${waitTime / 1000}s before retry ${retries + 1}/${maxRetries}...`);
+                        await new Promise((resolve) => setTimeout(resolve, waitTime));
+                        retries++;
+                        continue;
+                    }
+
+                    if (response.ok) {
+                        console.log(`✅ Removed orphaned entry: ${orphanedItem.name} (ID: ${orphanedItem.id})`);
+                        deletedCount++;
+                        break; // Success, exit retry loop
+                    } else {
+                        const errorText = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    }
+                } catch (error) {
+                    retries++;
+                    if (retries >= maxRetries) {
+                        console.error(`❌ Failed to remove orphaned entry ${orphanedItem.name} after ${maxRetries} retries:`, error.message);
+                        errors.push({ name: orphanedItem.name, itemId: orphanedItem.id, error: error.message });
+                    } else {
+                        console.log(`⚠️  Retry ${retries}/${maxRetries} for ${orphanedItem.name}: ${error.message}`);
+                        await new Promise((resolve) => setTimeout(resolve, 2000 * retries)); // Exponential backoff
+                    }
+                }
+            }
+
+            // Wait between deletions to avoid rate limiting
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+
+        // Wait between batches
+        if (i + batchSize < orphanedItems.length) {
+            console.log("Waiting 2 seconds before next batch...");
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
+    }
+
+    console.log(`🗑️  Orphaned entry removal completed: ${deletedCount} entries removed`);
+    if (errors.length > 0) {
+        console.log(`⚠️  ${errors.length} removal errors occurred`);
+    }
+
+    return { deleted: deletedCount, errors };
+}
+
 async function syncToFastField(folders) {
     console.log(`Syncing ${folders.length} folders to FastField table: ${FASTFIELD_TABLE_NAME}`);
 
@@ -275,10 +381,13 @@ async function syncToFastField(folders) {
     console.log(`✅ Authentication successful, session expires: ${authResult.sessionExpiration}`);
 
     // Get existing items and check for duplicates
-    const { items: existingItems, duplicates } = await getExistingItems(sessionToken);
+    const { items: existingItems, duplicates, allItems } = await getExistingItems(sessionToken);
 
     // Clean up duplicates first
     const cleanupResult = await cleanupDuplicates(sessionToken, duplicates);
+
+    // Remove orphaned entries (folders that no longer exist in SharePoint)
+    const orphanedRemovalResult = await removeOrphanedEntries(sessionToken, folders, allItems);
 
     let successCount = 0;
     let errorCount = 0;
@@ -296,6 +405,7 @@ async function syncToFastField(folders) {
             errorCount: 0,
             skippedCount: folders.length,
             cleanupResult,
+            orphanedRemovalResult,
             errors: [],
             totalProcessed: folders.length,
         };
@@ -377,7 +487,7 @@ async function syncToFastField(folders) {
         }
     }
 
-    return { successCount, errorCount, skippedCount, cleanupResult, errors, totalProcessed: folders.length };
+    return { successCount, errorCount, skippedCount, cleanupResult, orphanedRemovalResult, errors, totalProcessed: folders.length };
 }
 
 export default async function handler(req, res) {
@@ -403,6 +513,7 @@ export default async function handler(req, res) {
         console.log(`   ⏭️  Skipped (already exist): ${fastFieldResult.skippedCount} folders`);
         console.log(`   ❌ Failed to sync: ${fastFieldResult.errorCount} folders`);
         console.log(`   🧹 Duplicates cleaned up: ${fastFieldResult.cleanupResult.deleted} items`);
+        console.log(`   🗑️  Orphaned entries removed: ${fastFieldResult.orphanedRemovalResult.deleted} items`);
         console.log(`   📈 Total processed: ${fastFieldResult.totalProcessed} folders`);
 
         const result = {
