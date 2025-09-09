@@ -1,5 +1,6 @@
 import "isomorphic-fetch";
 import Busboy from "busboy";
+import crypto from "crypto";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 
@@ -167,6 +168,17 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     try {
+        const traceId = crypto.randomBytes(8).toString("hex");
+        const steps = [];
+        const push = (msg, meta = {}) => {
+            const entry = { ts: new Date().toISOString(), msg, ...meta };
+            steps.push(entry);
+            // eslint-disable-next-line no-console
+            console.log(`[ingest-pdf:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
+        };
+        const debug = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
+        res.setHeader("X-Request-Id", traceId);
+        push("request:start", { ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "", ua: req.headers["user-agent"] || "" });
         let site = DEFAULT_SITE_URL;
         let library = DEFAULT_LIBRARY;
         let fileRec = null;
@@ -179,6 +191,7 @@ export default async function handler(req, res) {
                 file.on("end", () => {
                     const buf = Buffer.concat(chunks);
                     fileRec = { filename: info.filename, mimeType: info.mimeType || info.mime || "", buffer: buf };
+                    push("upload:received", { filename: info.filename, size: buf.length, mime: info.mimeType || info.mime || "" });
                 });
             });
             bb.on("field", (name, val) => {
@@ -190,32 +203,62 @@ export default async function handler(req, res) {
             req.pipe(bb);
         });
 
-        if (!fileRec) return res.status(400).json({ error: "No file uploaded" });
+        if (!fileRec) {
+            push("error:no-file");
+            return res.status(400).json({ error: "No file uploaded", traceId });
+        }
         const isPdf = /\.pdf$/i.test(fileRec.filename) || /pdf/i.test(fileRec.mimeType || "");
-        if (!isPdf) return res.status(400).json({ error: "File must be a PDF" });
+        if (!isPdf) {
+            push("error:not-pdf", { filename: fileRec.filename, mime: fileRec.mimeType || "" });
+            return res.status(400).json({ error: "File must be a PDF", traceId });
+        }
 
         const folderNameRaw = deriveFolderNameFromFilename(fileRec.filename);
         const folderName = sanitizeFolderName(folderNameRaw);
+        push("folder:derived", { from: fileRec.filename, folderName });
 
         const token = await getAppToken();
+        push("auth:token-acquired");
         const { drive, subPathParts } = await resolveDrive(token, site, library);
+        push("drive:resolved", { driveName: drive.name, driveId: drive.id, site, library });
         const parentItemId = await getParentItemId(token, drive.id, subPathParts);
+        push("parent:resolved", { parentItemId });
         const { id: folderId, created } = await ensureFolder(token, drive.id, parentItemId, folderName);
+        push("folder:ensured", { folderId, created });
 
         // Upload. Use small upload if <= 4MB, else session
         const fourMB = 4 * 1024 * 1024;
         if (fileRec.buffer.length <= fourMB) {
+            push("upload:start", { method: "simple", size: fileRec.buffer.length });
             await uploadSmallFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
         } else {
+            push("upload:start", { method: "chunked", size: fileRec.buffer.length });
             await uploadLargeFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
         }
+        push("upload:done", { folderId, size: fileRec.buffer.length });
 
-        await logSubmission({ type: "pdf_ingest", status: "ok", folderName, created, filename: fileRec.filename, size: fileRec.buffer.length });
+        await logSubmission({
+            type: "pdf_ingest",
+            status: "ok",
+            traceId,
+            folderName,
+            created,
+            filename: fileRec.filename,
+            size: fileRec.buffer.length,
+            steps,
+        });
 
-        return res.status(200).json({ ok: true, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileRec.buffer.length } });
+        const payload = { ok: true, traceId, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileRec.buffer.length } };
+        if (debug) payload.debug = { steps };
+        return res.status(200).json(payload);
     } catch (e) {
-        await logSubmission({ type: "pdf_ingest", status: "error", error: e?.message || String(e) });
-        return res.status(500).json({ error: e?.message || String(e) });
+        const traceId = res.getHeader("X-Request-Id") || crypto.randomBytes(8).toString("hex");
+        // eslint-disable-next-line no-console
+        console.error(`[ingest-pdf:${traceId}] error`, e?.message || e);
+        // best-effort: include steps if present in scope
+        try {
+            await logSubmission({ type: "pdf_ingest", status: "error", traceId, error: e?.message || String(e) });
+        } catch {}
+        return res.status(500).json({ error: e?.message || String(e), traceId });
     }
 }
-
