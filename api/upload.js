@@ -89,6 +89,36 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buffer });
 }
 
+async function uploadLargeFile(accessToken, driveId, parentItemId, filename, buffer) {
+    const initPath = `/drives/${driveId}/items/${parentItemId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+    const session = await graphFetch(initPath, accessToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "rename", name: filename } }),
+    });
+    const uploadUrl = session.uploadUrl;
+    const chunkSize = 5 * 1024 * 1024; // 5 MB (multiple of 320 KiB)
+    let offset = 0;
+    const total = buffer.length;
+    while (offset < total) {
+        const end = Math.min(offset + chunkSize, total);
+        const chunk = buffer.subarray(offset, end);
+        const resp = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: {
+                "Content-Length": String(chunk.length),
+                "Content-Range": `bytes ${offset}-${end - 1}/${total}`,
+            },
+            body: chunk,
+        });
+        if (!resp.ok && resp.status !== 202 && resp.status !== 201 && resp.status !== 200) {
+            const text = await resp.text();
+            throw new Error(`Upload chunk failed: ${resp.status} ${text}`);
+        }
+        offset = end;
+    }
+}
+
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
@@ -140,7 +170,11 @@ export default async function handler(req, res) {
         const { driveId, folderId } = await resolveDriveAndFolder(token, site, library, inferredFolderName);
 
         for (const f of files) {
-            await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
+            if (f.buffer.length > 4 * 1024 * 1024) {
+                await uploadLargeFile(token, driveId, folderId, f.filename, f.buffer);
+            } else {
+                await uploadSmallFile(token, driveId, folderId, f.filename, f.buffer);
+            }
         }
 
         res.status(200).json({ ok: true, uploaded: files.length, driveId, folderId });

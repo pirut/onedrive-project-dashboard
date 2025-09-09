@@ -89,6 +89,35 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/octet-stream" }, body: buffer });
 }
 
+async function uploadLargeFile(accessToken, driveId, parentItemId, filename, buffer) {
+    const initPath = `/drives/${driveId}/items/${parentItemId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+    const session = await graphFetch(initPath, accessToken, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "rename", name: filename } }),
+    });
+    const uploadUrl = session.uploadUrl;
+    const chunkSize = 5 * 1024 * 1024; // 5 MB
+    let offset = 0;
+    const total = buffer.length;
+    while (offset < total) {
+        const end = Math.min(offset + chunkSize, total);
+        const chunk = buffer.subarray(offset, end);
+        const resp = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: {
+                "Content-Length": String(chunk.length),
+                "Content-Range": `bytes ${offset}-${end - 1}/${total}`,
+            },
+            body: chunk,
+        });
+        if (!resp.ok && resp.status !== 202 && resp.status !== 201 && resp.status !== 200) {
+            const text = await resp.text();
+            throw new Error(`Upload chunk failed: ${resp.status} ${text}`);
+        }
+        offset = end;
+    }
+}
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
     res.setHeader("Access-Control-Allow-Origin", origin === "*" ? "*" : origin);
@@ -128,7 +157,12 @@ export default async function handler(req, res) {
         let uploaded = 0;
         for (const f of files) {
             const buffer = await fetchToBuffer(f.url);
-            await uploadSmallFile(token, driveId, folderId, f.filename || deriveFilenameFromUrl(f.url), buffer);
+            const name = f.filename || deriveFilenameFromUrl(f.url);
+            if (buffer.length > 4 * 1024 * 1024) {
+                await uploadLargeFile(token, driveId, folderId, name, buffer);
+            } else {
+                await uploadSmallFile(token, driveId, folderId, name, buffer);
+            }
             uploaded += 1;
         }
 
