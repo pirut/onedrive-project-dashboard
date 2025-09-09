@@ -67,8 +67,8 @@ function sanitizeFolderName(name) {
 
 function deriveFolderNameFromFilename(filename) {
     const nameOnly = String(filename || "").replace(/\.[^.]+$/i, "");
-    // Split on colon with optional surrounding whitespace: " : " or ":" both supported
-    const parts = nameOnly.split(/\s*:\s*/);
+    // Split on underscore with optional surrounding spaces. Also accept ':' for compatibility.
+    const parts = nameOnly.split(/\s*[_:]\s*/);
     const firstPart = parts[0] || nameOnly;
     return sanitizeFolderName(firstPart);
 }
