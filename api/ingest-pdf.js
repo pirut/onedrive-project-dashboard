@@ -167,6 +167,7 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+    let phase = "start";
     try {
         const traceId = crypto.randomBytes(8).toString("hex");
         const steps = [];
@@ -183,6 +184,7 @@ export default async function handler(req, res) {
         let library = DEFAULT_LIBRARY;
         let fileRec = null;
 
+        phase = "parse_form";
         await new Promise((resolve, reject) => {
             const bb = new Busboy({ headers: req.headers });
             bb.on("file", (_name, file, info) => {
@@ -217,21 +219,27 @@ export default async function handler(req, res) {
         const folderName = sanitizeFolderName(folderNameRaw);
         push("folder:derived", { from: fileRec.filename, folderName });
 
+        phase = "get_token";
         const token = await getAppToken();
         push("auth:token-acquired");
+        phase = "resolve_drive";
         const { drive, subPathParts } = await resolveDrive(token, site, library);
         push("drive:resolved", { driveName: drive.name, driveId: drive.id, site, library });
+        phase = "resolve_parent";
         const parentItemId = await getParentItemId(token, drive.id, subPathParts);
         push("parent:resolved", { parentItemId });
+        phase = "ensure_folder";
         const { id: folderId, created } = await ensureFolder(token, drive.id, parentItemId, folderName);
         push("folder:ensured", { folderId, created });
 
         // Upload. Use small upload if <= 4MB, else session
         const fourMB = 4 * 1024 * 1024;
         if (fileRec.buffer.length <= fourMB) {
+            phase = "upload_simple";
             push("upload:start", { method: "simple", size: fileRec.buffer.length });
             await uploadSmallFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
         } else {
+            phase = "upload_chunked";
             push("upload:start", { method: "chunked", size: fileRec.buffer.length });
             await uploadLargeFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
         }
@@ -254,11 +262,13 @@ export default async function handler(req, res) {
     } catch (e) {
         const traceId = res.getHeader("X-Request-Id") || crypto.randomBytes(8).toString("hex");
         // eslint-disable-next-line no-console
-        console.error(`[ingest-pdf:${traceId}] error`, e?.message || e);
+        console.error(`[ingest-pdf:${traceId}] error at ${phase}:`, e?.message || e);
         // best-effort: include steps if present in scope
         try {
-            await logSubmission({ type: "pdf_ingest", status: "error", traceId, error: e?.message || String(e) });
+            await logSubmission({ type: "pdf_ingest", status: "error", traceId, phase, error: e?.message || String(e) });
         } catch {}
-        return res.status(500).json({ error: e?.message || String(e), traceId });
+        const debug = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
+        const payload = { error: e?.message || String(e), traceId, phase };
+        return res.status(500).json(debug ? { ok: false, ...payload } : payload);
     }
 }
