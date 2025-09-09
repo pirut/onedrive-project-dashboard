@@ -191,7 +191,7 @@ async function dashboardView(req) {
 
     const graphEnvOk = ["TENANT_ID", "MSAL_CLIENT_ID", "MSAL_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"].every(envPresence);
     const kvDiag = await kvDiagnostics();
-    const items = await listSubmissions(25);
+    const items = await listSubmissions(500);
 
     const endpointsTableRows = checks
         .map((c) => {
@@ -205,19 +205,29 @@ async function dashboardView(req) {
 
     const itemsRows = items
         .map((it) => {
-            const files = Array.isArray(it.files)
-                ? it.files
-                      .map((f) => `<div><a href="${htmlEscape(f.url || "")}" target="_blank" rel="noreferrer">${htmlEscape(
+            const status = (it.status || "").toLowerCase();
+            const statusCls = status === "ok" ? "ok" : status === "error" ? "bad" : status ? "warn" : "muted";
+            const files = Array.isArray(it.files) ? it.files : [];
+            const filesCount = files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "";
+            const filesLinks = files
+                .map(
+                    (f) =>
+                        `<a href="${htmlEscape(f.url || "")}" target="_blank" rel="noreferrer">${htmlEscape(
                             f.filename || f.url || "file"
-                        )}</a></div>`) 
-                      .join("")
-                : "";
+                        )}</a>`
+                )
+                .join(", ");
+            const details = [it.folderName ? `folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>` : null,
+                it.phase ? `phase: <span class=\"mono\">${htmlEscape(it.phase)}</span>` : null,
+                it.reason ? `reason: ${htmlEscape(it.reason)}` : null,
+                it.error ? `error: ${htmlEscape(it.error)}` : null].filter(Boolean).join(" · ");
             return `<tr>
-              <td>${htmlEscape(it.loggedAt || "")}</td>
+              <td class="mono small">${htmlEscape(it.loggedAt || "")}</td>
               <td>${htmlEscape(it.type || "")}</td>
-              <td>${htmlEscape(it.folderName || "")}</td>
+              <td><span class="badge ${statusCls}">${htmlEscape(it.status || "") || "n/a"}</span></td>
+              <td>${details || '<span class="muted">—</span>'}</td>
               <td style="text-align:center">${htmlEscape(String(it.uploaded ?? ""))}</td>
-              <td>${files}</td>
+              <td>${filesCount}${filesLinks ? `<div class=\"small\">${filesLinks}</div>` : ""}</td>
             </tr>`;
         })
         .join("");
@@ -257,13 +267,85 @@ async function dashboardView(req) {
   </div>
 
   <div class="panel">
-    <div style="font-weight:600">Recent Logs</div>
-    <div class="small muted" style="margin:4px 0 8px 0">Showing latest ${items.length}</div>
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+      <div style="font-weight:600">Submissions</div>
+      <div class="small muted">Auto-updates every 3s · Showing latest ${items.length}</div>
+    </div>
+    <div class="row" style="margin:8px 0 12px 0">
+      <input id="filter-input" placeholder="Filter by text (type, folder, status, error)..." />
+    </div>
     <table>
-      <thead><tr><th>Time</th><th>Type</th><th>Folder</th><th>Uploaded</th><th>Files</th></tr></thead>
-      <tbody>${itemsRows || '<tr><td colspan="5" class="muted">No submissions yet.</td></tr>'}</tbody>
+      <thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Details</th><th>Uploaded</th><th>Files</th></tr></thead>
+      <tbody id="subs-tbody">${itemsRows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>'}</tbody>
     </table>
-  </div>`;
+    <div class="small muted" id="last-updated" style="margin-top:6px">Last updated: just now</div>
+  </div>
+
+  <script>
+    (function(){
+      const tbody = document.getElementById('subs-tbody');
+      const input = document.getElementById('filter-input');
+      const last = document.getElementById('last-updated');
+      let cache = [];
+      let timer = null;
+
+      function htmlEscape(s){
+        return String(s)
+          .replaceAll('&','&amp;')
+          .replaceAll('<','&lt;')
+          .replaceAll('>','&gt;')
+          .replaceAll('"','&quot;')
+          .replaceAll("'","&#39;");
+      }
+      function statusCls(s){
+        s = String(s||'').toLowerCase();
+        if(s==='ok') return 'ok';
+        if(s==='error') return 'bad';
+        return s ? 'warn' : 'muted';
+      }
+      function render(items){
+        const q = (input.value||'').trim().toLowerCase();
+        const filtered = !q ? items : items.filter((it)=>{
+          const hay = [it.loggedAt,it.type,it.status,it.folderName,it.phase,it.reason,it.error,(it.uploaded==null?'':String(it.uploaded))].join(' ').toLowerCase();
+          return hay.includes(q);
+        });
+        const rows = filtered.map((it)=>{
+          const files = Array.isArray(it.files) ? it.files : [];
+          const filesCount = files.length ? `${files.length} file${files.length===1?'':'s'}` : '';
+          const links = files.map((f)=>`<a href="${htmlEscape(f.url||'')}" target="_blank" rel="noreferrer">${htmlEscape(f.filename||f.url||'file')}</a>`).join(', ');
+          const detailsParts = [];
+          if(it.folderName) detailsParts.push(`folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>`);
+          if(it.phase) detailsParts.push(`phase: <span class=\"mono\">${htmlEscape(it.phase)}</span>`);
+          if(it.reason) detailsParts.push(`reason: ${htmlEscape(it.reason)}`);
+          if(it.error) detailsParts.push(`error: ${htmlEscape(it.error)}`);
+          const details = detailsParts.join(' · ');
+          return `<tr>
+            <td class=\"mono small\">${htmlEscape(it.loggedAt||'')}</td>
+            <td>${htmlEscape(it.type||'')}</td>
+            <td><span class=\"badge ${statusCls(it.status)}\">${htmlEscape(it.status||'')||'n/a'}</span></td>
+            <td>${details || '<span class=\"muted\">—</span>'}</td>
+            <td style=\"text-align:center\">${htmlEscape(it.uploaded==null?'':String(it.uploaded))}</td>
+            <td>${filesCount}${links?`<div class=\"small\">${links}</div>`:''}</td>
+          </tr>`;
+        }).join('');
+        tbody.innerHTML = rows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>';
+        last.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+      }
+      async function fetchAndRender(){
+        try{
+          const res = await fetch('/api/submissions?limit=500', { headers: { 'cache-control': 'no-cache' } });
+          if(!res.ok) return;
+          const data = await res.json();
+          cache = Array.isArray(data.items)? data.items : [];
+          render(cache);
+        }catch{}
+      }
+      input.addEventListener('input', ()=> render(cache));
+      fetchAndRender();
+      timer = setInterval(fetchAndRender, 3000);
+      window.addEventListener('beforeunload', ()=> timer && clearInterval(timer));
+    })();
+  </script>`;
 
     return layout("Admin Dashboard", inner);
 }
@@ -310,4 +392,3 @@ export default async function handler(req, res) {
 
     res.status(405).send(layout("Method Not Allowed", `<div class=\"wrap\"><div class=\"panel\">Method not allowed</div></div>`));
 }
-
