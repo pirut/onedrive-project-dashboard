@@ -186,7 +186,8 @@ export default async function handler(req, res) {
 
         phase = "parse_form";
         await new Promise((resolve, reject) => {
-            const bb = new Busboy({ headers: req.headers });
+            // Busboy supports function-style construction in CJS. Avoid `new` to prevent interop issues.
+            const bb = Busboy({ headers: req.headers });
             bb.on("file", (_name, file, info) => {
                 const chunks = [];
                 file.on("data", (d) => chunks.push(d));
