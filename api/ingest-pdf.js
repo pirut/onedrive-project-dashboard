@@ -117,6 +117,31 @@ async function ensureFolder(accessToken, driveId, parentItemId, targetFolderName
     return { id: created.id, created: true };
 }
 
+async function findFolder(accessToken, driveId, parentItemId, targetFolderName) {
+    const listPath =
+        parentItemId === "root"
+            ? `/drives/${driveId}/root/children`
+            : `/drives/${driveId}/items/${parentItemId}/children`;
+    const children = await graphFetch(listPath, accessToken);
+    const match = (children.value || []).find(
+        (it) => it.folder && (it.name || "").trim().toLowerCase() === String(targetFolderName).trim().toLowerCase()
+    );
+    return match ? { id: match.id, name: match.name } : null;
+}
+
+async function ensureChildFolder(accessToken, driveId, parentItemId, childName) {
+    const found = await findFolder(accessToken, driveId, parentItemId, childName);
+    if (found) return { id: found.id, created: false };
+    // Create the child folder if missing
+    const payload = { name: childName, folder: {}, "@microsoft.graph.conflictBehavior": "fail" };
+    const created = await graphFetch(
+        `/drives/${driveId}/items/${parentItemId}/children`,
+        accessToken,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }
+    );
+    return { id: created.id, created: true };
+}
+
 async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buffer) {
     const encoded = encodeURIComponent(filename);
     const path = parentItemId === "root"
@@ -229,9 +254,21 @@ export default async function handler(req, res) {
         phase = "resolve_parent";
         const parentItemId = await getParentItemId(token, drive.id, subPathParts);
         push("parent:resolved", { parentItemId });
-        phase = "ensure_folder";
-        const { id: folderId, created } = await ensureFolder(token, drive.id, parentItemId, folderName);
-        push("folder:ensured", { folderId, created });
+        // New behavior: main folder must already exist; do not create if missing
+        phase = "find_main_folder";
+        const existing = await findFolder(token, drive.id, parentItemId, folderName);
+        if (!existing) {
+            push("folder:not-found", { folderName });
+            const msg = `Target folder not found under library: ${folderName}`;
+            await logSubmission({ type: "pdf_ingest", status: "error", traceId, phase: "find_main_folder", error: msg });
+            return res.status(404).json({ ok: false, traceId, phase: "find_main_folder", error: msg });
+        }
+        push("folder:found", { folderId: existing.id, folderName: existing.name });
+        // Ensure or create the Job Walks subfolder under the existing main folder
+        phase = "ensure_job_walks";
+        const jobWalksName = "Job Walks";
+        const { id: folderId, created } = await ensureChildFolder(token, drive.id, existing.id, jobWalksName);
+        push("folder:job-walks", { folderId, created, name: jobWalksName });
 
         // Upload. Use small upload if <= 4MB, else session
         const fourMB = 4 * 1024 * 1024;
