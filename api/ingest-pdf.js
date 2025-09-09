@@ -269,7 +269,21 @@ export default async function handler(req, res) {
             await logSubmission({ type: "pdf_ingest", status: "error", traceId, phase, error: e?.message || String(e) });
         } catch {}
         const debug = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
-        const payload = { error: e?.message || String(e), traceId, phase };
-        return res.status(500).json(debug ? { ok: false, ...payload } : payload);
+        const msg = e?.message || String(e);
+        const accessDenied = /\b403\b|accessDenied|insufficientPermissions/i.test(msg);
+        const payload = {
+            ok: false,
+            error: msg,
+            traceId,
+            phase,
+            ...(accessDenied
+                ? {
+                      hint:
+                          "App likely lacks write permission. Grant Microsoft Graph application permission (Sites.ReadWrite.All) with admin consent, or if using Sites.Selected, assign write role to this site for your app.",
+                  }
+                : {}),
+        };
+        const code = accessDenied ? 403 : 500;
+        return res.status(code).json(debug ? payload : { error: payload.error, traceId, phase, ...(payload.hint ? { hint: payload.hint } : {}) });
     }
 }
