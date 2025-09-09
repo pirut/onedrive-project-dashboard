@@ -16,7 +16,7 @@ This repository contains two runtime surfaces:
      - `api/health` — base health
      - `api/upload` — production upload endpoint (multipart via Busboy)
      - `api/ingest` — JSON ingest logging to KV
-     - `api/dashboard` — HTML dashboard of recent submissions (reads KV)
+     - `api/admin` — Admin-only dashboard (HTML) with live submissions
      - `api/submissions` — JSON list of recent submissions
      - `api/kv-diag` and `api/kv-write-test` — KV connectivity diagnostics
      - `api/sync-projects` — folder listing to JSON or forward to FastField
@@ -85,4 +85,3 @@ Quick file map (high‑value):
 - Scripts: `scripts/*.js`
 
 If anything in this doc looks off for your setup, let me know and I’ll adjust.
-
