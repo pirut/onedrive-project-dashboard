@@ -283,11 +283,11 @@ async function dashboardView(req) {
 
   <script>
     (function(){
-      const tbody = document.getElementById('subs-tbody');
-      const input = document.getElementById('filter-input');
-      const last = document.getElementById('last-updated');
-      let cache = [];
-      let timer = null;
+      var tbody = document.getElementById('subs-tbody');
+      var input = document.getElementById('filter-input');
+      var last = document.getElementById('last-updated');
+      var cache = [];
+      var timer = null;
 
       function htmlEscape(s){
         return String(s)
@@ -304,46 +304,48 @@ async function dashboardView(req) {
         return s ? 'warn' : 'muted';
       }
       function render(items){
-        const q = (input.value||'').trim().toLowerCase();
-        const filtered = !q ? items : items.filter((it)=>{
-          const hay = [it.loggedAt,it.type,it.status,it.folderName,it.phase,it.reason,it.error,(it.uploaded==null?'':String(it.uploaded))].join(' ').toLowerCase();
-          return hay.includes(q);
+        var q = (input.value||'').trim().toLowerCase();
+        var filtered = !q ? items : items.filter(function(it){
+          var hay = [it.loggedAt,it.type,it.status,it.folderName,it.phase,it.reason,it.error,(it.uploaded==null?'':String(it.uploaded))].join(' ').toLowerCase();
+          return hay.indexOf(q) !== -1;
         });
-        const rows = filtered.map((it)=>{
-          const files = Array.isArray(it.files) ? it.files : [];
-          const filesCount = files.length ? `${files.length} file${files.length===1?'':'s'}` : '';
-          const links = files.map((f)=>`<a href="${htmlEscape(f.url||'')}" target="_blank" rel="noreferrer">${htmlEscape(f.filename||f.url||'file')}</a>`).join(', ');
-          const detailsParts = [];
-          if(it.folderName) detailsParts.push(`folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>`);
-          if(it.phase) detailsParts.push(`phase: <span class=\"mono\">${htmlEscape(it.phase)}</span>`);
-          if(it.reason) detailsParts.push(`reason: ${htmlEscape(it.reason)}`);
-          if(it.error) detailsParts.push(`error: ${htmlEscape(it.error)}`);
-          const details = detailsParts.join(' · ');
-          return `<tr>
-            <td class=\"mono small\">${htmlEscape(it.loggedAt||'')}</td>
-            <td>${htmlEscape(it.type||'')}</td>
-            <td><span class=\"badge ${statusCls(it.status)}\">${htmlEscape(it.status||'')||'n/a'}</span></td>
-            <td>${details || '<span class=\"muted\">—</span>'}</td>
-            <td style=\"text-align:center\">${htmlEscape(it.uploaded==null?'':String(it.uploaded))}</td>
-            <td>${filesCount}${links?`<div class=\"small\">${links}</div>`:''}</td>
-          </tr>`;
+        var rows = filtered.map(function(it){
+          var files = Array.isArray(it.files) ? it.files : [];
+          var filesCount = files.length ? (files.length + ' file' + (files.length===1?'':'s')) : '';
+          var links = files.map(function(f){
+            return '<a href="' + htmlEscape(f.url||'') + '" target="_blank" rel="noreferrer">' + htmlEscape(f.filename||f.url||'file') + '</a>';
+          }).join(', ');
+          var detailsParts = [];
+          if(it.folderName) detailsParts.push('folder: <span class="mono">' + htmlEscape(it.folderName) + '</span>');
+          if(it.phase) detailsParts.push('phase: <span class="mono">' + htmlEscape(it.phase) + '</span>');
+          if(it.reason) detailsParts.push('reason: ' + htmlEscape(it.reason));
+          if(it.error) detailsParts.push('error: ' + htmlEscape(it.error));
+          var details = detailsParts.join(' · ');
+          return '<tr>'
+            + '<td class="mono small">' + htmlEscape(it.loggedAt||'') + '</td>'
+            + '<td>' + htmlEscape(it.type||'') + '</td>'
+            + '<td><span class="badge ' + statusCls(it.status) + '">' + (htmlEscape(it.status||'')||'n/a') + '</span></td>'
+            + '<td>' + (details || '<span class="muted">—</span>') + '</td>'
+            + '<td style="text-align:center">' + htmlEscape(it.uploaded==null?'':String(it.uploaded)) + '</td>'
+            + '<td>' + filesCount + (links?'<div class="small">' + links + '</div>':'') + '</td>'
+            + '</tr>';
         }).join('');
         tbody.innerHTML = rows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>';
         last.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
       }
       async function fetchAndRender(){
         try{
-          const res = await fetch('/api/submissions?limit=500', { headers: { 'cache-control': 'no-cache' } });
+          var res = await fetch('/api/submissions?limit=500', { headers: { 'cache-control': 'no-cache' } });
           if(!res.ok) return;
-          const data = await res.json();
+          var data = await res.json();
           cache = Array.isArray(data.items)? data.items : [];
           render(cache);
-        }catch{}
+        }catch(e){}
       }
-      input.addEventListener('input', ()=> render(cache));
+      input.addEventListener('input', function(){ render(cache); });
       fetchAndRender();
       timer = setInterval(fetchAndRender, 3000);
-      window.addEventListener('beforeunload', ()=> timer && clearInterval(timer));
+      window.addEventListener('beforeunload', function(){ if(timer) clearInterval(timer); });
     })();
   </script>`;
 
