@@ -128,6 +128,14 @@ function layout(title, bodyHtml) {
   .right{float:right}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
   .small{font-size:12px}
+  .log-extras{margin-top:6px;display:flex;flex-direction:column;gap:6px}
+  details.log{margin-top:6px;border:1px solid #1f2a44;border-radius:8px;background:#0b1220}
+  details.log summary{cursor:pointer;padding:6px 8px;font-weight:600}
+  details.log[open] summary{border-bottom:1px solid #1f2a44;margin-bottom:6px}
+  .step-list{list-style:none;margin:0;padding:0}
+  .step-list li{margin:4px 0;padding:4px 8px;border-radius:6px;background:#111b2f}
+  .step-list li .meta{display:block;color:var(--muted);margin-top:2px;word-break:break-word}
+  pre.log-block{background:#111b2f;border-radius:6px;padding:8px;white-space:pre-wrap;word-break:break-word;margin:6px 0 0 0;color:#c8d5ff;font-size:12px}
 </style>
 </head><body><div class="wrap">${bodyHtml}</div></body></html>`;
 }
@@ -193,6 +201,28 @@ async function dashboardView(req) {
     const kvDiag = await kvDiagnostics();
     const items = await listSubmissions(500);
 
+    const formatStep = (step) => {
+        if (!step) return "";
+        const clone = { ...step };
+        const ts = clone.ts ? `<span class="mono small">${htmlEscape(clone.ts)}</span>` : "";
+        const msg = clone.msg ? htmlEscape(clone.msg) : "";
+        delete clone.ts;
+        delete clone.msg;
+        const metaEntries = Object.entries(clone).filter(([_, v]) => v !== undefined && v !== null && v !== "");
+        const metaStr = metaEntries.length
+            ? `<span class="meta">${htmlEscape(
+                  metaEntries
+                      .map(([k, v]) => {
+                          let val = typeof v === "object" ? JSON.stringify(v) : String(v);
+                          if (val.length > 240) val = `${val.slice(0, 240)}…`;
+                          return `${k}=${val}`;
+                      })
+                      .join(" · ")
+              )}</span>`
+            : "";
+        return `<li>${ts}${ts && msg ? " " : ""}${msg}${metaStr}</li>`;
+    };
+
     const endpointsTableRows = checks
         .map((c) => {
             const status = c.result.ok ? `<span class="ok">OK</span>` : `<span class="bad">FAIL</span>`;
@@ -217,10 +247,33 @@ async function dashboardView(req) {
                         )}</a>`
                 )
                 .join(", ");
-            const details = [it.folderName ? `folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>` : null,
+            const detailsParts = [
+                it.folderName ? `folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>` : null,
                 it.phase ? `phase: <span class=\"mono\">${htmlEscape(it.phase)}</span>` : null,
+                it.traceId ? `trace: <span class=\"mono\">${htmlEscape(it.traceId)}</span>` : null,
+                it.errorStatus ? `status: <span class=\"mono\">${htmlEscape(String(it.errorStatus))}</span>` : null,
+                it.errorContentRange ? `range: <span class=\"mono\">${htmlEscape(it.errorContentRange)}</span>` : null,
                 it.reason ? `reason: ${htmlEscape(it.reason)}` : null,
-                it.error ? `error: ${htmlEscape(it.error)}` : null].filter(Boolean).join(" · ");
+                it.error ? `error: ${htmlEscape(it.error)}` : null,
+            ].filter(Boolean);
+            const mainDetails = detailsParts.join(" · ");
+            const stepsBlock = Array.isArray(it.steps) && it.steps.length
+                ? `<details class=\"log\"><summary>Logs (${it.steps.length})</summary><ul class=\"step-list\">${it.steps
+                      .map((step) => formatStep(step))
+                      .join("")}</ul></details>`
+                : "";
+            const responseBlock = it.errorResponse
+                ? `<details class=\"log\"><summary>Error response</summary><pre class=\"log-block\">${htmlEscape(
+                      it.errorResponse.length > 2000 ? `${it.errorResponse.slice(0, 2000)}…` : it.errorResponse
+                  )}</pre></details>`
+                : "";
+            const stackBlock = it.errorStack
+                ? `<details class=\"log\"><summary>Error stack</summary><pre class=\"log-block\">${htmlEscape(
+                      it.errorStack.length > 4000 ? `${it.errorStack.slice(0, 4000)}…` : it.errorStack
+                  )}</pre></details>`
+                : "";
+            const extras = [stepsBlock, responseBlock, stackBlock].filter(Boolean).join("");
+            const details = `${mainDetails}${extras ? `<div class=\"log-extras\">${extras}</div>` : ""}`;
             return `<tr>
               <td class="mono small">${htmlEscape(it.loggedAt || "")}</td>
               <td>${htmlEscape(it.type || "")}</td>
@@ -303,10 +356,69 @@ async function dashboardView(req) {
         if(s==='error') return 'bad';
         return s ? 'warn' : 'muted';
       }
+      function formatStep(step){
+        if(!step) return '';
+        var clone = Object.assign({}, step);
+        var ts = clone.ts ? '<span class="mono small">' + htmlEscape(clone.ts) + '</span>' : '';
+        var msg = clone.msg ? htmlEscape(clone.msg) : '';
+        delete clone.ts;
+        delete clone.msg;
+        var metaEntries = Object.keys(clone).filter(function(k){ return clone[k] !== undefined && clone[k] !== null && clone[k] !== ''; });
+        var meta = '';
+        if(metaEntries.length){
+          var metaStr = metaEntries.map(function(k){
+            var v = clone[k];
+            if(typeof v === 'object'){ try { v = JSON.stringify(v); } catch(e){ v = String(v); } }
+            v = String(v);
+            if(v.length > 240) v = v.slice(0,240) + '…';
+            return k + '=' + v;
+          }).join(' · ');
+          meta = '<span class="meta">' + htmlEscape(metaStr) + '</span>';
+        }
+        return '<li>' + (ts ? ts + (msg ? ' ' : '') : '') + msg + meta + '</li>';
+      }
+      function buildDetails(it){
+        var parts = [];
+        if(it.folderName) parts.push('folder: <span class="mono">' + htmlEscape(it.folderName) + '</span>');
+        if(it.phase) parts.push('phase: <span class="mono">' + htmlEscape(it.phase) + '</span>');
+        if(it.traceId) parts.push('trace: <span class="mono">' + htmlEscape(it.traceId) + '</span>');
+        if(it.errorStatus != null) parts.push('status: <span class="mono">' + htmlEscape(String(it.errorStatus)) + '</span>');
+        if(it.errorContentRange) parts.push('range: <span class="mono">' + htmlEscape(it.errorContentRange) + '</span>');
+        if(it.reason) parts.push('reason: ' + htmlEscape(it.reason));
+        if(it.error) parts.push('error: ' + htmlEscape(it.error));
+        var main = parts.join(' · ');
+        var extras = [];
+        if(Array.isArray(it.steps) && it.steps.length){
+          extras.push('<details class="log"><summary>Logs (' + it.steps.length + ')</summary><ul class="step-list">' + it.steps.map(formatStep).join('') + '</ul></details>');
+        }
+        if(typeof it.errorResponse === 'string' && it.errorResponse){
+          var resp = it.errorResponse.length > 2000 ? it.errorResponse.slice(0,2000) + '…' : it.errorResponse;
+          extras.push('<details class="log"><summary>Error response</summary><pre class="log-block">' + htmlEscape(resp) + '</pre></details>');
+        }
+        if(typeof it.errorStack === 'string' && it.errorStack){
+          var stack = it.errorStack.length > 4000 ? it.errorStack.slice(0,4000) + '…' : it.errorStack;
+          extras.push('<details class="log"><summary>Error stack</summary><pre class="log-block">' + htmlEscape(stack) + '</pre></details>');
+        }
+        if(!main && !extras.length) return '<span class="muted">—</span>';
+        return main + (extras.length ? '<div class="log-extras">' + extras.join('') + '</div>' : '');
+      }
       function render(items){
         var q = (input.value||'').trim().toLowerCase();
         var filtered = !q ? items : items.filter(function(it){
-          var hay = [it.loggedAt,it.type,it.status,it.folderName,it.phase,it.reason,it.error,(it.uploaded==null?'':String(it.uploaded))].join(' ').toLowerCase();
+          var hay = [
+            it.loggedAt,
+            it.type,
+            it.status,
+            it.folderName,
+            it.phase,
+            it.reason,
+            it.error,
+            it.traceId,
+            it.errorStatus,
+            it.errorContentRange,
+            it.errorResponse,
+            (it.uploaded==null?'':String(it.uploaded))
+          ].join(' ').toLowerCase();
           return hay.indexOf(q) !== -1;
         });
         var rows = filtered.map(function(it){
@@ -315,17 +427,12 @@ async function dashboardView(req) {
           var links = files.map(function(f){
             return '<a href="' + htmlEscape(f.url||'') + '" target="_blank" rel="noreferrer">' + htmlEscape(f.filename||f.url||'file') + '</a>';
           }).join(', ');
-          var detailsParts = [];
-          if(it.folderName) detailsParts.push('folder: <span class="mono">' + htmlEscape(it.folderName) + '</span>');
-          if(it.phase) detailsParts.push('phase: <span class="mono">' + htmlEscape(it.phase) + '</span>');
-          if(it.reason) detailsParts.push('reason: ' + htmlEscape(it.reason));
-          if(it.error) detailsParts.push('error: ' + htmlEscape(it.error));
-          var details = detailsParts.join(' · ');
+          var details = buildDetails(it);
           return '<tr>'
             + '<td class="mono small">' + htmlEscape(it.loggedAt||'') + '</td>'
             + '<td>' + htmlEscape(it.type||'') + '</td>'
             + '<td><span class="badge ' + statusCls(it.status) + '">' + (htmlEscape(it.status||'')||'n/a') + '</span></td>'
-            + '<td>' + (details || '<span class="muted">—</span>') + '</td>'
+            + '<td>' + details + '</td>'
             + '<td style="text-align:center">' + htmlEscape(it.uploaded==null?'':String(it.uploaded)) + '</td>'
             + '<td>' + filesCount + (links?'<div class="small">' + links + '</div>':'') + '</td>'
             + '</tr>';
