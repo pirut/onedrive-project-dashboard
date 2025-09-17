@@ -1,6 +1,9 @@
 import "isomorphic-fetch";
 import Busboy from "busboy";
 import crypto from "crypto";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 
@@ -28,6 +31,18 @@ const msalApp = new ConfidentialClientApplication({
 async function getAppToken() {
     const result = await msalApp.acquireTokenByClientCredential({ scopes: [MS_GRAPH_SCOPE] });
     return result.accessToken;
+}
+
+async function removeFileSafe(filePath) {
+    if (!filePath) return;
+    try {
+        await fs.promises.unlink(filePath);
+    } catch (err) {
+        if (err?.code !== "ENOENT") {
+            // eslint-disable-next-line no-console
+            console.warn(`[ingest-pdf] failed to clean up temp file ${filePath}:`, err?.message || err);
+        }
+    }
 }
 
 async function graphFetch(path, accessToken, options = {}) {
@@ -152,7 +167,7 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: buffer });
 }
 
-async function uploadLargeFile(accessToken, driveId, parentItemId, filename, buffer) {
+async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, filename, filePath, fileSize) {
     const initPath = parentItemId === "root"
         ? `/drives/${driveId}/root:/${encodeURIComponent(filename)}:/createUploadSession`
         : `/drives/${driveId}/items/${parentItemId}:/${encodeURIComponent(filename)}:/createUploadSession`;
@@ -162,12 +177,12 @@ async function uploadLargeFile(accessToken, driveId, parentItemId, filename, buf
         body: JSON.stringify({ item: { "@microsoft.graph.conflictBehavior": "replace" } }),
     });
     const uploadUrl = session.uploadUrl;
-    const chunkSize = 5 * 1024 * 1024; // 5 MB
+    const chunkSize = 5 * 1024 * 1024; // 5 MB chunks to stay within Graph limits
+    const stream = fs.createReadStream(filePath, { highWaterMark: chunkSize });
     let offset = 0;
-    while (offset < buffer.length) {
-        const end = Math.min(offset + chunkSize, buffer.length);
-        const chunk = buffer.subarray(offset, end);
-        const contentRange = `bytes ${offset}-${end - 1}/${buffer.length}`;
+    for await (const chunk of stream) {
+        const end = offset + chunk.length;
+        const contentRange = `bytes ${offset}-${end - 1}/${fileSize}`;
         const resp = await fetch(uploadUrl, {
             method: "PUT",
             headers: {
@@ -195,6 +210,8 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     let phase = "start";
+    let fileRec = null;
+    const tempFiles = [];
     try {
         const traceId = crypto.randomBytes(8).toString("hex");
         const steps = [];
@@ -209,26 +226,43 @@ export default async function handler(req, res) {
         push("request:start", { ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "", ua: req.headers["user-agent"] || "" });
         let site = DEFAULT_SITE_URL;
         let library = DEFAULT_LIBRARY;
-        let fileRec = null;
 
         phase = "parse_form";
         await new Promise((resolve, reject) => {
             // Busboy supports function-style construction in CJS. Avoid `new` to prevent interop issues.
             const bb = Busboy({ headers: req.headers });
+            const pending = [];
             bb.on("file", (_name, file, info) => {
-                const chunks = [];
-                file.on("data", (d) => chunks.push(d));
-                file.on("end", () => {
-                    const buf = Buffer.concat(chunks);
-                    fileRec = { filename: info.filename, mimeType: info.mimeType || info.mime || "", buffer: buf };
-                    push("upload:received", { filename: info.filename, size: buf.length, mime: info.mimeType || info.mime || "" });
+                const tmpFilePath = path.join(os.tmpdir(), `pdf-ingest-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
+                const writeStream = fs.createWriteStream(tmpFilePath);
+                let totalSize = 0;
+                file.on("data", (d) => {
+                    totalSize += d.length;
                 });
+                file.on("error", (err) => {
+                    writeStream.destroy(err);
+                });
+                const writePromise = new Promise((resolveWrite, rejectWrite) => {
+                    writeStream.on("finish", () => {
+                        tempFiles.push(tmpFilePath);
+                        fileRec = { filename: info.filename, mimeType: info.mimeType || info.mime || "", size: totalSize, tmpPath: tmpFilePath };
+                        push("upload:received", { filename: info.filename, size: totalSize, mime: info.mimeType || info.mime || "" });
+                        resolveWrite();
+                    });
+                    writeStream.on("error", (err) => {
+                        removeFileSafe(tmpFilePath).finally(() => rejectWrite(err));
+                    });
+                });
+                pending.push(writePromise);
+                file.pipe(writeStream);
             });
             bb.on("field", (name, val) => {
                 if (name === "siteUrl") site = val;
                 if (name === "libraryPath") library = val;
             });
-            bb.on("finish", resolve);
+            bb.on("finish", () => {
+                Promise.all(pending).then(resolve).catch(reject);
+            });
             bb.on("error", reject);
             req.pipe(bb);
         });
@@ -273,17 +307,19 @@ export default async function handler(req, res) {
         push("folder:job-walks", { folderId, created, name: jobWalksName });
 
         // Upload. Use small upload if <= 4MB, else session
+        const fileSize = fileRec.size;
         const fourMB = 4 * 1024 * 1024;
-        if (fileRec.buffer.length <= fourMB) {
+        if (fileSize <= fourMB) {
             phase = "upload_simple";
-            push("upload:start", { method: "simple", size: fileRec.buffer.length });
-            await uploadSmallFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
+            push("upload:start", { method: "simple", size: fileSize });
+            const buffer = await fs.promises.readFile(fileRec.tmpPath);
+            await uploadSmallFile(token, drive.id, folderId, fileRec.filename, buffer);
         } else {
             phase = "upload_chunked";
-            push("upload:start", { method: "chunked", size: fileRec.buffer.length });
-            await uploadLargeFile(token, drive.id, folderId, fileRec.filename, fileRec.buffer);
+            push("upload:start", { method: "chunked", size: fileSize });
+            await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize);
         }
-        push("upload:done", { folderId, size: fileRec.buffer.length });
+        push("upload:done", { folderId, size: fileSize });
 
         await logSubmission({
             type: "pdf_ingest",
@@ -292,11 +328,11 @@ export default async function handler(req, res) {
             folderName,
             created,
             filename: fileRec.filename,
-            size: fileRec.buffer.length,
+            size: fileSize,
             steps,
         });
 
-        const payload = { ok: true, traceId, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileRec.buffer.length } };
+        const payload = { ok: true, traceId, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileSize } };
         if (debug) payload.debug = { steps };
         return res.status(200).json(payload);
     } catch (e) {
@@ -324,5 +360,7 @@ export default async function handler(req, res) {
         };
         const code = accessDenied ? 403 : 500;
         return res.status(code).json(debug ? payload : { error: payload.error, traceId, phase, ...(payload.hint ? { hint: payload.hint } : {}) });
+    } finally {
+        await Promise.all(tempFiles.map(removeFileSafe));
     }
 }
