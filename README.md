@@ -75,6 +75,32 @@ POST `multipart/form-data` to `http://localhost:3001/upload` (or your deployed U
 -   `folderName`: target folder name (must exist under the configured library)
 -   `file`: file blob to upload (can be multiple `file` fields)
 
+### Handling large PDFs with UploadThing
+
+Vercel’s serverless runtime rejects uploads bigger than ~4.5 MB. To ingest larger PDFs:
+
+1. Upload the file to UploadThing (or any host that gives you a direct HTTPS link). The URL should look like `https://utfs.io/f/<file-key>`.
+2. Call `POST /api/ingest-pdf` _without_ a file and include metadata instead:
+
+   - `siteUrl` and `libraryPath` (same as before)
+   - `uploadthingUrl` (or `fileUrl`/`remoteUrl`): the HTTPS link to the hosted PDF
+   - `uploadthingFilename` (optional): original file name if you want to override the name detected from the URL
+
+   You can send these fields as `multipart/form-data` or as a JSON body (`Content-Type: application/json`).
+
+The API downloads the remote PDF on-demand, streams it into OneDrive, and logs the extra steps (`remote:download:*`) so you can trace the hand-off in the admin dashboard.
+
+### FastField → UploadThing → OneDrive webhook
+
+- Configure FastField to POST its submission payload to `/api/fastfield-webhook`.
+- Set these environment variables:
+  - `UPLOADTHING_TOKEN` – UploadThing server token (required).
+  - `FASTFIELD_API_KEY` – if FastField downloads require the API key header (already used elsewhere).
+  - `FASTFIELD_WEBHOOK_SECRET` – optional shared secret validated against the `x-webhook-secret` header.
+  - `FASTFIELD_DOWNLOAD_AUTH_HEADER` – optional single header (`Header-Name: value`) sent when downloading attachments (useful for Basic/Bearer auth).
+- The webhook scans the payload for PDF attachments, downloads each file (preserving the original filename), uploads it to UploadThing, then calls the same ingestion pipeline to push the PDF into OneDrive.
+- Every run is logged to KV with type `pdf_ingest` and source `fastfield`; the admin dashboard will show `fastfield:*` and `uploadthing:*` steps for debugging.
+
 Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**, enter a folder path (e.g. `/Projects/Active`), then **Load projects**. Click **Export CSV** to save the list.
 
 ### Production (Vercel)

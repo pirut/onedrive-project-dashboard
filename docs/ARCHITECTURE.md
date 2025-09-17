@@ -16,6 +16,7 @@ This repository contains two runtime surfaces:
      - `api/health` — base health
      - `api/upload` — production upload endpoint (multipart via Busboy)
      - `api/ingest` — JSON ingest logging to KV
+     - `api/fastfield-webhook` — receives FastField submissions, pushes files to UploadThing, then into OneDrive
      - `api/admin` — Admin-only dashboard (HTML) with live submissions
      - `api/submissions` — JSON list of recent submissions
      - `api/kv-diag` and `api/kv-write-test` — KV connectivity diagnostics
@@ -43,6 +44,7 @@ Environment variables:
   - `KV_REST_API_URL`, `KV_REST_API_TOKEN` (or `KV_REST_API_READ_ONLY_TOKEN`)
 - FastField vars (if using sync features):
   - `FASTFIELD_API_URL`, `FASTFIELD_AUTH_HEADER`, `FASTFIELD_TABLE_ID`, `FASTFIELD_TABLE_NAME`
+  - Webhook helpers: `FASTFIELD_WEBHOOK_SECRET`, `FASTFIELD_DOWNLOAD_AUTH_HEADER`, `UPLOADTHING_TOKEN`
 
 Local development:
 

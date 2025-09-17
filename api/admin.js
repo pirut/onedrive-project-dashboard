@@ -320,18 +320,21 @@ async function dashboardView(req) {
   </div>
 
   <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">Submissions</div>
-      <div class="small muted">Auto-updates every 3s · Showing latest ${items.length}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" id="refresh-btn">Refresh</button>
+        <div class="small muted">Use Refresh to update · Showing latest ${items.length}</div>
+      </div>
     </div>
     <div class="row" style="margin:8px 0 12px 0">
-      <input id="filter-input" placeholder="Filter by text (type, folder, status, error)..." />
+      <input id="filter-input" placeholder="Filter by text (type, folder, status, error, trace)..." />
     </div>
     <table>
       <thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Details</th><th>Uploaded</th><th>Files</th></tr></thead>
       <tbody id="subs-tbody">${itemsRows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>'}</tbody>
     </table>
-    <div class="small muted" id="last-updated" style="margin-top:6px">Last updated: just now</div>
+    <div class="small muted" id="last-updated" style="margin-top:6px">Last updated: pending</div>
   </div>
 
   <script>
@@ -339,8 +342,9 @@ async function dashboardView(req) {
       var tbody = document.getElementById('subs-tbody');
       var input = document.getElementById('filter-input');
       var last = document.getElementById('last-updated');
+      var refreshBtn = document.getElementById('refresh-btn');
       var cache = [];
-      var timer = null;
+      var refreshing = false;
 
       function htmlEscape(s){
         return String(s)
@@ -447,12 +451,25 @@ async function dashboardView(req) {
           var data = await res.json();
           cache = Array.isArray(data.items)? data.items : [];
           render(cache);
-        }catch(e){}
+          if(last) last.textContent = 'Last updated: ' + new Date().toLocaleTimeString();
+        }catch(e){
+          if(last) last.textContent = 'Last updated: failed (' + (e && e.message ? e.message : 'error') + ')';
+        }
       }
       input.addEventListener('input', function(){ render(cache); });
+      async function handleRefresh(){
+        if(refreshing) return;
+        refreshing = true;
+        if(refreshBtn){ refreshBtn.disabled = true; refreshBtn.textContent = 'Refreshing…'; }
+        try{
+          await fetchAndRender();
+        } finally {
+          refreshing = false;
+          if(refreshBtn){ refreshBtn.disabled = false; refreshBtn.textContent = 'Refresh'; }
+        }
+      }
+      if(refreshBtn){ refreshBtn.addEventListener('click', handleRefresh); }
       fetchAndRender();
-      timer = setInterval(fetchAndRender, 3000);
-      window.addEventListener('beforeunload', function(){ if(timer) clearInterval(timer); });
     })();
   </script>`;
 

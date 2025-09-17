@@ -4,6 +4,7 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { Readable } from "stream";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 
@@ -33,7 +34,7 @@ async function getAppToken() {
     return result.accessToken;
 }
 
-async function removeFileSafe(filePath) {
+export async function removeFileSafe(filePath) {
     if (!filePath) return;
     try {
         await fs.promises.unlink(filePath);
@@ -43,6 +44,82 @@ async function removeFileSafe(filePath) {
             console.warn(`[ingest-pdf] failed to clean up temp file ${filePath}:`, err?.message || err);
         }
     }
+}
+
+function filenameFromContentDisposition(headerValue) {
+    if (!headerValue) return "";
+    const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(headerValue);
+    if (!match) return "";
+    return decodeURIComponent(match[1] || match[2] || "").trim();
+}
+
+function filenameFromUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const pathname = parsed.pathname || "";
+        const parts = pathname.split("/").filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : "";
+    } catch {
+        return "";
+    }
+}
+
+async function downloadRemotePdf(sourceUrl, fallbackName, push) {
+    const tmpFilePath = path.join(os.tmpdir(), `pdf-ingest-remote-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(sourceUrl);
+    } catch (err) {
+        const e = new Error("Invalid remote URL");
+        e.cause = err;
+        throw e;
+    }
+    if (!(parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:")) {
+        throw new Error("Remote URL must use http or https");
+    }
+    push("remote:download:start", { url: sourceUrl });
+    const res = await fetch(sourceUrl, { headers: { "cache-control": "no-cache" } });
+    if (!res.ok || !res.body) {
+        const bodyText = await res.text().catch(() => "");
+        throw Object.assign(new Error(`Remote fetch failed: ${res.status} ${res.statusText}`), {
+            status: res.status,
+            responseBody: bodyText,
+        });
+    }
+    const contentType = res.headers.get("content-type") || "";
+    const disposition = res.headers.get("content-disposition") || "";
+    let filename = String(fallbackName || "").trim();
+    if (!filename) filename = filenameFromContentDisposition(disposition) || filenameFromUrl(sourceUrl);
+    if (!/\.pdf$/i.test(filename || "")) filename = `${filename || "upload"}.pdf`;
+
+    const nodeStream = typeof res.body.getReader === "function" ? Readable.fromWeb(res.body) : res.body;
+    if (!nodeStream || typeof nodeStream.pipe !== "function") {
+        throw new Error("Remote response stream is not readable");
+    }
+    let total = 0;
+    await new Promise((resolve, reject) => {
+        const writeStream = fs.createWriteStream(tmpFilePath);
+        nodeStream.on("data", (chunk) => {
+            total += chunk.length;
+        });
+        nodeStream.on("error", (err) => {
+            writeStream.destroy(err);
+            removeFileSafe(tmpFilePath).finally(() => reject(err));
+        });
+        writeStream.on("error", (err) => {
+            removeFileSafe(tmpFilePath).finally(() => reject(err));
+        });
+        writeStream.on("finish", resolve);
+        nodeStream.pipe(writeStream);
+    });
+    if (total === 0) {
+        try {
+            const stat = await fs.promises.stat(tmpFilePath);
+            total = stat.size;
+        } catch {}
+    }
+    push("remote:download:done", { url: sourceUrl, size: total, filename });
+    return { filename, mimeType: contentType || "application/pdf", size: total, tmpPath: tmpFilePath };
 }
 
 async function graphFetch(path, accessToken, options = {}) {
@@ -223,6 +300,80 @@ async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, fil
     }
 }
 
+export async function executeIngestWorkflow({
+    fileRec,
+    site,
+    library,
+    push,
+    setPhase = () => {},
+}) {
+    if (!fileRec || !fileRec.tmpPath) throw new Error("File record missing tmpPath");
+    setPhase("derive_folder");
+    const folderNameRaw = deriveFolderNameFromFilename(fileRec.filename);
+    const folderName = sanitizeFolderName(folderNameRaw);
+    push("folder:derived", { from: fileRec.filename, folderName });
+
+    setPhase("get_token");
+    const token = await getAppToken();
+    push("auth:token-acquired");
+
+    setPhase("resolve_drive");
+    const { drive, subPathParts } = await resolveDrive(token, site, library);
+    push("drive:resolved", { driveName: drive.name, driveId: drive.id, site, library });
+
+    setPhase("resolve_parent");
+    const parentItemId = await getParentItemId(token, drive.id, subPathParts);
+    push("parent:resolved", { parentItemId });
+
+    setPhase("find_main_folder");
+    const existing = await findFolder(token, drive.id, parentItemId, folderName);
+    if (!existing) {
+        push("folder:not-found", { folderName });
+        const msg = `Target folder not found under library: ${folderName}`;
+        const err = new Error(msg);
+        err.status = 404;
+        err.phase = "find_main_folder";
+        throw err;
+    }
+    push("folder:found", { folderId: existing.id, folderName: existing.name });
+
+    setPhase("ensure_job_walks");
+    const jobWalksName = "Job Walks";
+    const { id: folderId, created } = await ensureChildFolder(token, drive.id, existing.id, jobWalksName);
+    push("folder:job-walks", { folderId, created, name: jobWalksName });
+
+    let fileSize = fileRec.size;
+    if (!fileSize) {
+        try {
+            const stat = await fs.promises.stat(fileRec.tmpPath);
+            fileSize = stat.size;
+        } catch {
+            fileSize = 0;
+        }
+    }
+    const fourMB = 4 * 1024 * 1024;
+    if (fileSize <= fourMB) {
+        setPhase("upload_simple");
+        push("upload:start", { method: "simple", size: fileSize });
+        const buffer = fileRec.buffer instanceof Buffer ? fileRec.buffer : await fs.promises.readFile(fileRec.tmpPath);
+        await uploadSmallFile(token, drive.id, folderId, fileRec.filename, buffer);
+    } else {
+        setPhase("upload_chunked");
+        push("upload:start", { method: "chunked", size: fileSize });
+        await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize, push);
+    }
+    push("upload:done", { folderId, size: fileSize });
+
+    return {
+        driveId: drive.id,
+        folderId,
+        created,
+        folderName,
+        fileSize,
+        filename: fileRec.filename,
+    };
+}
+
 export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
@@ -245,6 +396,8 @@ export default async function handler(req, res) {
     let fileRec = null;
     const tempFiles = [];
     let debugMode = false;
+    let remoteUrl = "";
+    let remoteFilename = "";
     try {
         res.setHeader("X-Request-Id", traceId);
         debugMode = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
@@ -252,112 +405,132 @@ export default async function handler(req, res) {
         let site = DEFAULT_SITE_URL;
         let library = DEFAULT_LIBRARY;
 
-        phase = "parse_form";
-        await new Promise((resolve, reject) => {
-            // Busboy supports function-style construction in CJS. Avoid `new` to prevent interop issues.
-            const bb = Busboy({ headers: req.headers });
-            const pending = [];
-            bb.on("file", (_name, file, info) => {
-                const tmpFilePath = path.join(os.tmpdir(), `pdf-ingest-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
-                const writeStream = fs.createWriteStream(tmpFilePath);
-                let totalSize = 0;
-                file.on("data", (d) => {
-                    totalSize += d.length;
+        const contentType = String(req.headers["content-type"] || "");
+        if (/application\/json/i.test(contentType || "")) {
+            phase = "parse_json";
+            const chunks = [];
+            for await (const chunk of req) chunks.push(chunk);
+            const raw = Buffer.concat(chunks).toString("utf8");
+            let payload = {};
+            try {
+                payload = raw ? JSON.parse(raw) : {};
+            } catch (jsonErr) {
+                push("error:json-parse", { message: jsonErr?.message || String(jsonErr) });
+                return res.status(400).json({ error: "Invalid JSON payload", traceId });
+            }
+            if (payload && typeof payload === "object") {
+                if (payload.siteUrl) site = String(payload.siteUrl);
+                if (payload.libraryPath) library = String(payload.libraryPath);
+                remoteUrl = String(payload.uploadthingUrl || payload.fileUrl || payload.remoteUrl || payload.url || "");
+                remoteFilename = String(payload.uploadthingFilename || payload.remoteFilename || payload.filename || payload.name || "");
+                push("request:json", {
+                    hasRemoteUrl: Boolean(remoteUrl),
+                    hasSite: Boolean(payload.siteUrl),
+                    hasLibrary: Boolean(payload.libraryPath),
                 });
-                file.on("error", (err) => {
-                    writeStream.destroy(err);
-                });
-                const writePromise = new Promise((resolveWrite, rejectWrite) => {
-                    writeStream.on("finish", () => {
-                        tempFiles.push(tmpFilePath);
-                        fileRec = { filename: info.filename, mimeType: info.mimeType || info.mime || "", size: totalSize, tmpPath: tmpFilePath };
-                        push("upload:received", { filename: info.filename, size: totalSize, mime: info.mimeType || info.mime || "" });
-                        resolveWrite();
+            }
+        } else {
+            phase = "parse_form";
+            await new Promise((resolve, reject) => {
+                // Busboy supports function-style construction in CJS. Avoid `new` to prevent interop issues.
+                const bb = Busboy({ headers: req.headers });
+                const pending = [];
+                bb.on("file", (_name, file, info) => {
+                    const tmpFilePath = path.join(os.tmpdir(), `pdf-ingest-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
+                    const writeStream = fs.createWriteStream(tmpFilePath);
+                    let totalSize = 0;
+                    file.on("data", (d) => {
+                        totalSize += d.length;
                     });
-                    writeStream.on("error", (err) => {
-                        removeFileSafe(tmpFilePath).finally(() => rejectWrite(err));
+                    file.on("error", (err) => {
+                        writeStream.destroy(err);
                     });
+                    const writePromise = new Promise((resolveWrite, rejectWrite) => {
+                        writeStream.on("finish", () => {
+                            tempFiles.push(tmpFilePath);
+                            fileRec = { filename: info.filename, mimeType: info.mimeType || info.mime || "", size: totalSize, tmpPath: tmpFilePath };
+                            push("upload:received", { filename: info.filename, size: totalSize, mime: info.mimeType || info.mime || "" });
+                            resolveWrite();
+                        });
+                        writeStream.on("error", (err) => {
+                            removeFileSafe(tmpFilePath).finally(() => rejectWrite(err));
+                        });
+                    });
+                    pending.push(writePromise);
+                    file.pipe(writeStream);
                 });
-                pending.push(writePromise);
-                file.pipe(writeStream);
+                bb.on("field", (name, val) => {
+                    if (name === "siteUrl") site = val;
+                    if (name === "libraryPath") library = val;
+                    if (name === "uploadthingUrl" || name === "fileUrl" || name === "remoteUrl") remoteUrl = val;
+                    if (name === "uploadthingFilename" || name === "remoteFilename") remoteFilename = val;
+                });
+                bb.on("finish", () => {
+                    Promise.all(pending).then(resolve).catch(reject);
+                });
+                bb.on("error", reject);
+                req.pipe(bb);
             });
-            bb.on("field", (name, val) => {
-                if (name === "siteUrl") site = val;
-                if (name === "libraryPath") library = val;
-            });
-            bb.on("finish", () => {
-                Promise.all(pending).then(resolve).catch(reject);
-            });
-            bb.on("error", reject);
-            req.pipe(bb);
-        });
+        }
+
+        remoteUrl = String(remoteUrl || "").trim();
+        remoteFilename = String(remoteFilename || "").trim();
 
         if (!fileRec) {
-            push("error:no-file");
-            return res.status(400).json({ error: "No file uploaded", traceId });
+            if (remoteUrl) {
+                phase = "remote_download";
+                try {
+                    const remoteFile = await downloadRemotePdf(remoteUrl, remoteFilename, push);
+                    tempFiles.push(remoteFile.tmpPath);
+                    fileRec = remoteFile;
+                } catch (remoteErr) {
+                    push("error:remote-download", {
+                        url: remoteUrl,
+                        message: remoteErr?.message || String(remoteErr),
+                        status: remoteErr?.status,
+                    });
+                    throw remoteErr;
+                }
+            } else {
+                push("error:no-file");
+                return res.status(400).json({ error: "No file uploaded", traceId });
+            }
         }
         const isPdf = /\.pdf$/i.test(fileRec.filename) || /pdf/i.test(fileRec.mimeType || "");
         if (!isPdf) {
             push("error:not-pdf", { filename: fileRec.filename, mime: fileRec.mimeType || "" });
             return res.status(400).json({ error: "File must be a PDF", traceId });
         }
-
-        const folderNameRaw = deriveFolderNameFromFilename(fileRec.filename);
-        const folderName = sanitizeFolderName(folderNameRaw);
-        push("folder:derived", { from: fileRec.filename, folderName });
-
-        phase = "get_token";
-        const token = await getAppToken();
-        push("auth:token-acquired");
-        phase = "resolve_drive";
-        const { drive, subPathParts } = await resolveDrive(token, site, library);
-        push("drive:resolved", { driveName: drive.name, driveId: drive.id, site, library });
-        phase = "resolve_parent";
-        const parentItemId = await getParentItemId(token, drive.id, subPathParts);
-        push("parent:resolved", { parentItemId });
-        // New behavior: main folder must already exist; do not create if missing
-        phase = "find_main_folder";
-        const existing = await findFolder(token, drive.id, parentItemId, folderName);
-        if (!existing) {
-            push("folder:not-found", { folderName });
-            const msg = `Target folder not found under library: ${folderName}`;
-            await logSubmission({ type: "pdf_ingest", status: "error", traceId, phase: "find_main_folder", error: msg });
-            return res.status(404).json({ ok: false, traceId, phase: "find_main_folder", error: msg });
-        }
-        push("folder:found", { folderId: existing.id, folderName: existing.name });
-        // Ensure or create the Job Walks subfolder under the existing main folder
-        phase = "ensure_job_walks";
-        const jobWalksName = "Job Walks";
-        const { id: folderId, created } = await ensureChildFolder(token, drive.id, existing.id, jobWalksName);
-        push("folder:job-walks", { folderId, created, name: jobWalksName });
-
-        // Upload. Use small upload if <= 4MB, else session
-        const fileSize = fileRec.size;
-        const fourMB = 4 * 1024 * 1024;
-        if (fileSize <= fourMB) {
-            phase = "upload_simple";
-            push("upload:start", { method: "simple", size: fileSize });
-            const buffer = await fs.promises.readFile(fileRec.tmpPath);
-            await uploadSmallFile(token, drive.id, folderId, fileRec.filename, buffer);
-        } else {
-            phase = "upload_chunked";
-            push("upload:start", { method: "chunked", size: fileSize });
-            await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize, push);
-        }
-        push("upload:done", { folderId, size: fileSize });
+        const result = await executeIngestWorkflow({
+            fileRec,
+            site,
+            library,
+            push,
+            setPhase: (p) => {
+                phase = p;
+            },
+        });
 
         await logSubmission({
             type: "pdf_ingest",
             status: "ok",
             traceId,
-            folderName,
-            created,
-            filename: fileRec.filename,
-            size: fileSize,
+            folderName: result.folderName,
+            created: result.created,
+            filename: result.filename,
+            size: result.fileSize,
             steps,
         });
 
-        const payload = { ok: true, traceId, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileSize } };
+        const payload = {
+            ok: true,
+            traceId,
+            driveId: result.driveId,
+            folderId: result.folderId,
+            created: result.created,
+            folderName: result.folderName,
+            file: { name: result.filename, size: result.fileSize },
+        };
         if (debugMode) payload.debug = { steps };
         return res.status(200).json(payload);
     } catch (e) {
@@ -411,7 +584,7 @@ export default async function handler(req, res) {
             }
             payload.steps = steps;
         }
-        const code = accessDenied ? 403 : 500;
+        const code = e?.status ? Number(e.status) : accessDenied ? 403 : 500;
         const safePayload = {
             error: payload.error,
             traceId,
