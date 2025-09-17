@@ -167,7 +167,7 @@ async function uploadSmallFile(accessToken, driveId, parentItemId, filename, buf
     await graphFetch(path, accessToken, { method: "PUT", headers: { "Content-Type": "application/pdf" }, body: buffer });
 }
 
-async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, filename, filePath, fileSize) {
+async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, filename, filePath, fileSize, logEvent = () => {}) {
     const initPath = parentItemId === "root"
         ? `/drives/${driveId}/root:/${encodeURIComponent(filename)}:/createUploadSession`
         : `/drives/${driveId}/items/${parentItemId}:/${encodeURIComponent(filename)}:/createUploadSession`;
@@ -183,17 +183,41 @@ async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, fil
     for await (const chunk of stream) {
         const end = offset + chunk.length;
         const contentRange = `bytes ${offset}-${end - 1}/${fileSize}`;
-        const resp = await fetch(uploadUrl, {
-            method: "PUT",
-            headers: {
-                "Content-Length": String(chunk.length),
-                "Content-Range": contentRange,
-            },
-            body: chunk,
-        });
+        let resp;
+        try {
+            resp = await fetch(uploadUrl, {
+                method: "PUT",
+                headers: {
+                    "Content-Length": String(chunk.length),
+                    "Content-Range": contentRange,
+                },
+                body: chunk,
+            });
+        } catch (networkErr) {
+            try {
+                logEvent("upload:chunk-error", {
+                    contentRange,
+                    error: networkErr?.message || String(networkErr),
+                    type: "network",
+                });
+            } catch { /* ignore logging failure */ }
+            throw networkErr;
+        }
         if (!resp.ok && resp.status !== 202 && resp.status !== 201 && resp.status !== 200) {
             const text = await resp.text();
-            throw new Error(`Upload chunk failed: ${resp.status} ${text}`);
+            try {
+                logEvent("upload:chunk-error", {
+                    contentRange,
+                    status: resp.status,
+                    bodyPreview: text.length > 500 ? `${text.slice(0, 500)}...` : text,
+                    type: "graph",
+                });
+            } catch { /* ignore logging failure */ }
+            const err = new Error(`Upload chunk failed: ${resp.status} ${text}`);
+            err.status = resp.status;
+            err.contentRange = contentRange;
+            err.responseBody = text;
+            throw err;
         }
         offset = end;
     }
@@ -210,19 +234,20 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     let phase = "start";
+    let traceId = crypto.randomBytes(8).toString("hex");
+    const steps = [];
+    const push = (msg, meta = {}) => {
+        const entry = { ts: new Date().toISOString(), msg, ...meta };
+        steps.push(entry);
+        // eslint-disable-next-line no-console
+        console.log(`[ingest-pdf:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
+    };
     let fileRec = null;
     const tempFiles = [];
+    let debugMode = false;
     try {
-        const traceId = crypto.randomBytes(8).toString("hex");
-        const steps = [];
-        const push = (msg, meta = {}) => {
-            const entry = { ts: new Date().toISOString(), msg, ...meta };
-            steps.push(entry);
-            // eslint-disable-next-line no-console
-            console.log(`[ingest-pdf:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
-        };
-        const debug = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
         res.setHeader("X-Request-Id", traceId);
+        debugMode = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
         push("request:start", { ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "", ua: req.headers["user-agent"] || "" });
         let site = DEFAULT_SITE_URL;
         let library = DEFAULT_LIBRARY;
@@ -317,7 +342,7 @@ export default async function handler(req, res) {
         } else {
             phase = "upload_chunked";
             push("upload:start", { method: "chunked", size: fileSize });
-            await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize);
+            await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize, push);
         }
         push("upload:done", { folderId, size: fileSize });
 
@@ -333,17 +358,36 @@ export default async function handler(req, res) {
         });
 
         const payload = { ok: true, traceId, driveId: drive.id, folderId, created, folderName, file: { name: fileRec.filename, size: fileSize } };
-        if (debug) payload.debug = { steps };
+        if (debugMode) payload.debug = { steps };
         return res.status(200).json(payload);
     } catch (e) {
-        const traceId = res.getHeader("X-Request-Id") || crypto.randomBytes(8).toString("hex");
+        traceId = (res.getHeader("X-Request-Id") && String(res.getHeader("X-Request-Id"))) || traceId || crypto.randomBytes(8).toString("hex");
+        if (!res.getHeader("X-Request-Id")) res.setHeader("X-Request-Id", traceId);
+        push("error:caught", { phase, message: e?.message || String(e) });
         // eslint-disable-next-line no-console
         console.error(`[ingest-pdf:${traceId}] error at ${phase}:`, e?.message || e);
+        if (e?.stack) {
+            // eslint-disable-next-line no-console
+            console.error(`[ingest-pdf:${traceId}] stack:`, e.stack);
+        }
         // best-effort: include steps if present in scope
         try {
-            await logSubmission({ type: "pdf_ingest", status: "error", traceId, phase, error: e?.message || String(e) });
+            await logSubmission({
+                type: "pdf_ingest",
+                status: "error",
+                traceId,
+                phase,
+                error: e?.message || String(e),
+                errorStack: e?.stack || "",
+                ...(e && typeof e === "object" && "status" in e ? { errorStatus: e.status } : {}),
+                ...(e && typeof e === "object" && "contentRange" in e ? { errorContentRange: e.contentRange } : {}),
+                ...(typeof e?.responseBody === "string"
+                    ? { errorResponse: e.responseBody.length > 2000 ? `${e.responseBody.slice(0, 2000)}...` : e.responseBody }
+                    : {}),
+                debug: debugMode,
+                steps,
+            });
         } catch {}
-        const debug = String(req.query?.debug || req.headers["x-debug-log"] || "").trim() === "1";
         const msg = e?.message || String(e);
         const accessDenied = /\b403\b|accessDenied|insufficientPermissions/i.test(msg);
         const payload = {
@@ -357,9 +401,26 @@ export default async function handler(req, res) {
                           "App likely lacks write permission. Grant Microsoft Graph application permission (Sites.ReadWrite.All) with admin consent, or if using Sites.Selected, assign write role to this site for your app.",
                   }
                 : {}),
+            ...(e && typeof e === "object" && "status" in e ? { status: e.status } : {}),
+            ...(e && typeof e === "object" && "contentRange" in e ? { contentRange: e.contentRange } : {}),
         };
+        if (debugMode) {
+            payload.stack = e?.stack || "";
+            if (typeof e?.responseBody === "string") {
+                payload.responseBody = e.responseBody.length > 2000 ? `${e.responseBody.slice(0, 2000)}...` : e.responseBody;
+            }
+            payload.steps = steps;
+        }
         const code = accessDenied ? 403 : 500;
-        return res.status(code).json(debug ? payload : { error: payload.error, traceId, phase, ...(payload.hint ? { hint: payload.hint } : {}) });
+        const safePayload = {
+            error: payload.error,
+            traceId,
+            phase,
+            ...(payload.hint ? { hint: payload.hint } : {}),
+            ...(payload.status ? { status: payload.status } : {}),
+            ...(payload.contentRange ? { contentRange: payload.contentRange } : {}),
+        };
+        return res.status(code).json(debugMode ? payload : safePayload);
     } finally {
         await Promise.all(tempFiles.map(removeFileSafe));
     }
