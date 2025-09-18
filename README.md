@@ -98,7 +98,7 @@ The API downloads the remote PDF on-demand, streams it into OneDrive, and logs t
   - `FASTFIELD_STAGING_SITE_URL` – site URL containing the staging folder (defaults to `DEFAULT_SITE_URL`).
   - `FASTFIELD_STAGING_LIBRARY_PATH` – drive/folder path for the staging drop (e.g. `Cornerstone/JOB WALKS`).
   - `FASTFIELD_WEBHOOK_SECRET` – optional shared secret validated against the `x-webhook-secret` header.
-  - `FASTFIELD_STAGING_WAIT_MS`, `FASTFIELD_STAGING_INITIAL_DELAY_MS`, `FASTFIELD_STAGING_WAIT_INTERVAL_MS` – optional wait tuning (defaults: quick check, then 5 min pause, then 10 s polling for up to 10 min).
+  - `FASTFIELD_STAGING_WAIT_MS`, `FASTFIELD_STAGING_INITIAL_DELAY_MS`, `FASTFIELD_STAGING_WAIT_INTERVAL_MS` – optional wait tuning (defaults: quick check, then 1 min pause, then 10 s polling for up to 3 min total).
 - When the webhook fires, the server locates the PDF in the staging folder and moves it into the proper job’s `Job Walks` subfolder, preserving the filename.
 - Every run is logged to KV with type `pdf_ingest` and source `fastfield_move`; you can inspect the step-by-step trace in the admin dashboard.
 - If the destination already contains a file with the same name, the webhook automatically appends ` (1)`, ` (2)`, etc., to avoid overwriting.

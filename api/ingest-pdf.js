@@ -435,8 +435,8 @@ export async function moveFileFromStaging({
 
     let stagingItem = null;
     let usedFilename = "";
-    const waitTotalMs = Number(process.env.FASTFIELD_STAGING_WAIT_MS || 600000); // default 10 minutes
-    const rawInitialDelayMs = Number(process.env.FASTFIELD_STAGING_INITIAL_DELAY_MS || 300000); // default 5 minutes
+    const waitTotalMs = Number(process.env.FASTFIELD_STAGING_WAIT_MS || 180000); // default 3 minutes
+    const rawInitialDelayMs = Number(process.env.FASTFIELD_STAGING_INITIAL_DELAY_MS || 60000); // default 1 minute
     const rawWaitStepMs = Number(process.env.FASTFIELD_STAGING_WAIT_INTERVAL_MS || 10000); // default 10 seconds
     const initialDelayMs = Math.max(0, rawInitialDelayMs || 0);
     const cleanWaitStepMs = Math.max(1000, rawWaitStepMs || 0);
