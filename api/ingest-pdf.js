@@ -166,7 +166,7 @@ function encodeDrivePath(path) {
 
 function sanitizeFolderName(name) {
     const base = String(name || "").trim();
-    const illegal = /["#:*?<>|{}\\/+%&]/g; // remove characters SharePoint dislikes
+    const illegal = /["#:*?<>|{}\\/+%]/g; // remove characters SharePoint dislikes (allow &)
     let safe = base.replace(illegal, " ").replace(/\s+/g, " ").trim();
     // disallow trailing dot/space
     safe = safe.replace(/[\s.]+$/, "");
