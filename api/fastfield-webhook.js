@@ -113,6 +113,7 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+    let responded = false;
     try {
         if (!FASTFIELD_STAGING_LIBRARY_PATH) {
             throw new Error("FASTFIELD_STAGING_LIBRARY_PATH must be configured");
@@ -139,11 +140,12 @@ export default async function handler(req, res) {
             if (fallbackName) attachments = [{ filename: String(fallbackName).trim(), url: "" }];
         }
         if (!attachments.length) {
+            responded = true;
             return res.status(202).json({ ok: false, reason: "No PDF attachments found" });
         }
 
-        const summary = [];
-        const errors = [];
+        res.status(202).json({ ok: true, processing: attachments.length });
+        responded = true;
 
         for (const attachment of attachments) {
             const traceId = crypto.randomBytes(8).toString("hex");
@@ -191,13 +193,6 @@ export default async function handler(req, res) {
                     payloadPreview,
                     steps,
                 });
-
-                summary.push({
-                    traceId,
-                    filename: moveResult.filename,
-                    folderName: moveResult.folderName,
-                    method: "move",
-                });
             } catch (err) {
                 push("error", { message: err?.message || String(err), phase });
                 await logSubmission({
@@ -212,12 +207,10 @@ export default async function handler(req, res) {
                     payloadPreview,
                     steps,
                 });
-                errors.push({ filename: filenameCandidates[0] || attachment.filename || "", message: err?.message || String(err), traceId, phase });
             }
         }
 
-        const status = errors.length ? 207 : 200;
-        return res.status(status).json({ ok: errors.length === 0, processed: summary, errors });
+        return;
     } catch (err) {
         const msg = err?.message || String(err);
         // eslint-disable-next-line no-console
@@ -226,6 +219,9 @@ export default async function handler(req, res) {
             // eslint-disable-next-line no-console
             console.error(err.stack);
         }
-        return res.status(err?.status || 500).json({ ok: false, error: msg });
+        if (!responded) {
+            return res.status(err?.status || 500).json({ ok: false, error: msg });
+        }
+        return;
     }
 }
