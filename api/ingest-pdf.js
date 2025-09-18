@@ -29,7 +29,7 @@ const msalApp = new ConfidentialClientApplication({
     },
 });
 
-async function getAppToken() {
+export async function getAppToken() {
     const result = await msalApp.acquireTokenByClientCredential({ scopes: [MS_GRAPH_SCOPE] });
     return result.accessToken;
 }
@@ -62,6 +62,24 @@ function filenameFromUrl(url) {
     } catch {
         return "";
     }
+}
+
+function splitNameAndExt(name) {
+    const trimmed = String(name || "");
+    const dot = trimmed.lastIndexOf(".");
+    if (dot <= 0 || dot === trimmed.length - 1) return { base: trimmed, ext: "" };
+    return { base: trimmed.slice(0, dot), ext: trimmed.slice(dot) };
+}
+
+function generateUniqueFilename(existingNamesSet, desiredName) {
+    const lowerDesired = desiredName.toLowerCase();
+    if (!existingNamesSet.has(lowerDesired)) return desiredName;
+    const { base, ext } = splitNameAndExt(desiredName);
+    for (let i = 1; i <= 200; i += 1) {
+        const candidate = `${base} (${i})${ext}`;
+        if (!existingNamesSet.has(candidate.toLowerCase())) return candidate;
+    }
+    throw new Error("Unable to generate unique filename after 200 attempts");
 }
 
 async function downloadRemotePdf(sourceUrl, fallbackName, push) {
@@ -122,7 +140,7 @@ async function downloadRemotePdf(sourceUrl, fallbackName, push) {
     return { filename, mimeType: contentType || "application/pdf", size: total, tmpPath: tmpFilePath };
 }
 
-async function graphFetch(path, accessToken, options = {}) {
+export async function graphFetch(path, accessToken, options = {}) {
     const res = await fetch(`https://graph.microsoft.com/v1.0${path}`, {
         method: options.method || "GET",
         headers: { Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) },
@@ -165,7 +183,7 @@ function deriveFolderNameFromFilename(filename) {
     return sanitizeFolderName(firstPart);
 }
 
-async function resolveDrive(accessToken, siteUrl, libraryPath) {
+export async function resolveDrive(accessToken, siteUrl, libraryPath) {
     const url = new URL(siteUrl);
     const host = url.host;
     const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
@@ -179,7 +197,7 @@ async function resolveDrive(accessToken, siteUrl, libraryPath) {
     return { drive, subPathParts };
 }
 
-async function getParentItemId(accessToken, driveId, subPathParts) {
+export async function getParentItemId(accessToken, driveId, subPathParts) {
     if (!subPathParts || subPathParts.length === 0) return "root"; // special alias for root
     const subPath = encodeDrivePath(subPathParts.join("/"));
     const item = await graphFetch(`/drives/${driveId}/root:/${subPath}`, accessToken);
@@ -451,6 +469,29 @@ export async function moveFileFromStaging({
         setPhase,
     });
 
+    let existingNames = new Set();
+    try {
+        const existingChildren = await graphFetch(
+            `/drives/${destination.driveId}/items/${destination.folderId}/children`,
+            token
+        );
+        existingNames = new Set(
+            (existingChildren.value || [])
+                .map((child) => (child.name || "").toLowerCase())
+        );
+    } catch (childErr) {
+        push("destination:list-error", { message: childErr?.message || String(childErr) });
+    }
+
+    let finalName = desiredName;
+    try {
+        finalName = generateUniqueFilename(existingNames, desiredName);
+        if (finalName !== desiredName) push("copy:name-adjusted", { from: desiredName, to: finalName });
+    } catch (nameErr) {
+        push("copy:name-error", { message: nameErr?.message || String(nameErr) });
+        finalName = desiredName; // fallback to original; copy may still succeed with conflictBehavior rename
+    }
+
     if (stagingDrive.id === destination.driveId) {
         setPhase("move_file");
         push("move:start", {
@@ -461,7 +502,7 @@ export async function moveFileFromStaging({
 
         const moveBody = {
             parentReference: { id: destination.folderId },
-            name: desiredName,
+            name: finalName,
         };
 
         const moved = await graphFetch(
@@ -477,7 +518,7 @@ export async function moveFileFromStaging({
             folderId: destination.folderId,
             folderName: destination.folderName,
             created: destination.created,
-            filename: moved.name || desiredName,
+            filename: moved.name || finalName,
             itemId: moved.id,
             size: moved.size || stagingItem.size || null,
         };
@@ -492,26 +533,6 @@ export async function moveFileFromStaging({
         folderName: destination.folderName,
     });
 
-    try {
-        const existingChildren = await graphFetch(
-            `/drives/${destination.driveId}/items/${destination.folderId}/children`,
-            token
-        );
-        const existingMatch = (existingChildren.value || []).find(
-            (child) => (child.name || "").toLowerCase() === desiredName.toLowerCase()
-        );
-        if (existingMatch) {
-            push("copy:existing-found", { itemId: existingMatch.id, name: existingMatch.name });
-            await fetch(`https://graph.microsoft.com/v1.0/drives/${destination.driveId}/items/${existingMatch.id}`, {
-                method: "DELETE",
-                headers: { Authorization: `Bearer ${token}` },
-            });
-            push("copy:existing-deleted", { itemId: existingMatch.id });
-        }
-    } catch (existingErr) {
-        push("copy:existing-check-error", { message: existingErr?.message || String(existingErr) });
-    }
-
     const copyResponse = await fetch(
         `https://graph.microsoft.com/v1.0/drives/${stagingDrive.id}/items/${stagingItem.id}/copy`,
         {
@@ -522,8 +543,8 @@ export async function moveFileFromStaging({
             },
             body: JSON.stringify({
                 parentReference: { driveId: destination.driveId, id: destination.folderId },
-                name: desiredName,
-                "@microsoft.graph.conflictBehavior": "replace",
+                name: finalName,
+                "@microsoft.graph.conflictBehavior": "rename",
             }),
         }
     );
@@ -546,9 +567,9 @@ export async function moveFileFromStaging({
                 token
             );
             copiedItem = (children.value || []).find(
-                (item) => (item.name || "").toLowerCase() === desiredName.toLowerCase()
-            );
-            if (copiedItem) break;
+            (item) => (item.name || "").toLowerCase() === finalName.toLowerCase()
+        );
+        if (copiedItem) break;
         } catch (pollErr) {
             push("copy:poll-error", { attempt, message: pollErr?.message || String(pollErr) });
         }
@@ -578,7 +599,7 @@ export async function moveFileFromStaging({
         folderId: destination.folderId,
         folderName: destination.folderName,
         created: destination.created,
-        filename: copiedItem.name || desiredName,
+        filename: copiedItem.name || finalName,
         itemId: copiedItem.id,
         size: copiedItem.size || stagingItem.size || null,
     };
