@@ -300,22 +300,11 @@ async function uploadLargeFileFromStream(accessToken, driveId, parentItemId, fil
     }
 }
 
-export async function executeIngestWorkflow({
-    fileRec,
-    site,
-    library,
-    push,
-    setPhase = () => {},
-}) {
-    if (!fileRec || !fileRec.tmpPath) throw new Error("File record missing tmpPath");
+async function prepareDestination({ token, filename, site, library, push, setPhase }) {
     setPhase("derive_folder");
-    const folderNameRaw = deriveFolderNameFromFilename(fileRec.filename);
+    const folderNameRaw = deriveFolderNameFromFilename(filename);
     const folderName = sanitizeFolderName(folderNameRaw);
-    push("folder:derived", { from: fileRec.filename, folderName });
-
-    setPhase("get_token");
-    const token = await getAppToken();
-    push("auth:token-acquired");
+    push("folder:derived", { from: filename, folderName });
 
     setPhase("resolve_drive");
     const { drive, subPathParts } = await resolveDrive(token, site, library);
@@ -342,6 +331,35 @@ export async function executeIngestWorkflow({
     const { id: folderId, created } = await ensureChildFolder(token, drive.id, existing.id, jobWalksName);
     push("folder:job-walks", { folderId, created, name: jobWalksName });
 
+    return {
+        driveId: drive.id,
+        folderId,
+        folderName,
+        created,
+    };
+}
+
+export async function executeIngestWorkflow({
+    fileRec,
+    site,
+    library,
+    push,
+    setPhase = () => {},
+}) {
+    if (!fileRec || !fileRec.tmpPath) throw new Error("File record missing tmpPath");
+    setPhase("get_token");
+    const token = await getAppToken();
+    push("auth:token-acquired");
+
+    const destination = await prepareDestination({
+        token,
+        filename: fileRec.filename,
+        site,
+        library,
+        push,
+        setPhase,
+    });
+
     let fileSize = fileRec.size;
     if (!fileSize) {
         try {
@@ -356,21 +374,119 @@ export async function executeIngestWorkflow({
         setPhase("upload_simple");
         push("upload:start", { method: "simple", size: fileSize });
         const buffer = fileRec.buffer instanceof Buffer ? fileRec.buffer : await fs.promises.readFile(fileRec.tmpPath);
-        await uploadSmallFile(token, drive.id, folderId, fileRec.filename, buffer);
+        await uploadSmallFile(token, destination.driveId, destination.folderId, fileRec.filename, buffer);
     } else {
         setPhase("upload_chunked");
         push("upload:start", { method: "chunked", size: fileSize });
-        await uploadLargeFileFromStream(token, drive.id, folderId, fileRec.filename, fileRec.tmpPath, fileSize, push);
+        await uploadLargeFileFromStream(token, destination.driveId, destination.folderId, fileRec.filename, fileRec.tmpPath, fileSize, push);
     }
-    push("upload:done", { folderId, size: fileSize });
+    push("upload:done", { folderId: destination.folderId, size: fileSize });
 
     return {
-        driveId: drive.id,
-        folderId,
-        created,
-        folderName,
+        driveId: destination.driveId,
+        folderId: destination.folderId,
+        created: destination.created,
+        folderName: destination.folderName,
         fileSize,
         filename: fileRec.filename,
+    };
+}
+
+export async function moveFileFromStaging({
+    stagingSiteUrl,
+    stagingLibraryPath,
+    stagingFilename,
+    stagingFilenames,
+    destinationSiteUrl,
+    destinationLibraryPath,
+    push,
+    setPhase = () => {},
+    renameTo,
+}) {
+    const filenameCandidates = (Array.isArray(stagingFilenames) ? stagingFilenames : [stagingFilename])
+        .map((name) => String(name || "").trim())
+        .filter(Boolean);
+    if (!filenameCandidates.length) throw new Error("Staging filename is required");
+    setPhase("get_token");
+    const token = await getAppToken();
+    push("auth:token-acquired");
+
+    setPhase("resolve_staging_drive");
+    const { drive: stagingDrive, subPathParts: stagingSubPathParts } = await resolveDrive(token, stagingSiteUrl, stagingLibraryPath);
+    push("staging:drive", { driveId: stagingDrive.id, driveName: stagingDrive.name, path: stagingLibraryPath });
+
+    let stagingItem = null;
+    let usedFilename = "";
+    const lastErrors = [];
+    for (const candidate of filenameCandidates) {
+        const fullPathParts = stagingSubPathParts && stagingSubPathParts.length ? [...stagingSubPathParts, candidate] : [candidate];
+        const encodedPath = encodeDrivePath(fullPathParts.join("/"));
+        setPhase("staging_locate_file");
+        try {
+            stagingItem = await graphFetch(`/drives/${stagingDrive.id}/root:/${encodedPath}`, token);
+            usedFilename = candidate;
+            push("staging:file-found", { filename: stagingItem.name || candidate, itemId: stagingItem.id, size: stagingItem.size || null });
+            break;
+        } catch (err) {
+            lastErrors.push({ candidate, status: err?.status || 404, message: err?.message || String(err) });
+            push("staging:file-missing", { filename: candidate, status: err?.status || 404 });
+        }
+    }
+
+    if (!stagingItem) {
+        const notFound = new Error(`Staging file not found. Tried: ${filenameCandidates.join(", ")}`);
+        notFound.status = 404;
+        notFound.phase = "staging_locate_file";
+        notFound.details = lastErrors;
+        throw notFound;
+    }
+
+    const desiredName = renameTo || stagingFilename || usedFilename;
+    const destination = await prepareDestination({
+        token,
+        filename: desiredName,
+        site: destinationSiteUrl,
+        library: destinationLibraryPath,
+        push,
+        setPhase,
+    });
+
+    if (stagingDrive.id !== destination.driveId) {
+        const mismatch = new Error("Staging drive differs from destination drive; cross-drive move is not supported");
+        mismatch.status = 400;
+        mismatch.phase = "move_file";
+        push("move:error", { reason: "drive_mismatch", stagingDrive: stagingDrive.id, destinationDrive: destination.driveId });
+        throw mismatch;
+    }
+
+    setPhase("move_file");
+    push("move:start", {
+        filename: stagingItem.name || stagingFilename,
+        toFolderId: destination.folderId,
+        folderName: destination.folderName,
+    });
+
+    const moveBody = {
+        parentReference: { id: destination.folderId },
+        name: desiredName,
+    };
+
+    const moved = await graphFetch(
+        `/drives/${stagingDrive.id}/items/${stagingItem.id}?@microsoft.graph.conflictBehavior=replace`,
+        token,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody) }
+    );
+
+    push("move:done", { itemId: moved.id, name: moved.name, size: moved.size || null });
+
+    return {
+        driveId: destination.driveId,
+        folderId: destination.folderId,
+        folderName: destination.folderName,
+        created: destination.created,
+        filename: moved.name || desiredName,
+        itemId: moved.id,
+        size: moved.size || stagingItem.size || null,
     };
 }
 

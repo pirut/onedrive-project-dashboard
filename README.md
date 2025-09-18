@@ -90,16 +90,16 @@ Vercel’s serverless runtime rejects uploads bigger than ~4.5 MB. To ingest l
 
 The API downloads the remote PDF on-demand, streams it into OneDrive, and logs the extra steps (`remote:download:*`) so you can trace the hand-off in the admin dashboard.
 
-### FastField → UploadThing → OneDrive webhook
+### FastField staging webhook
 
-- Configure FastField to POST its submission payload to `/api/fastfield-webhook`.
+- Configure FastField to drop completed Job Walk PDFs into a staging folder (e.g. SharePoint `Cornerstone/JOB WALKS`).
+- Point the FastField webhook at `/api/fastfield-webhook`. The payload must include the filename (FastField’s default JSON format already does).
 - Set these environment variables:
-  - `UPLOADTHING_TOKEN` – UploadThing server token (required).
-  - `FASTFIELD_API_KEY` – if FastField downloads require the API key header (already used elsewhere).
+  - `FASTFIELD_STAGING_SITE_URL` – site URL containing the staging folder (defaults to `DEFAULT_SITE_URL`).
+  - `FASTFIELD_STAGING_LIBRARY_PATH` – drive/folder path for the staging drop (e.g. `Cornerstone/JOB WALKS`).
   - `FASTFIELD_WEBHOOK_SECRET` – optional shared secret validated against the `x-webhook-secret` header.
-  - `FASTFIELD_DOWNLOAD_AUTH_HEADER` – optional single header (`Header-Name: value`) sent when downloading attachments (useful for Basic/Bearer auth).
-- The webhook scans the payload for PDF attachments, downloads each file (preserving the original filename), uploads it to UploadThing, then calls the same ingestion pipeline to push the PDF into OneDrive.
-- Every run is logged to KV with type `pdf_ingest` and source `fastfield`; the admin dashboard will show `fastfield:*` and `uploadthing:*` steps for debugging.
+- When the webhook fires, the server locates the PDF in the staging folder and moves it into the proper job’s `Job Walks` subfolder, preserving the filename.
+- Every run is logged to KV with type `pdf_ingest` and source `fastfield_move`; you can inspect the step-by-step trace in the admin dashboard.
 
 Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**, enter a folder path (e.g. `/Projects/Active`), then **Load projects**. Click **Export CSV** to save the list.
 

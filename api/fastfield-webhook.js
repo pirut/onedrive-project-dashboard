@@ -1,28 +1,15 @@
 import "isomorphic-fetch";
 import crypto from "crypto";
-import fs from "fs";
-import os from "os";
-import path from "path";
-import { Readable } from "stream";
-import { File } from "undici";
-import { UTApi } from "uploadthing/server";
-import { executeIngestWorkflow, removeFileSafe } from "./ingest-pdf.js";
+import { moveFileFromStaging } from "./ingest-pdf.js";
 import { logSubmission } from "../lib/kv.js";
 
 export const config = { api: { bodyParser: false } };
 
-const FASTFIELD_API_KEY = process.env.FASTFIELD_API_KEY || "";
 const FASTFIELD_WEBHOOK_SECRET = process.env.FASTFIELD_WEBHOOK_SECRET || "";
 const DEFAULT_SITE_URL_ENV = process.env.DEFAULT_SITE_URL || "";
 const DEFAULT_LIBRARY_ENV = process.env.DEFAULT_LIBRARY || "";
-
-let utApi = null;
-function getUploadThingApi() {
-    const token = process.env.UPLOADTHING_TOKEN || "";
-    if (!token) throw new Error("UPLOADTHING_TOKEN is not configured");
-    if (!utApi) utApi = new UTApi({ apiKey: token });
-    return utApi;
-}
+const FASTFIELD_STAGING_SITE_URL = process.env.FASTFIELD_STAGING_SITE_URL || DEFAULT_SITE_URL_ENV;
+const FASTFIELD_STAGING_LIBRARY_PATH = process.env.FASTFIELD_STAGING_LIBRARY_PATH || process.env.FASTFIELD_STAGING_FOLDER_PATH || "";
 
 async function readJsonBody(req) {
     const chunks = [];
@@ -54,118 +41,31 @@ function extractAttachments(payload) {
         const lowerMap = new Map(entries.map(([k, v]) => [k.toLowerCase(), { key: k, value: v }]));
         const nameEntry = NAME_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
         const urlEntry = URL_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
-        if (nameEntry && urlEntry && typeof urlEntry.value === "string") {
-            const filename = String(nameEntry.value || "").trim();
-            const url = String(urlEntry.value || "").trim();
-            if (filename && url) {
-                const key = `${filename}::${url}`;
-                if (!seen.has(key)) {
-                    const sizeEntry = SIZE_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
-                    const mimeEntry = MIME_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
-                    results.push({
-                        filename,
-                        url,
-                        size: sizeEntry ? Number(sizeEntry.value) : undefined,
-                        mimeType: mimeEntry ? String(mimeEntry.value) : undefined,
-                    });
-                    seen.add(key);
-                }
+        if (nameEntry || urlEntry) {
+            const filename = String(nameEntry?.value || "").trim();
+            const url = String(urlEntry?.value || "").trim();
+            const key = `${filename}::${url}`;
+            if (!seen.has(key)) {
+                const sizeEntry = SIZE_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
+                const mimeEntry = MIME_KEYS.map((k) => lowerMap.get(k)).find(Boolean);
+                results.push({
+                    filename,
+                    url,
+                    size: sizeEntry ? Number(sizeEntry.value) : undefined,
+                    mimeType: mimeEntry ? String(mimeEntry.value) : undefined,
+                });
+                seen.add(key);
             }
         }
         entries.forEach(([, child]) => visit(child));
     }
     visit(payload);
-    return results.filter((att) => /\.pdf$/i.test(att.filename) || /pdf/i.test(att.mimeType || "") || /\.pdf(?:\?.*)?$/i.test(att.url));
-}
-
-function buildDownloadHeaders() {
-    const headers = { Accept: "application/pdf" };
-    if (FASTFIELD_API_KEY) headers["FastField-API-Key"] = FASTFIELD_API_KEY;
-    const custom = process.env.FASTFIELD_DOWNLOAD_AUTH_HEADER || "";
-    if (custom) {
-        const idx = custom.indexOf(":");
-        if (idx > 0) {
-            const headerName = custom.slice(0, idx).trim();
-            const headerValue = custom.slice(idx + 1).trim();
-            if (headerName && headerValue) headers[headerName] = headerValue;
-        }
-    }
-    return headers;
-}
-
-async function downloadAttachment({ url, filename, mimeType }, push) {
-    let parsedUrl;
-    try {
-        parsedUrl = new URL(url);
-    } catch (err) {
-        const e = new Error(`Invalid attachment URL: ${url}`);
-        e.cause = err;
-        throw e;
-    }
-    if (!(parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:")) {
-        throw new Error("Attachment URL must use http or https");
-    }
-    const safeName = filename || filenameFromUrl(url) || "fastfield.pdf";
-    const tmpFilePath = path.join(os.tmpdir(), `fastfield-${Date.now()}-${crypto.randomBytes(6).toString("hex")}`);
-    push("fastfield:download:start", { url, filename: safeName });
-    const headers = buildDownloadHeaders();
-    const res = await fetch(url, { headers });
-    if (!res.ok || !res.body) {
-        const bodyText = await res.text().catch(() => "");
-        const err = new Error(`FastField download failed: ${res.status} ${res.statusText}`);
-        err.status = res.status;
-        err.responseBody = bodyText;
-        throw err;
-    }
-    const stream = typeof res.body.getReader === "function" ? Readable.fromWeb(res.body) : res.body;
-    if (!stream || typeof stream.pipe !== "function") throw new Error("Attachment response stream is not readable");
-    let total = 0;
-    await new Promise((resolve, reject) => {
-        const writeStream = fs.createWriteStream(tmpFilePath);
-        stream.on("data", (chunk) => {
-            total += chunk.length;
-        });
-        stream.on("error", (err) => {
-            writeStream.destroy(err);
-            removeFileSafe(tmpFilePath).finally(() => reject(err));
-        });
-        writeStream.on("error", (err) => {
-            removeFileSafe(tmpFilePath).finally(() => reject(err));
-        });
-        writeStream.on("finish", resolve);
-        stream.pipe(writeStream);
+    return results.filter((att) => {
+        const name = att.filename || "";
+        const url = att.url || "";
+        const mime = att.mimeType || "";
+        return /\.pdf(?:\?.*)?$/i.test(name) || /\.pdf(?:\?.*)?$/i.test(url) || /pdf/i.test(mime);
     });
-    if (!total) {
-        try {
-            const stat = await fs.promises.stat(tmpFilePath);
-            total = stat.size;
-        } catch {}
-    }
-    push("fastfield:download:done", { url, filename: safeName, size: total });
-    return {
-        filename: safeName,
-        mimeType: mimeType || "application/pdf",
-        size: total,
-        tmpPath: tmpFilePath,
-    };
-}
-
-async function uploadToUploadThing(fileRec, push) {
-    const api = getUploadThingApi();
-    push("uploadthing:upload:start", { filename: fileRec.filename, size: fileRec.size });
-    const buffer = await fs.promises.readFile(fileRec.tmpPath);
-    const file = new File([buffer], fileRec.filename, { type: "application/pdf" });
-    const result = await api.uploadFiles(file, { metadata: { source: "fastfield" } });
-    const uploaded = Array.isArray(result) ? result[0] : result;
-    const url = uploaded?.ufsUrl || uploaded?.url || "";
-    const key = uploaded?.key || uploaded?.id || "";
-    if (!url) {
-        const err = new Error("UploadThing did not return a file URL");
-        err.responseBody = uploaded || null;
-        throw err;
-    }
-    push("uploadthing:upload:done", { filename: fileRec.filename, key, url });
-    return { url, key, raw: uploaded };
 }
 
 function filenameFromUrl(url) {
@@ -176,6 +76,27 @@ function filenameFromUrl(url) {
     } catch {
         return "";
     }
+}
+
+function buildFilenameCandidates(rawName, url) {
+    const candidates = [];
+    const add = (name) => {
+        const trimmed = String(name || "").trim();
+        if (trimmed && !candidates.includes(trimmed)) candidates.push(trimmed);
+    };
+    const base = rawName || filenameFromUrl(url || "");
+    if (base) add(base);
+    if (base && !/\.pdf$/i.test(base)) add(`${base}.pdf`);
+    if (base) {
+        const sanitized = base.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+        if (sanitized && sanitized !== base) {
+            add(sanitized);
+            if (!/\.pdf$/i.test(sanitized)) add(`${sanitized}.pdf`);
+        }
+    }
+    const lower = base ? base.toLowerCase() : "";
+    if (lower && !/\.pdf$/i.test(lower)) add(`${lower}.pdf`);
+    return candidates;
 }
 
 function resolveSiteAndLibrary(body = {}) {
@@ -189,12 +110,13 @@ export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Webhook-Secret");
     res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-    if (req.method === "OPTIONS") {
-        return res.status(204).end();
-    }
+    if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     try {
+        if (!FASTFIELD_STAGING_LIBRARY_PATH) {
+            throw new Error("FASTFIELD_STAGING_LIBRARY_PATH must be configured");
+        }
         if (FASTFIELD_WEBHOOK_SECRET) {
             const provided = String(req.headers["x-webhook-secret"] || req.headers["x-fastfield-secret"] || "");
             if (provided !== FASTFIELD_WEBHOOK_SECRET) {
@@ -203,8 +125,19 @@ export default async function handler(req, res) {
         }
 
         const body = await readJsonBody(req);
+        const payloadPreview = JSON.stringify(body).slice(0, 2000);
         const { site, library } = resolveSiteAndLibrary(body);
-        const attachments = extractAttachments(body);
+        let attachments = extractAttachments(body);
+        if (!attachments.length) {
+            const fallbackName =
+                body.displayReferenceValue ||
+                body.displayReference ||
+                body.displayName ||
+                body.formName ||
+                body.title ||
+                "";
+            if (fallbackName) attachments = [{ filename: String(fallbackName).trim(), url: "" }];
+        }
         if (!attachments.length) {
             return res.status(202).json({ ok: false, reason: "No PDF attachments found" });
         }
@@ -222,21 +155,22 @@ export default async function handler(req, res) {
                 console.log(`[fastfield-webhook:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
             };
             let phase = "start";
-            const tempFiles = [];
             try {
-                push("attachment:start", { filename: attachment.filename, url: attachment.url });
-                phase = "fastfield_download";
-                const fileRec = await downloadAttachment(attachment, push);
-                tempFiles.push(fileRec.tmpPath);
+                const filenameCandidates = buildFilenameCandidates(attachment.filename, attachment.url);
+                if (!filenameCandidates.length) {
+                    push("attachment:missing-filename", { url: attachment.url || "" });
+                    throw new Error("Attachment did not include a filename");
+                }
 
-                phase = "uploadthing_upload";
-                const uploadThingResult = await uploadToUploadThing(fileRec, push);
+                push("attachment:start", { filename: filenameCandidates[0], url: attachment.url || "" });
 
-                phase = "ingest_prepare";
-                const ingestResult = await executeIngestWorkflow({
-                    fileRec,
-                    site,
-                    library,
+                const moveResult = await moveFileFromStaging({
+                    stagingSiteUrl: FASTFIELD_STAGING_SITE_URL,
+                    stagingLibraryPath: FASTFIELD_STAGING_LIBRARY_PATH,
+                    stagingFilename: filenameCandidates[0],
+                    stagingFilenames: filenameCandidates,
+                    destinationSiteUrl: site,
+                    destinationLibraryPath: library,
                     push,
                     setPhase: (p) => {
                         phase = p;
@@ -247,24 +181,24 @@ export default async function handler(req, res) {
                     type: "pdf_ingest",
                     status: "ok",
                     traceId,
-                    folderName: ingestResult.folderName,
-                    created: ingestResult.created,
-                    filename: ingestResult.filename,
-                    size: ingestResult.fileSize,
-                    uploadthingUrl: uploadThingResult.url,
-                    uploadthingKey: uploadThingResult.key,
-                    source: "fastfield",
+                    folderName: moveResult.folderName,
+                    created: moveResult.created,
+                    filename: moveResult.filename,
+                    size: moveResult.size,
+                    source: "fastfield_move",
+                    stagingFilename: filenameCandidates[0],
+                    payloadPreview,
                     steps,
                 });
 
                 summary.push({
                     traceId,
-                    filename: ingestResult.filename,
-                    folderName: ingestResult.folderName,
-                    uploadthingUrl: uploadThingResult.url,
+                    filename: moveResult.filename,
+                    folderName: moveResult.folderName,
+                    method: "move",
                 });
             } catch (err) {
-                push("error", { filename: attachment.filename, message: err?.message || String(err) });
+                push("error", { message: err?.message || String(err), phase });
                 await logSubmission({
                     type: "pdf_ingest",
                     status: "error",
@@ -272,13 +206,12 @@ export default async function handler(req, res) {
                     phase,
                     error: err?.message || String(err),
                     errorStack: err?.stack || "",
-                    source: "fastfield",
-                    filename: attachment.filename,
+                    source: "fastfield_move",
+                    filename: filenameCandidates[0] || attachment.filename || filenameFromUrl(attachment.url || ""),
+                    payloadPreview,
                     steps,
                 });
-                errors.push({ filename: attachment.filename, message: err?.message || String(err), traceId, phase });
-            } finally {
-                await Promise.all(tempFiles.map((file) => removeFileSafe(file)));
+                errors.push({ filename: filenameCandidates[0] || attachment.filename || "", message: err?.message || String(err), traceId, phase });
             }
         }
 
