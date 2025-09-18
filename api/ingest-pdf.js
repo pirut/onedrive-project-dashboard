@@ -492,6 +492,26 @@ export async function moveFileFromStaging({
         folderName: destination.folderName,
     });
 
+    try {
+        const existingChildren = await graphFetch(
+            `/drives/${destination.driveId}/items/${destination.folderId}/children`,
+            token
+        );
+        const existingMatch = (existingChildren.value || []).find(
+            (child) => (child.name || "").toLowerCase() === desiredName.toLowerCase()
+        );
+        if (existingMatch) {
+            push("copy:existing-found", { itemId: existingMatch.id, name: existingMatch.name });
+            await fetch(`https://graph.microsoft.com/v1.0/drives/${destination.driveId}/items/${existingMatch.id}`, {
+                method: "DELETE",
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            push("copy:existing-deleted", { itemId: existingMatch.id });
+        }
+    } catch (existingErr) {
+        push("copy:existing-check-error", { message: existingErr?.message || String(existingErr) });
+    }
+
     const copyResponse = await fetch(
         `https://graph.microsoft.com/v1.0/drives/${stagingDrive.id}/items/${stagingItem.id}/copy`,
         {
@@ -503,6 +523,7 @@ export async function moveFileFromStaging({
             body: JSON.stringify({
                 parentReference: { driveId: destination.driveId, id: destination.folderId },
                 name: desiredName,
+                "@microsoft.graph.conflictBehavior": "replace",
             }),
         }
     );
