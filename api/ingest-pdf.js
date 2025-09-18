@@ -451,42 +451,132 @@ export async function moveFileFromStaging({
         setPhase,
     });
 
-    if (stagingDrive.id !== destination.driveId) {
-        const mismatch = new Error("Staging drive differs from destination drive; cross-drive move is not supported");
-        mismatch.status = 400;
-        mismatch.phase = "move_file";
-        push("move:error", { reason: "drive_mismatch", stagingDrive: stagingDrive.id, destinationDrive: destination.driveId });
-        throw mismatch;
+    if (stagingDrive.id === destination.driveId) {
+        setPhase("move_file");
+        push("move:start", {
+            filename: stagingItem.name || stagingFilename,
+            toFolderId: destination.folderId,
+            folderName: destination.folderName,
+        });
+
+        const moveBody = {
+            parentReference: { id: destination.folderId },
+            name: desiredName,
+        };
+
+        const moved = await graphFetch(
+            `/drives/${stagingDrive.id}/items/${stagingItem.id}?@microsoft.graph.conflictBehavior=replace`,
+            token,
+            { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody) }
+        );
+
+        push("move:done", { itemId: moved.id, name: moved.name, size: moved.size || null });
+
+        return {
+            driveId: destination.driveId,
+            folderId: destination.folderId,
+            folderName: destination.folderName,
+            created: destination.created,
+            filename: moved.name || desiredName,
+            itemId: moved.id,
+            size: moved.size || stagingItem.size || null,
+        };
     }
 
-    setPhase("move_file");
-    push("move:start", {
+    setPhase("copy_file");
+    push("copy:start", {
         filename: stagingItem.name || stagingFilename,
+        fromDrive: stagingDrive.id,
+        toDrive: destination.driveId,
         toFolderId: destination.folderId,
         folderName: destination.folderName,
     });
 
-    const moveBody = {
-        parentReference: { id: destination.folderId },
-        name: desiredName,
-    };
-
-    const moved = await graphFetch(
-        `/drives/${stagingDrive.id}/items/${stagingItem.id}?@microsoft.graph.conflictBehavior=replace`,
-        token,
-        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody) }
+    const copyResponse = await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${stagingDrive.id}/items/${stagingItem.id}/copy`,
+        {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                parentReference: { driveId: destination.driveId, id: destination.folderId },
+                name: desiredName,
+            }),
+        }
     );
 
-    push("move:done", { itemId: moved.id, name: moved.name, size: moved.size || null });
+    if (copyResponse.status !== 202 && copyResponse.status !== 200) {
+        const text = await copyResponse.text();
+        const err = new Error(`Copy failed: ${copyResponse.status} ${text}`);
+        err.status = copyResponse.status;
+        err.phase = "copy_file";
+        push("copy:error", { status: copyResponse.status, body: text.slice(0, 500) });
+        throw err;
+    }
+
+    let copiedItem = null;
+    const monitorUrl = copyResponse.headers.get("Location") || copyResponse.headers.get("location");
+    if (monitorUrl) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            const monitorRes = await fetch(monitorUrl, { headers: { Authorization: `Bearer ${token}` } });
+            if (monitorRes.status === 202) continue;
+            if (!monitorRes.ok) {
+                const text = await monitorRes.text();
+                push("copy:monitor-error", { status: monitorRes.status, body: text.slice(0, 500) });
+                throw new Error(`Copy monitor failed: ${monitorRes.status}`);
+            }
+            const data = await monitorRes.json();
+            if (data.status === "failed") {
+                push("copy:monitor-failed", { error: data.error || data });
+                throw new Error("Copy operation reported failure");
+            }
+            if (data.status === "completed" && data.resourceId) {
+                copiedItem = await graphFetch(`/drives/${destination.driveId}/items/${data.resourceId}`, token);
+                break;
+            }
+            if (data.id) {
+                copiedItem = await graphFetch(`/drives/${destination.driveId}/items/${data.id}`, token);
+                break;
+            }
+        }
+    } else {
+        // Some copy operations may complete immediately
+        copiedItem = await graphFetch(
+            `/drives/${destination.driveId}/root:/${encodeDrivePath(`${destination.folderName}/${desiredName}`)}`,
+            token
+        );
+    }
+
+    if (!copiedItem) {
+        const err = new Error("Copy operation did not return the new item");
+        err.phase = "copy_file";
+        push("copy:error", { reason: "no_item" });
+        throw err;
+    }
+
+    push("copy:done", { itemId: copiedItem.id, name: copiedItem.name, size: copiedItem.size || null });
+
+    try {
+        await fetch(`https://graph.microsoft.com/v1.0/drives/${stagingDrive.id}/items/${stagingItem.id}`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        push("staging:cleanup", { itemId: stagingItem.id });
+    } catch (cleanupErr) {
+        push("staging:cleanup-error", { message: cleanupErr?.message || String(cleanupErr) });
+    }
 
     return {
         driveId: destination.driveId,
         folderId: destination.folderId,
         folderName: destination.folderName,
         created: destination.created,
-        filename: moved.name || desiredName,
-        itemId: moved.id,
-        size: moved.size || stagingItem.size || null,
+        filename: copiedItem.name || desiredName,
+        itemId: copiedItem.id,
+        size: copiedItem.size || stagingItem.size || null,
     };
 }
 

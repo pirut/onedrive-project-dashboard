@@ -155,8 +155,9 @@ export default async function handler(req, res) {
                 console.log(`[fastfield-webhook:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
             };
             let phase = "start";
+            let filenameCandidates = [];
             try {
-                const filenameCandidates = buildFilenameCandidates(attachment.filename, attachment.url);
+                filenameCandidates = buildFilenameCandidates(attachment.filename, attachment.url);
                 if (!filenameCandidates.length) {
                     push("attachment:missing-filename", { url: attachment.url || "" });
                     throw new Error("Attachment did not include a filename");
