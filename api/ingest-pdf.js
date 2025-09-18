@@ -437,36 +437,43 @@ export async function moveFileFromStaging({
     let usedFilename = "";
     const waitTotalMs = Number(process.env.FASTFIELD_STAGING_WAIT_MS || 600000); // default 10 minutes
     const rawInitialDelayMs = Number(process.env.FASTFIELD_STAGING_INITIAL_DELAY_MS || 300000); // default 5 minutes
-    const rawWaitStepMs = Number(process.env.FASTFIELD_STAGING_WAIT_INTERVAL_MS || 2000); // default 2 seconds
+    const rawWaitStepMs = Number(process.env.FASTFIELD_STAGING_WAIT_INTERVAL_MS || 10000); // default 10 seconds
     const initialDelayMs = Math.max(0, rawInitialDelayMs || 0);
     const cleanWaitStepMs = Math.max(1000, rawWaitStepMs || 0);
     const maxAttempts = Math.max(1, Math.ceil(waitTotalMs / cleanWaitStepMs));
     const lastErrors = [];
 
-    if (initialDelayMs > 0) {
-        setPhase("staging_initial_wait");
-        push("staging:initial-wait", { milliseconds: initialDelayMs });
-        await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
-    }
-
-    for (let attempt = 0; attempt < maxAttempts && !stagingItem; attempt += 1) {
+    const attemptLocate = async (attemptIdx) => {
         for (const candidate of filenameCandidates) {
             const fullPathParts = stagingSubPathParts && stagingSubPathParts.length ? [...stagingSubPathParts, candidate] : [candidate];
             const encodedPath = encodeDrivePath(fullPathParts.join("/"));
             setPhase("staging_locate_file");
             try {
-                stagingItem = await graphFetch(`/drives/${stagingDrive.id}/root:/${encodedPath}`, token);
+                const item = await graphFetch(`/drives/${stagingDrive.id}/root:/${encodedPath}`, token);
                 usedFilename = candidate;
-                push("staging:file-found", { filename: stagingItem.name || candidate, itemId: stagingItem.id, size: stagingItem.size || null, attempt: attempt + 1 });
-                break;
+                push("staging:file-found", { filename: item.name || candidate, itemId: item.id, size: item.size || null, attempt: attemptIdx });
+                return item;
             } catch (err) {
                 lastErrors.push({ candidate, status: err?.status || 404, message: err?.message || String(err) });
-                push("staging:file-missing", { filename: candidate, status: err?.status || 404, attempt: attempt + 1 });
+                push("staging:file-missing", { filename: candidate, status: err?.status || 404, attempt: attemptIdx });
             }
         }
+        return null;
+    };
 
-        if (!stagingItem && attempt < maxAttempts - 1) {
-            const remaining = maxAttempts - attempt - 1;
+    stagingItem = await attemptLocate(0);
+
+    if (!stagingItem && initialDelayMs > 0) {
+        setPhase("staging_initial_wait");
+        push("staging:initial-wait", { milliseconds: initialDelayMs });
+        await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts && !stagingItem; attempt += 1) {
+        stagingItem = await attemptLocate(attempt);
+        if (stagingItem) break;
+        if (attempt < maxAttempts) {
+            const remaining = maxAttempts - attempt;
             push("staging:wait", { milliseconds: cleanWaitStepMs, remainingAttempts: remaining });
             await new Promise((resolve) => setTimeout(resolve, cleanWaitStepMs));
         }
