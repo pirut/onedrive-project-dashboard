@@ -15,7 +15,8 @@
         "test-sharepoint": "node scripts/test-sharepoint-rest.js",
         "discover-sites": "node scripts/test-site-discovery.js",
         "test-fastfield-auth-header": "node scripts/test-fastfield-with-auth.js",
-        "test-full-sync": "node scripts/test-full-sync.js"
+        "test-full-sync": "node scripts/test-full-sync.js",
+        "process-staging": "node scripts/process-staging-job-walks.js"
     },
     "dependencies": {
         "@azure/msal-node": "^2.6.7",
