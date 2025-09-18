@@ -1,6 +1,7 @@
 import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
+import { processStagingJobWalks } from "../lib/process-staging.js";
 
 // Force dynamic rendering to prevent caching issues with cron jobs
 export const dynamic = "force-dynamic";
@@ -507,6 +508,34 @@ export default async function handler(req, res) {
         console.log(`Found ${folders.length} folders, syncing to FastField...`);
         const fastFieldResult = await syncToFastField(folders);
 
+        console.log("Processing staging Job Walk PDFs...");
+        const stagingResult = await processStagingJobWalks({
+            onResult: async (entry) => {
+                const base = {
+                    type: "pdf_ingest",
+                    traceId: entry.traceId,
+                    steps: entry.steps || [],
+                    source: "fastfield_move_cron",
+                };
+                if (entry.status === "ok") {
+                    await logSubmission({
+                        ...base,
+                        status: "ok",
+                        filename: entry.filename,
+                        folderName: entry.folderName,
+                    });
+                } else {
+                    await logSubmission({
+                        ...base,
+                        status: "error",
+                        filename: entry.filename,
+                        error: entry.error || "",
+                        phase: entry.phase || "",
+                    });
+                }
+            },
+        });
+
         // Log detailed results
         console.log(`📊 Sync Results:`);
         console.log(`   ✅ Successfully synced: ${fastFieldResult.successCount} folders`);
@@ -515,6 +544,10 @@ export default async function handler(req, res) {
         console.log(`   🧹 Duplicates cleaned up: ${fastFieldResult.cleanupResult.deleted} items`);
         console.log(`   🗑️  Orphaned entries removed: ${fastFieldResult.orphanedRemovalResult.deleted} items`);
         console.log(`   📈 Total processed: ${fastFieldResult.totalProcessed} folders`);
+        console.log(`   📦 Staging PDFs processed: ${stagingResult.processed.length}`);
+        if (stagingResult.errors.length) {
+            console.log(`   ⚠️  Staging errors: ${stagingResult.errors.length}`);
+        }
 
         const result = {
             success: true,
@@ -523,6 +556,7 @@ export default async function handler(req, res) {
             siteUrl,
             libraryPath,
             fastFieldResult,
+            stagingResult,
         };
 
         // Log the successful sync
@@ -533,6 +567,7 @@ export default async function handler(req, res) {
             siteUrl,
             libraryPath,
             fastFieldResult,
+            stagingResult,
         });
 
         console.log(`[${new Date().toISOString()}] Folder sync completed successfully. Synced ${folders.length} folders.`);
@@ -540,7 +575,7 @@ export default async function handler(req, res) {
         // Return appropriate response based on how it was called
         if (isCronRequest) {
             // For cron jobs, return minimal response
-            return res.status(200).json({ ok: true, synced: folders.length });
+            return res.status(200).json({ ok: true, synced: folders.length, stagingProcessed: stagingResult.processed.length });
         } else {
             // For manual calls, return detailed response
             return res.status(200).json(result);
