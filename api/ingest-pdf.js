@@ -517,43 +517,26 @@ export async function moveFileFromStaging({
     }
 
     let copiedItem = null;
-    const monitorUrl = copyResponse.headers.get("Location") || copyResponse.headers.get("location");
-    if (monitorUrl) {
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            const monitorRes = await fetch(monitorUrl, { headers: { Authorization: `Bearer ${token}` } });
-            if (monitorRes.status === 202) continue;
-            if (!monitorRes.ok) {
-                const text = await monitorRes.text();
-                push("copy:monitor-error", { status: monitorRes.status, body: text.slice(0, 500) });
-                throw new Error(`Copy monitor failed: ${monitorRes.status}`);
-            }
-            const data = await monitorRes.json();
-            if (data.status === "failed") {
-                push("copy:monitor-failed", { error: data.error || data });
-                throw new Error("Copy operation reported failure");
-            }
-            if (data.status === "completed" && data.resourceId) {
-                copiedItem = await graphFetch(`/drives/${destination.driveId}/items/${data.resourceId}`, token);
-                break;
-            }
-            if (data.id) {
-                copiedItem = await graphFetch(`/drives/${destination.driveId}/items/${data.id}`, token);
-                break;
-            }
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        try {
+            const children = await graphFetch(
+                `/drives/${destination.driveId}/items/${destination.folderId}/children`,
+                token
+            );
+            copiedItem = (children.value || []).find(
+                (item) => (item.name || "").toLowerCase() === desiredName.toLowerCase()
+            );
+            if (copiedItem) break;
+        } catch (pollErr) {
+            push("copy:poll-error", { attempt, message: pollErr?.message || String(pollErr) });
         }
-    } else {
-        // Some copy operations may complete immediately
-        copiedItem = await graphFetch(
-            `/drives/${destination.driveId}/root:/${encodeDrivePath(`${destination.folderName}/${desiredName}`)}`,
-            token
-        );
     }
 
     if (!copiedItem) {
-        const err = new Error("Copy operation did not return the new item");
+        const err = new Error("Copy operation did not surface the new item");
         err.phase = "copy_file";
-        push("copy:error", { reason: "no_item" });
+        push("copy:error", { reason: "not_found_after_copy" });
         throw err;
     }
 
