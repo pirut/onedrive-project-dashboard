@@ -435,19 +435,32 @@ export async function moveFileFromStaging({
 
     let stagingItem = null;
     let usedFilename = "";
+    const waitTotalMs = Number(process.env.FASTFIELD_STAGING_WAIT_MS || 300000);
+    const rawWaitStepMs = Number(process.env.FASTFIELD_STAGING_WAIT_INTERVAL_MS || 10000);
+    const cleanWaitStepMs = Math.max(1000, rawWaitStepMs || 0);
+    const maxAttempts = Math.max(1, Math.ceil(waitTotalMs / cleanWaitStepMs));
     const lastErrors = [];
-    for (const candidate of filenameCandidates) {
-        const fullPathParts = stagingSubPathParts && stagingSubPathParts.length ? [...stagingSubPathParts, candidate] : [candidate];
-        const encodedPath = encodeDrivePath(fullPathParts.join("/"));
-        setPhase("staging_locate_file");
-        try {
-            stagingItem = await graphFetch(`/drives/${stagingDrive.id}/root:/${encodedPath}`, token);
-            usedFilename = candidate;
-            push("staging:file-found", { filename: stagingItem.name || candidate, itemId: stagingItem.id, size: stagingItem.size || null });
-            break;
-        } catch (err) {
-            lastErrors.push({ candidate, status: err?.status || 404, message: err?.message || String(err) });
-            push("staging:file-missing", { filename: candidate, status: err?.status || 404 });
+
+    for (let attempt = 0; attempt < maxAttempts && !stagingItem; attempt += 1) {
+        for (const candidate of filenameCandidates) {
+            const fullPathParts = stagingSubPathParts && stagingSubPathParts.length ? [...stagingSubPathParts, candidate] : [candidate];
+            const encodedPath = encodeDrivePath(fullPathParts.join("/"));
+            setPhase("staging_locate_file");
+            try {
+                stagingItem = await graphFetch(`/drives/${stagingDrive.id}/root:/${encodedPath}`, token);
+                usedFilename = candidate;
+                push("staging:file-found", { filename: stagingItem.name || candidate, itemId: stagingItem.id, size: stagingItem.size || null, attempt: attempt + 1 });
+                break;
+            } catch (err) {
+                lastErrors.push({ candidate, status: err?.status || 404, message: err?.message || String(err) });
+                push("staging:file-missing", { filename: candidate, status: err?.status || 404, attempt: attempt + 1 });
+            }
+        }
+
+        if (!stagingItem && attempt < maxAttempts - 1) {
+            const remaining = maxAttempts - attempt - 1;
+            push("staging:wait", { milliseconds: cleanWaitStepMs, remainingAttempts: remaining });
+            await new Promise((resolve) => setTimeout(resolve, cleanWaitStepMs));
         }
     }
 
