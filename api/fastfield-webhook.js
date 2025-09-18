@@ -113,7 +113,6 @@ export default async function handler(req, res) {
     if (req.method === "OPTIONS") return res.status(204).end();
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-    let responded = false;
     try {
         if (!FASTFIELD_STAGING_LIBRARY_PATH) {
             throw new Error("FASTFIELD_STAGING_LIBRARY_PATH must be configured");
@@ -140,75 +139,21 @@ export default async function handler(req, res) {
             if (fallbackName) attachments = [{ filename: String(fallbackName).trim(), url: "" }];
         }
         if (!attachments.length) {
-            responded = true;
             return res.status(202).json({ ok: false, reason: "No PDF attachments found" });
         }
 
         res.status(202).json({ ok: true, processing: attachments.length });
-        responded = true;
 
-        for (const attachment of attachments) {
-            const traceId = crypto.randomBytes(8).toString("hex");
-            const steps = [];
-            const push = (msg, meta = {}) => {
-                const entry = { ts: new Date().toISOString(), msg, ...meta };
-                steps.push(entry);
+        setImmediate(() => {
+            processAttachments({ attachments, site, library, payloadPreview }).catch((err) => {
                 // eslint-disable-next-line no-console
-                console.log(`[fastfield-webhook:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
-            };
-            let phase = "start";
-            let filenameCandidates = [];
-            try {
-                filenameCandidates = buildFilenameCandidates(attachment.filename, attachment.url);
-                if (!filenameCandidates.length) {
-                    push("attachment:missing-filename", { url: attachment.url || "" });
-                    throw new Error("Attachment did not include a filename");
+                console.error("[fastfield-webhook] background processing failed:", err?.message || err);
+                if (err?.stack) {
+                    // eslint-disable-next-line no-console
+                    console.error(err.stack);
                 }
-
-                push("attachment:start", { filename: filenameCandidates[0], url: attachment.url || "" });
-
-                const moveResult = await moveFileFromStaging({
-                    stagingSiteUrl: FASTFIELD_STAGING_SITE_URL,
-                    stagingLibraryPath: FASTFIELD_STAGING_LIBRARY_PATH,
-                    stagingFilename: filenameCandidates[0],
-                    stagingFilenames: filenameCandidates,
-                    destinationSiteUrl: site,
-                    destinationLibraryPath: library,
-                    push,
-                    setPhase: (p) => {
-                        phase = p;
-                    },
-                });
-
-                await logSubmission({
-                    type: "pdf_ingest",
-                    status: "ok",
-                    traceId,
-                    folderName: moveResult.folderName,
-                    created: moveResult.created,
-                    filename: moveResult.filename,
-                    size: moveResult.size,
-                    source: "fastfield_move",
-                    stagingFilename: filenameCandidates[0],
-                    payloadPreview,
-                    steps,
-                });
-            } catch (err) {
-                push("error", { message: err?.message || String(err), phase });
-                await logSubmission({
-                    type: "pdf_ingest",
-                    status: "error",
-                    traceId,
-                    phase,
-                    error: err?.message || String(err),
-                    errorStack: err?.stack || "",
-                    source: "fastfield_move",
-                    filename: filenameCandidates[0] || attachment.filename || filenameFromUrl(attachment.url || ""),
-                    payloadPreview,
-                    steps,
-                });
-            }
-        }
+            });
+        });
 
         return;
     } catch (err) {
@@ -219,9 +164,71 @@ export default async function handler(req, res) {
             // eslint-disable-next-line no-console
             console.error(err.stack);
         }
-        if (!responded) {
-            return res.status(err?.status || 500).json({ ok: false, error: msg });
+        return res.status(err?.status || 500).json({ ok: false, error: msg });
+    }
+}
+
+async function processAttachments({ attachments, site, library, payloadPreview }) {
+    for (const attachment of attachments) {
+        const traceId = crypto.randomBytes(8).toString("hex");
+        const steps = [];
+        const push = (msg, meta = {}) => {
+            const entry = { ts: new Date().toISOString(), msg, ...meta };
+            steps.push(entry);
+            // eslint-disable-next-line no-console
+            console.log(`[fastfield-webhook:${traceId}] ${msg}`, Object.keys(meta).length ? meta : "");
+        };
+        let phase = "start";
+        let filenameCandidates = [];
+        try {
+            filenameCandidates = buildFilenameCandidates(attachment.filename, attachment.url);
+            if (!filenameCandidates.length) {
+                push("attachment:missing-filename", { url: attachment.url || "" });
+                throw new Error("Attachment did not include a filename");
+            }
+
+            push("attachment:start", { filename: filenameCandidates[0], url: attachment.url || "" });
+
+            const moveResult = await moveFileFromStaging({
+                stagingSiteUrl: FASTFIELD_STAGING_SITE_URL,
+                stagingLibraryPath: FASTFIELD_STAGING_LIBRARY_PATH,
+                stagingFilename: filenameCandidates[0],
+                stagingFilenames: filenameCandidates,
+                destinationSiteUrl: site,
+                destinationLibraryPath: library,
+                push,
+                setPhase: (p) => {
+                    phase = p;
+                },
+            });
+
+            await logSubmission({
+                type: "pdf_ingest",
+                status: "ok",
+                traceId,
+                folderName: moveResult.folderName,
+                created: moveResult.created,
+                filename: moveResult.filename,
+                size: moveResult.size,
+                source: "fastfield_move",
+                stagingFilename: filenameCandidates[0],
+                payloadPreview,
+                steps,
+            });
+        } catch (err) {
+            push("error", { message: err?.message || String(err), phase });
+            await logSubmission({
+                type: "pdf_ingest",
+                status: "error",
+                traceId,
+                phase,
+                error: err?.message || String(err),
+                errorStack: err?.stack || "",
+                source: "fastfield_move",
+                filename: filenameCandidates[0] || attachment.filename || filenameFromUrl(attachment.url || ""),
+                payloadPreview,
+                steps,
+            });
         }
-        return;
     }
 }
