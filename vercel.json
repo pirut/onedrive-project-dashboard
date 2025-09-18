@@ -2,6 +2,9 @@
     "functions": {
         "api/sync-folders-cron.js": {
             "maxDuration": 60
+        },
+        "api/fastfield-webhook.js": {
+            "type": "background"
         }
     },
     "crons": [
