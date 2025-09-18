@@ -142,10 +142,8 @@ export default async function handler(req, res) {
             return res.status(202).json({ ok: false, reason: "No PDF attachments found" });
         }
 
-        res.status(202).json({ ok: true, processing: attachments.length });
-
-        await processAttachments({ attachments, site, library, payloadPreview });
-        return;
+        const result = await processAttachments({ attachments, site, library, payloadPreview });
+        return res.status(result.ok ? 202 : 207).json(result);
     } catch (err) {
         const msg = err?.message || String(err);
         // eslint-disable-next-line no-console
@@ -159,6 +157,8 @@ export default async function handler(req, res) {
 }
 
 async function processAttachments({ attachments, site, library, payloadPreview }) {
+    const summary = [];
+    const errors = [];
     for (const attachment of attachments) {
         const traceId = crypto.randomBytes(8).toString("hex");
         const steps = [];
@@ -205,6 +205,8 @@ async function processAttachments({ attachments, site, library, payloadPreview }
                 payloadPreview,
                 steps,
             });
+
+            summary.push({ traceId, filename: moveResult.filename, folderName: moveResult.folderName });
         } catch (err) {
             push("error", { message: err?.message || String(err), phase });
             await logSubmission({
@@ -219,6 +221,9 @@ async function processAttachments({ attachments, site, library, payloadPreview }
                 payloadPreview,
                 steps,
             });
+            errors.push({ traceId, filename: filenameCandidates[0] || attachment.filename || "", message: err?.message || String(err) });
         }
     }
+
+    return { ok: errors.length === 0, processed: summary, errors };
 }
