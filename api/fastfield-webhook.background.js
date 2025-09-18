@@ -144,17 +144,7 @@ export default async function handler(req, res) {
 
         res.status(202).json({ ok: true, processing: attachments.length });
 
-        setImmediate(() => {
-            processAttachments({ attachments, site, library, payloadPreview }).catch((err) => {
-                // eslint-disable-next-line no-console
-                console.error("[fastfield-webhook] background processing failed:", err?.message || err);
-                if (err?.stack) {
-                    // eslint-disable-next-line no-console
-                    console.error(err.stack);
-                }
-            });
-        });
-
+        await processAttachments({ attachments, site, library, payloadPreview });
         return;
     } catch (err) {
         const msg = err?.message || String(err);
