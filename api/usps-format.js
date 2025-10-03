@@ -13,7 +13,7 @@ const USPS_SCOPE = readEnv("USPS_SCOPE", false);
 const USPS_AUDIENCE = readEnv("USPS_AUDIENCE", false);
 const USPS_API_BASE = readEnv("USPS_API_BASE") || "https://api.usps.com";
 const USPS_TOKEN_URL = readEnv("USPS_TOKEN_URL") || `${USPS_API_BASE}/oauth2/v3/token`;
-const USPS_VALIDATE_URL = readEnv("USPS_VALIDATE_URL") || `${USPS_API_BASE}/addresses/v3/address/validate`;
+const USPS_VALIDATE_URL = readEnv("USPS_VALIDATE_URL") || `${USPS_API_BASE}/addresses/v3/address`;
 
 const STATE_ABBREVIATIONS = {
     AL: "ALABAMA",
@@ -373,30 +373,23 @@ async function getUspsToken(force = false) {
 
 async function validateSingleAddress(address, attempt = 0) {
     const token = await getUspsToken(attempt > 0);
-    const countryCode = normalizeCountry(address.country) || undefined;
-    const payloadAddress = {
-        id: `row-${address.row}`,
-        streetAddress: address.address1,
-        addressLine1: address.address1,
-        addressLine2: address.address2 || undefined,
-        secondaryAddress: address.address2 || undefined,
-        city: address.city || undefined,
-        state: address.state || undefined,
-        zipCode: address.zip5 || undefined,
-        zipPlus4: address.zip4 || undefined,
-        urbanization: address.urbanization || undefined,
-        country: countryCode,
-        countryCode,
-    };
 
-    const res = await fetch(USPS_VALIDATE_URL, {
-        method: "POST",
+    const params = new URLSearchParams();
+    if (address.address1) params.set("streetAddress", address.address1);
+    if (address.address2) params.set("secondaryAddress", address.address2);
+    if (address.city) params.set("city", address.city);
+    if (address.state) params.set("state", address.state);
+    if (address.zip5) params.set("ZIPCode", address.zip5);
+    if (address.zip4) params.set("ZIPPlus4", address.zip4);
+    if (address.urbanization) params.set("urbanization", address.urbanization);
+
+    const url = `${USPS_VALIDATE_URL}?${params.toString()}`;
+    const res = await fetch(url, {
+        method: "GET",
         headers: {
-            "Content-Type": "application/json",
             Accept: "application/json",
             Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ addresses: [payloadAddress] }),
     });
 
     if (res.status === 401 && attempt === 0) {
@@ -417,47 +410,43 @@ async function validateSingleAddress(address, attempt = 0) {
         throw new Error(msg);
     }
 
-    const entry = data?.addresses?.[0] || data?.address;
-    if (!entry) {
+    if (!data || !data.address) {
         throw new Error("No address data returned by USPS");
     }
 
-    const status = entry.result?.status || entry.status || entry.result || entry.addressStatus;
-    const normalized = entry.standardizedAddress || entry.address || entry.validatedAddress || entry.deliveryAddress || entry;
-    const dpv = entry.dpv || entry.dpvConfirmation || entry.dpvcodes || entry.dpvConfirm;
-    const footnotes = entry.footnotes || (entry.dpv && entry.dpv.footnotes) || entry.result?.footnotes;
+    const normalized = data.address || {};
+    const info = data.additionalInfo || {};
+    const corrections = Array.isArray(data.corrections) ? data.corrections : [];
+    const matches = Array.isArray(data.matches) ? data.matches : [];
 
-    const extract = (keys) => {
-        for (const key of keys) {
-            if (normalized && normalized[key]) return normalized[key];
-            if (entry && entry[key]) return entry[key];
-        }
-        return "";
-    };
-
-    const address1 = extract(["addressLine1", "streetAddress", "deliveryLine1", "address1"]);
-    const address2 = extract(["addressLine2", "deliveryLine2", "secondaryAddress", "address2"]);
-    const city = extract(["city", "cityName"]);
-    const state = extract(["state", "stateAbbreviation", "stateCode"]);
-    const zip5 = extract(["zipCode", "zip5", "zip", "postalCode"]);
-    const zip4 = extract(["zipPlus4", "zip4", "plus4"]);
-    const country = normalizeCountry(
-        extract(["countryCode", "country", "countryName", "originCountry", "destinationCountry"])
-    );
+    const dpv = info.DPVConfirmation || info.dpvConfirmation || null;
+    const status = dpv ? (dpv === "Y" ? "success" : dpv) : matches?.[0]?.text || "success";
+    const footnotesParts = [];
+    if (corrections.length) {
+        footnotesParts.push(
+            corrections
+                .filter((c) => c && (c.code || c.text))
+                .map((c) => [c.code, c.text].filter(Boolean).join(": "))
+                .join(" | ")
+        );
+    }
+    if (matches.length) {
+        footnotesParts.push(matches.map((m) => [m.code, m.text].filter(Boolean).join(": ")).join(" | "));
+    }
 
     return {
         row: address.row,
         input: address,
-        status: status || (entry.validated === true ? "validated" : ""),
-        dpvConfirmation: typeof dpv === "object" ? dpv.dpvConfirmation || dpv.confirmation : dpv || "",
-        footnotes: Array.isArray(footnotes) ? footnotes.join(" ") : footnotes || "",
-        address1,
-        address2,
-        city,
-        state,
-        zip5,
-        zip4,
-        country: country || (countryCode || "US"),
+        status,
+        dpvConfirmation: dpv || "",
+        footnotes: footnotesParts.filter(Boolean).join(" · "),
+        address1: normalized.streetAddress || normalized.streetAddressAbbreviation || "",
+        address2: normalized.secondaryAddress || "",
+        city: normalized.city || "",
+        state: normalized.state || "",
+        zip5: normalized.ZIPCode || normalized.zip5 || normalized.postalCode || "",
+        zip4: normalized.ZIPPlus4 || normalized.zip4 || "",
+        country: normalizeCountry(normalized.countryISOCode || normalized.country) || address.country || "US",
     };
 }
 
