@@ -340,6 +340,8 @@ async function getUspsToken(force = false) {
     }
 
     const params = new URLSearchParams({ grant_type: "client_credentials" });
+    params.set("client_id", USPS_CLIENT_ID);
+    params.set("client_secret", USPS_CLIENT_SECRET);
     if (USPS_SCOPE) params.set("scope", USPS_SCOPE);
     if (USPS_AUDIENCE) params.set("audience", USPS_AUDIENCE);
     const basic = Buffer.from(`${USPS_CLIENT_ID}:${USPS_CLIENT_SECRET}`).toString("base64");
