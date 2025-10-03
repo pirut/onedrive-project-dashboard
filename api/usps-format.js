@@ -15,6 +15,65 @@ const USPS_API_BASE = readEnv("USPS_API_BASE") || "https://api.usps.com";
 const USPS_TOKEN_URL = readEnv("USPS_TOKEN_URL") || `${USPS_API_BASE}/oauth2/v3/token`;
 const USPS_VALIDATE_URL = readEnv("USPS_VALIDATE_URL") || `${USPS_API_BASE}/addresses/v3/address/validate`;
 
+const STATE_ABBREVIATIONS = {
+    AL: "ALABAMA",
+    AK: "ALASKA",
+    AZ: "ARIZONA",
+    AR: "ARKANSAS",
+    CA: "CALIFORNIA",
+    CO: "COLORADO",
+    CT: "CONNECTICUT",
+    DE: "DELAWARE",
+    DC: "DISTRICT OF COLUMBIA",
+    FL: "FLORIDA",
+    GA: "GEORGIA",
+    HI: "HAWAII",
+    ID: "IDAHO",
+    IL: "ILLINOIS",
+    IN: "INDIANA",
+    IA: "IOWA",
+    KS: "KANSAS",
+    KY: "KENTUCKY",
+    LA: "LOUISIANA",
+    ME: "MAINE",
+    MD: "MARYLAND",
+    MA: "MASSACHUSETTS",
+    MI: "MICHIGAN",
+    MN: "MINNESOTA",
+    MS: "MISSISSIPPI",
+    MO: "MISSOURI",
+    MT: "MONTANA",
+    NE: "NEBRASKA",
+    NV: "NEVADA",
+    NH: "NEW HAMPSHIRE",
+    NJ: "NEW JERSEY",
+    NM: "NEW MEXICO",
+    NY: "NEW YORK",
+    NC: "NORTH CAROLINA",
+    ND: "NORTH DAKOTA",
+    OH: "OHIO",
+    OK: "OKLAHOMA",
+    OR: "OREGON",
+    PA: "PENNSYLVANIA",
+    RI: "RHODE ISLAND",
+    SC: "SOUTH CAROLINA",
+    SD: "SOUTH DAKOTA",
+    TN: "TENNESSEE",
+    TX: "TEXAS",
+    UT: "UTAH",
+    VT: "VERMONT",
+    VA: "VIRGINIA",
+    WA: "WASHINGTON",
+    WV: "WEST VIRGINIA",
+    WI: "WISCONSIN",
+    WY: "WYOMING",
+};
+
+const STATE_NAME_TO_CODE = Object.entries(STATE_ABBREVIATIONS).reduce((acc, [abbr, name]) => {
+    acc[name] = abbr;
+    return acc;
+}, {});
+
 let cachedToken = null; // { token: string, expiresAt: number }
 
 function decodeCsv(text) {
@@ -165,6 +224,35 @@ function normalizeCountry(countryRaw) {
     return val;
 }
 
+function normalizeState(value) {
+    if (!value) return "";
+    const raw = String(value).trim();
+    if (!raw) return "";
+    const upper = raw.toUpperCase();
+    if (STATE_ABBREVIATIONS[upper]) return upper;
+    const compact = upper.replace(/\./g, "");
+    if (STATE_ABBREVIATIONS[compact]) return compact;
+    const collapsed = upper.replace(/\s+/g, " ");
+    if (STATE_NAME_TO_CODE[collapsed]) return STATE_NAME_TO_CODE[collapsed];
+    if (STATE_NAME_TO_CODE[upper.replace(/\s+/g, "")]) return STATE_NAME_TO_CODE[upper.replace(/\s+/g, "")];
+    return "";
+}
+
+function consumeStateFromTokens(tokens) {
+    if (!Array.isArray(tokens) || !tokens.length) return null;
+    const maxLen = Math.min(3, tokens.length);
+    for (let len = maxLen; len >= 1; len -= 1) {
+        const candidateTokens = tokens.slice(-len);
+        const candidate = candidateTokens.join(" ");
+        const abbr = normalizeState(candidate);
+        if (abbr) {
+            tokens.splice(tokens.length - len, len);
+            return abbr;
+        }
+    }
+    return null;
+}
+
 function enrichFromSingleLine(raw, seed) {
     const result = { ...seed };
     const cleaned = String(raw || "").replace(/\s+/g, " ").trim();
@@ -195,16 +283,32 @@ function enrichFromSingleLine(raw, seed) {
             tokens.splice(i, 1);
             continue;
         }
-        if (!result.state && /^[A-Za-z]{2}$/.test(token)) {
-            result.state = token.toUpperCase();
-            tokens.splice(i, 1);
-            continue;
+        if (!result.state) {
+            if (/^[A-Za-z]{2}$/.test(token)) {
+                const normalizedState = normalizeState(token);
+                if (normalizedState) {
+                    result.state = normalizedState;
+                    tokens.splice(i, 1);
+                    continue;
+                }
+            }
+            const normalizedState = normalizeState(token);
+            if (normalizedState) {
+                result.state = normalizedState;
+                tokens.splice(i, 1);
+                continue;
+            }
         }
         if (!result.country && knownCountry.test(token)) {
             result.country = normalizeCountry(token);
             tokens.splice(i, 1);
             continue;
         }
+    }
+
+    if (!result.state) {
+        const consumedState = consumeStateFromTokens(tokens);
+        if (consumedState) result.state = consumedState;
     }
 
     const leftover = tokens.join(" ").trim();
@@ -413,6 +517,7 @@ export default async function handler(req, res) {
                 urbanization,
             };
 
+            if (data.state) data.state = normalizeState(data.state) || data.state;
             if (!data.address1 && fullRaw) {
                 data.address1 = fullRaw;
             }
