@@ -19,6 +19,7 @@ This repository contains two runtime surfaces:
      - `api/fastfield-webhook` — receives FastField submissions, pushes files to UploadThing, then into OneDrive
      - `api/admin` — Admin-only dashboard (HTML) with live submissions
      - `api/usps-format` — Validates and standardizes address CSVs via USPS Addresses 3.0
+     - `api/usps-verify` — Quick USPS credential check (OAuth token ping)
      - `api/submissions` — JSON list of recent submissions
      - `api/kv-diag` and `api/kv-write-test` — KV connectivity diagnostics
      - `api/sync-projects` — folder listing to JSON or forward to FastField

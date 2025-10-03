@@ -332,6 +332,7 @@ async function dashboardView(req) {
       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
         <button type="submit" id="usps-submit">Format addresses</button>
         <button type="button" id="usps-reset" style="background:#1f2a44;color:#e6ecff">Reset</button>
+        <button type="button" id="usps-verify-btn" style="background:#0f8b4c;color:#fff">Verify USPS connection</button>
       </div>
       <div class="small muted">Header row required. Include <span class="mono">Address1</span> and either <span class="mono">City + State</span> or <span class="mono">Zip</span>.</div>
     </form>
@@ -375,6 +376,7 @@ async function dashboardView(req) {
       var uspsDownloadEl = document.getElementById('usps-download');
       var uspsPreviewEl = document.getElementById('usps-preview');
       var uspsResetBtn = document.getElementById('usps-reset');
+      var uspsVerifyBtn = document.getElementById('usps-verify-btn');
       var uspsLoading = false;
       var uspsDownloadUrl = null;
       var cache = [];
@@ -582,6 +584,41 @@ async function dashboardView(req) {
       if(uspsResetBtn){
         uspsResetBtn.addEventListener('click', function(){
           resetUspsState({ clearFile: true });
+        });
+      }
+      if(uspsVerifyBtn){
+        uspsVerifyBtn.addEventListener('click', async function(){
+          if(uspsLoading) return;
+          uspsLoading = true;
+          var originalText = uspsVerifyBtn.textContent;
+          uspsVerifyBtn.disabled = true;
+          uspsVerifyBtn.textContent = 'Verifying…';
+          setUspsStatus('Verifying USPS credentials…', 'muted');
+          try{
+            var res = await fetch('/api/usps-verify');
+            var payload;
+            var ct = res.headers.get('content-type') || '';
+            if(ct.indexOf('application/json') !== -1){
+              payload = await res.json();
+            } else {
+              var raw = await res.text();
+              try{ payload = JSON.parse(raw); }
+              catch(e){ throw new Error(raw || ('HTTP ' + res.status)); }
+            }
+            if(!res.ok || (payload && payload.ok === false)){
+              var message = payload && payload.error ? payload.error : ('HTTP ' + res.status);
+              throw new Error(message);
+            }
+            var expires = payload && payload.expiresIn ? ('Token expires in ' + Math.round(payload.expiresIn) + 's.') : 'Token verified.';
+            var preview = payload && payload.tokenPreview ? ' Preview: ' + payload.tokenPreview : '';
+            setUspsStatus('USPS credentials verified. ' + expires + preview, 'ok');
+          }catch(err){
+            setUspsStatus('Verification failed: ' + (err && err.message ? err.message : 'error'), 'bad');
+          }finally{
+            uspsLoading = false;
+            uspsVerifyBtn.disabled = false;
+            uspsVerifyBtn.textContent = originalText;
+          }
         });
       }
       if(uspsFileInput){
