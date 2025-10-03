@@ -144,7 +144,7 @@ export default async function handler(req, res) {
         const files = [];
 
         await new Promise((resolve, reject) => {
-            const bb = new Busboy({ headers: req.headers });
+            const bb = Busboy({ headers: req.headers });
             bb.on("file", (_name, file, info) => {
                 const chunks = [];
                 file.on("data", (d) => chunks.push(d));

@@ -437,7 +437,7 @@ export default async function handler(req, res) {
 
 async function readMultipartFile(req) {
     return await new Promise((resolve, reject) => {
-        const bb = new Busboy({ headers: req.headers });
+        const bb = Busboy({ headers: req.headers });
         const chunks = [];
         let filename = null;
 
