@@ -334,6 +334,19 @@ function enrichFromSingleLine(raw, seed) {
     return result;
 }
 
+function addressKey(input) {
+    return JSON.stringify({
+        address1: String(input.address1 || "").trim().toUpperCase(),
+        address2: String(input.address2 || "").trim().toUpperCase(),
+        city: String(input.city || "").trim().toUpperCase(),
+        state: String(input.state || "").trim().toUpperCase(),
+        zip5: String(input.zip5 || "").trim(),
+        zip4: String(input.zip4 || "").trim(),
+        country: String(input.country || "").trim().toUpperCase(),
+        urbanization: String(input.urbanization || "").trim().toUpperCase(),
+    });
+}
+
 async function getUspsToken(force = false) {
     if (!force && cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
         return cachedToken.token;
@@ -484,7 +497,10 @@ export default async function handler(req, res) {
             return;
         }
 
-        const inputs = [];
+        const preparedRows = [];
+        const uniqueRequests = new Map();
+        const requestOrder = [];
+
         records.forEach((row, idx) => {
             const rowNumber = idx + 2; // include header offset
             const address1Raw = columnValue(row, headerMap.address1);
@@ -497,7 +513,7 @@ export default async function handler(req, res) {
             const countryRaw = columnValue(row, headerMap.country);
             const fullRaw = columnValue(row, headerMap.full);
 
-            let data = {
+            let normalized = {
                 address1: address1Raw || "",
                 address2: address2Raw || "",
                 city: cityRaw || "",
@@ -508,123 +524,99 @@ export default async function handler(req, res) {
                 urbanization,
             };
 
-            if (data.state) data.state = normalizeState(data.state) || data.state;
-            if (!data.address1 && fullRaw) {
-                data.address1 = fullRaw;
+            if (normalized.state) normalized.state = normalizeState(normalized.state) || normalized.state;
+            if (!normalized.address1 && fullRaw) {
+                normalized.address1 = fullRaw;
             }
 
-            const candidates = [data.address1, fullRaw, [address1Raw, address2Raw].filter(Boolean).join(" ")]
+            const candidates = [normalized.address1, fullRaw, [address1Raw, address2Raw].filter(Boolean).join(" ")]
                 .filter(Boolean)
                 .map((candidate) => candidate.trim())
                 .filter(Boolean);
             const seenCandidates = new Set();
             for (const candidate of candidates) {
-                const key = candidate.toLowerCase();
-                if (seenCandidates.has(key)) continue;
-                seenCandidates.add(key);
-                data = enrichFromSingleLine(candidate, data);
-                if (data.city && data.state && data.zip5) break;
+                const candidateKey = candidate.toLowerCase();
+                if (seenCandidates.has(candidateKey)) continue;
+                seenCandidates.add(candidateKey);
+                normalized = enrichFromSingleLine(candidate, normalized);
+                if (normalized.city && normalized.state && normalized.zip5) break;
             }
 
-            const zipNormalized = splitZip(data.zip5 || data.zip4);
-            data.zip5 = zipNormalized.zip5;
-            if (!data.zip4) data.zip4 = zipNormalized.zip4;
-            data.country = normalizeCountry(data.country) || "US";
+            const zipNormalized = splitZip(normalized.zip5 || normalized.zip4);
+            normalized.zip5 = zipNormalized.zip5;
+            if (!normalized.zip4) normalized.zip4 = zipNormalized.zip4;
+            normalized.country = normalizeCountry(normalized.country) || "US";
 
-            const hasLocation = (data.city && data.state) || data.zip5;
-            if (!data.address1 || !hasLocation) {
-                inputs.push({
+            const hasLocation = (normalized.city && normalized.state) || normalized.zip5;
+            if (!normalized.address1 || !hasLocation) {
+                preparedRows.push({
+                    type: "invalid",
                     row: rowNumber,
-                    address1: data.address1,
-                    address2: data.address2,
-                    city: data.city,
-                    state: data.state,
-                    zip5: data.zip5,
-                    zip4: data.zip4,
-                    country: data.country,
-                    urbanization,
+                    input: normalized,
                     error: "Missing required address / location fields",
                 });
                 return;
             }
 
-            inputs.push({
+            const entryIndex = preparedRows.length;
+            const key = addressKey(normalized);
+            const prepared = {
+                type: "valid",
                 row: rowNumber,
-                address1: data.address1,
-                address2: data.address2,
-                city: data.city,
-                state: data.state,
-                zip5: data.zip5,
-                zip4: data.zip4,
-                country: data.country,
-                urbanization,
-            });
+                input: normalized,
+                key,
+            };
+            preparedRows.push(prepared);
+
+            if (!uniqueRequests.has(key)) {
+                uniqueRequests.set(key, {
+                    request: { ...normalized, row: rowNumber },
+                    rows: [],
+                });
+                requestOrder.push(key);
+            }
+            uniqueRequests.get(key).rows.push(entryIndex);
         });
 
-        const outputs = [];
-        let successCount = 0;
-        let errorCount = 0;
+        const maxRequestsRaw = Number(process.env.USPS_REQUEST_LIMIT ?? process.env.USPS_BATCH_LIMIT ?? 60);
+        const maxRequestsPerRun = Number.isFinite(maxRequestsRaw) && maxRequestsRaw >= 0 ? Math.floor(maxRequestsRaw) : 60;
+        let requestsUsed = 0;
 
-        for (const input of inputs) {
-            if (input.error) {
-                outputs.push({
-                    row: input.row,
-                    input_address1: input.address1,
-                    input_address2: input.address2,
-                    input_city: input.city,
-                    input_state: input.state,
-                    input_zip5: input.zip5,
-                    input_zip4: input.zip4,
-                    input_country: input.country,
-                    address1: "",
-                    address2: "",
-                    city: "",
-                    state: "",
-                    zip5: "",
-                    zip4: "",
-                    country: "",
-                    dpvConfirmation: "",
-                    footnotes: "",
-                    status: "",
-                    error: input.error,
-                });
-                errorCount += 1;
+        for (const key of requestOrder) {
+            const entry = uniqueRequests.get(key);
+            if (!entry) continue;
+            if (requestsUsed >= maxRequestsPerRun) {
+                entry.outcome = { type: "pending" };
                 continue;
             }
             try {
-                const validated = await validateSingleAddress(input);
-                outputs.push({
-                    row: validated.row,
-                    input_address1: input.address1,
-                    input_address2: input.address2,
-                    input_city: input.city,
-                    input_state: input.state,
-                    input_zip5: input.zip5,
-                    input_zip4: input.zip4,
-                    input_country: input.country,
-                    address1: validated.address1,
-                    address2: validated.address2,
-                    city: validated.city,
-                    state: validated.state,
-                    zip5: validated.zip5,
-                    zip4: validated.zip4,
-                    country: validated.country || input.country || "US",
-                    dpvConfirmation: validated.dpvConfirmation,
-                    footnotes: validated.footnotes,
-                    status: validated.status || "success",
-                    error: "",
-                });
-                successCount += 1;
+                const validated = await validateSingleAddress(entry.request);
+                entry.outcome = { type: "success", data: validated };
+                requestsUsed += 1;
             } catch (err) {
-                outputs.push({
-                    row: input.row,
-                    input_address1: input.address1,
-                    input_address2: input.address2,
-                    input_city: input.city,
-                    input_state: input.state,
-                    input_zip5: input.zip5,
-                    input_zip4: input.zip4,
-                    input_country: input.country,
+                entry.outcome = { type: "error", message: err.message || String(err) };
+                requestsUsed += 1;
+            }
+        }
+
+        const outputs = [];
+        const processedRows = [];
+        const pendingRows = [];
+        let successCount = 0;
+        let errorCount = 0;
+        let pendingCount = 0;
+
+        for (const entry of preparedRows) {
+            if (entry.type === "invalid") {
+                const outRow = {
+                    row: entry.row,
+                    input_address1: entry.input.address1,
+                    input_address2: entry.input.address2,
+                    input_city: entry.input.city,
+                    input_state: entry.input.state,
+                    input_zip5: entry.input.zip5,
+                    input_zip4: entry.input.zip4,
+                    input_country: entry.input.country,
                     address1: "",
                     address2: "",
                     city: "",
@@ -635,10 +627,107 @@ export default async function handler(req, res) {
                     dpvConfirmation: "",
                     footnotes: "",
                     status: "error",
-                    error: err.message || String(err),
-                });
+                    error: entry.error,
+                };
+                outputs.push(outRow);
+                processedRows.push(outRow);
                 errorCount += 1;
+                continue;
             }
+
+            const uniqueEntry = uniqueRequests.get(entry.key);
+            const outcome = uniqueEntry?.outcome;
+            if (!outcome || outcome.type === "pending") {
+                const pendingRow = {
+                    row: entry.row,
+                    input_address1: entry.input.address1,
+                    input_address2: entry.input.address2,
+                    input_city: entry.input.city,
+                    input_state: entry.input.state,
+                    input_zip5: entry.input.zip5,
+                    input_zip4: entry.input.zip4,
+                    input_country: entry.input.country,
+                    address1: "",
+                    address2: "",
+                    city: "",
+                    state: "",
+                    zip5: "",
+                    zip4: "",
+                    country: "",
+                    dpvConfirmation: "",
+                    footnotes: "",
+                    status: "pending",
+                    error: "Pending: USPS quota limit reached. Re-run later.",
+                };
+                outputs.push(pendingRow);
+                pendingRows.push({
+                    row: entry.row,
+                    address1: entry.input.address1,
+                    address2: entry.input.address2,
+                    city: entry.input.city,
+                    state: entry.input.state,
+                    zip5: entry.input.zip5,
+                    zip4: entry.input.zip4,
+                    country: entry.input.country,
+                    note: "Quota limit reached",
+                });
+                pendingCount += 1;
+                continue;
+            }
+
+            if (outcome.type === "error") {
+                const errorRow = {
+                    row: entry.row,
+                    input_address1: entry.input.address1,
+                    input_address2: entry.input.address2,
+                    input_city: entry.input.city,
+                    input_state: entry.input.state,
+                    input_zip5: entry.input.zip5,
+                    input_zip4: entry.input.zip4,
+                    input_country: entry.input.country,
+                    address1: "",
+                    address2: "",
+                    city: "",
+                    state: "",
+                    zip5: "",
+                    zip4: "",
+                    country: "",
+                    dpvConfirmation: "",
+                    footnotes: "",
+                    status: "error",
+                    error: outcome.message,
+                };
+                outputs.push(errorRow);
+                processedRows.push(errorRow);
+                errorCount += 1;
+                continue;
+            }
+
+            const validated = outcome.data;
+            const successRow = {
+                row: entry.row,
+                input_address1: entry.input.address1,
+                input_address2: entry.input.address2,
+                input_city: entry.input.city,
+                input_state: entry.input.state,
+                input_zip5: entry.input.zip5,
+                input_zip4: entry.input.zip4,
+                input_country: entry.input.country,
+                address1: validated.address1,
+                address2: validated.address2,
+                city: validated.city,
+                state: validated.state,
+                zip5: validated.zip5,
+                zip4: validated.zip4,
+                country: validated.country || entry.input.country || "US",
+                dpvConfirmation: validated.dpvConfirmation,
+                footnotes: validated.footnotes,
+                status: validated.status || "success",
+                error: "",
+            };
+            outputs.push(successRow);
+            processedRows.push(successRow);
+            successCount += 1;
         }
 
         const columns = [
@@ -662,14 +751,38 @@ export default async function handler(req, res) {
             { key: "status", label: "status" },
             { key: "error", label: "error" },
         ];
-        const csv = toCsv(outputs, columns);
+        const processedCsv = processedRows.length ? toCsv(processedRows, columns) : null;
+        const pendingColumns = [
+            { key: "row", label: "row" },
+            { key: "address1", label: "address1" },
+            { key: "address2", label: "address2" },
+            { key: "city", label: "city" },
+            { key: "state", label: "state" },
+            { key: "zip5", label: "zip5" },
+            { key: "zip4", label: "zip4" },
+            { key: "country", label: "country" },
+            { key: "note", label: "note" },
+        ];
+        const pendingCsv = pendingRows.length ? toCsv(pendingRows, pendingColumns) : null;
 
         res.status(200).json({
             ok: true,
             filename: filename ? `${filename.replace(/\.[^.]+$/, "") || "addresses"}-standardized.csv` : "addresses-standardized.csv",
-            summary: { total: outputs.length, success: successCount, errors: errorCount },
-            csv,
+            pendingFilename: filename ? `${filename.replace(/\.[^.]+$/, "") || "addresses"}-pending.csv` : "addresses-pending.csv",
+            summary: {
+                total: preparedRows.length,
+                processed: processedRows.length,
+                success: successCount,
+                errors: errorCount,
+                pending: pendingCount,
+                uniqueRequests: requestOrder.length,
+                requestsUsed,
+                maxRequests: maxRequestsPerRun,
+            },
+            csv: processedCsv,
+            pendingCsv,
             rows: outputs,
+            pendingRows,
         });
     } catch (err) {
         res.status(500).json({ error: err.message || String(err) });

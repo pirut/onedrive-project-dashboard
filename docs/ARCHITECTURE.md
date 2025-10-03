@@ -18,7 +18,7 @@ This repository contains two runtime surfaces:
      - `api/ingest` — JSON ingest logging to KV
      - `api/fastfield-webhook` — receives FastField submissions, pushes files to UploadThing, then into OneDrive
      - `api/admin` — Admin-only dashboard (HTML) with live submissions
-     - `api/usps-format` — Validates and standardizes address CSVs via USPS Addresses 3.0
+     - `api/usps-format` — Validates and standardizes address CSVs via USPS Addresses 3.0 (dedupes per upload and stops after `USPS_REQUEST_LIMIT` USPS calls, returning a pending list)
      - `api/usps-verify` — Quick USPS credential check (OAuth token ping)
      - `api/submissions` — JSON list of recent submissions
      - `api/kv-diag` and `api/kv-write-test` — KV connectivity diagnostics

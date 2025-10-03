@@ -341,6 +341,9 @@ async function dashboardView(req) {
     <div id="usps-download-wrap" style="margin-top:8px;display:none">
       <a id="usps-download" class="badge" href="#" download="addresses-standardized.csv">Download standardized CSV</a>
     </div>
+    <div id="usps-pending-download-wrap" style="margin-top:8px;display:none">
+      <a id="usps-pending-download" class="badge" href="#" download="addresses-pending.csv">Download pending CSV</a>
+    </div>
     <div id="usps-preview" class="small muted" style="margin-top:12px">Preview will show first rows after processing.</div>
   </div>
 
@@ -374,11 +377,14 @@ async function dashboardView(req) {
       var uspsSummaryEl = document.getElementById('usps-summary');
       var uspsDownloadWrap = document.getElementById('usps-download-wrap');
       var uspsDownloadEl = document.getElementById('usps-download');
+      var uspsPendingDownloadWrap = document.getElementById('usps-pending-download-wrap');
+      var uspsPendingDownloadEl = document.getElementById('usps-pending-download');
       var uspsPreviewEl = document.getElementById('usps-preview');
       var uspsResetBtn = document.getElementById('usps-reset');
       var uspsVerifyBtn = document.getElementById('usps-verify-btn');
       var uspsLoading = false;
       var uspsDownloadUrl = null;
+      var uspsPendingDownloadUrl = null;
       var cache = [];
       var refreshing = false;
 
@@ -469,12 +475,19 @@ async function dashboardView(req) {
           URL.revokeObjectURL(uspsDownloadUrl);
           uspsDownloadUrl = null;
         }
+        if(uspsPendingDownloadUrl){
+          URL.revokeObjectURL(uspsPendingDownloadUrl);
+          uspsPendingDownloadUrl = null;
+        }
         if(uspsSummaryEl){
           uspsSummaryEl.style.display = 'none';
           uspsSummaryEl.textContent = '';
         }
         if(uspsDownloadWrap){
           uspsDownloadWrap.style.display = 'none';
+        }
+        if(uspsPendingDownloadWrap){
+          uspsPendingDownloadWrap.style.display = 'none';
         }
         renderUspsPreview([]);
         if(options && options.clearFile && uspsFileInput){
@@ -661,24 +674,70 @@ async function dashboardView(req) {
               throw new Error(errMessage);
             }
             if(uspsSummaryEl && payload && payload.summary){
+              var summary = payload.summary || {};
+              var processed = summary.processed != null ? summary.processed : (summary.success != null ? summary.success : 0);
+              var total = summary.total != null ? summary.total : 0;
+              var pendingCount = summary.pending != null ? summary.pending : 0;
+              var errorCount = summary.errors != null ? summary.errors : 0;
+              var requestsUsed = summary.requestsUsed;
+              var maxRequests = summary.maxRequests;
+              var uniqueRequests = summary.uniqueRequests;
+              var summaryParts = [];
+              summaryParts.push('Processed ' + processed + ' of ' + total + ' rows.');
+              if(pendingCount){ summaryParts.push(pendingCount + ' pending (quota limit).'); }
+              if(errorCount){ summaryParts.push(errorCount + ' errors.'); }
+              if(requestsUsed != null && maxRequests != null){ summaryParts.push('USPS requests used: ' + requestsUsed + '/' + maxRequests + '.'); }
+              if(uniqueRequests != null){ summaryParts.push('Unique addresses this run: ' + uniqueRequests + '.'); }
               uspsSummaryEl.style.display = 'block';
               uspsSummaryEl.className = 'small';
-              uspsSummaryEl.textContent = 'Processed ' + payload.summary.total + ' rows (' + payload.summary.success + ' ok, ' + payload.summary.errors + ' errors).';
+              uspsSummaryEl.textContent = summaryParts.join(' ');
             }
-            if(uspsDownloadWrap && uspsDownloadEl && payload && payload.csv){
-              if(uspsDownloadUrl){ URL.revokeObjectURL(uspsDownloadUrl); }
-              uspsDownloadUrl = URL.createObjectURL(new Blob([payload.csv], { type: 'text/csv;charset=utf-8;' }));
-              uspsDownloadEl.href = uspsDownloadUrl;
-              uspsDownloadEl.download = (payload && payload.filename) || 'addresses-standardized.csv';
-              uspsDownloadWrap.style.display = 'block';
+            if(uspsDownloadWrap && uspsDownloadEl){
+              if(payload && payload.csv){
+                if(uspsDownloadUrl){ URL.revokeObjectURL(uspsDownloadUrl); }
+                uspsDownloadUrl = URL.createObjectURL(new Blob([payload.csv], { type: 'text/csv;charset=utf-8;' }));
+                uspsDownloadEl.href = uspsDownloadUrl;
+                uspsDownloadEl.download = (payload && payload.filename) || 'addresses-standardized.csv';
+                uspsDownloadWrap.style.display = 'block';
+              } else {
+                if(uspsDownloadUrl){ URL.revokeObjectURL(uspsDownloadUrl); uspsDownloadUrl = null; }
+                uspsDownloadWrap.style.display = 'none';
+              }
+            }
+            if(uspsPendingDownloadWrap && uspsPendingDownloadEl){
+              if(payload && payload.pendingCsv){
+                if(uspsPendingDownloadUrl){ URL.revokeObjectURL(uspsPendingDownloadUrl); }
+                uspsPendingDownloadUrl = URL.createObjectURL(new Blob([payload.pendingCsv], { type: 'text/csv;charset=utf-8;' }));
+                uspsPendingDownloadEl.href = uspsPendingDownloadUrl;
+                uspsPendingDownloadEl.download = (payload && payload.pendingFilename) || 'addresses-pending.csv';
+                uspsPendingDownloadWrap.style.display = 'block';
+              } else {
+                if(uspsPendingDownloadUrl){ URL.revokeObjectURL(uspsPendingDownloadUrl); uspsPendingDownloadUrl = null; }
+                uspsPendingDownloadWrap.style.display = 'none';
+              }
             }
             if(payload && Array.isArray(payload.rows)){
               renderUspsPreview(payload.rows);
             } else {
               renderUspsPreview([]);
             }
-            var tone = payload && payload.summary && payload.summary.errors ? 'warn' : 'ok';
-            var statusMsg = tone === 'warn' ? 'Complete with some errors — review preview below.' : 'Formatting complete. Download is ready.';
+            var sum = payload && payload.summary ? payload.summary : {};
+            var sumProcessed = sum.processed != null ? sum.processed : (sum.success != null ? sum.success : 0);
+            var sumPending = sum.pending != null ? sum.pending : 0;
+            var sumErrors = sum.errors != null ? sum.errors : 0;
+            var tone = 'ok';
+            var statusMsg = 'Formatting complete.';
+            if(sumPending){
+              tone = 'warn';
+              statusMsg = 'Processed ' + sumProcessed + ' rows; ' + sumPending + ' pending due to quota. Download the pending list to resume later.';
+            } else if(sumErrors){
+              tone = 'warn';
+              statusMsg = 'Processed ' + sumProcessed + ' rows with ' + sumErrors + ' errors. Review the preview for details.';
+            } else if(payload && (!payload.csv || sumProcessed === 0)){
+              statusMsg = 'No rows processed.';
+            } else {
+              statusMsg += ' Download is ready.';
+            }
             setUspsStatus(statusMsg, tone);
           }catch(err){
             resetUspsState({ keepStatus: true });
