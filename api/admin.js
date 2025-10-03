@@ -321,6 +321,30 @@ async function dashboardView(req) {
 
   <div class="panel">
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+      <div style="font-weight:600">USPS Address Formatter</div>
+      <div class="small muted">Uploads → USPS Addresses 3.0</div>
+    </div>
+    <form id="usps-form">
+      <div class="row">
+        <label for="usps-file">CSV file</label>
+        <input id="usps-file" name="file" type="file" accept=".csv,text/csv" />
+      </div>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="submit" id="usps-submit">Format addresses</button>
+        <button type="button" id="usps-reset" style="background:#1f2a44;color:#e6ecff">Reset</button>
+      </div>
+      <div class="small muted">Header row required. Include <span class="mono">Address1</span> and either <span class="mono">City + State</span> or <span class="mono">Zip</span>.</div>
+    </form>
+    <div id="usps-status" class="small muted" style="margin-top:8px">Choose a CSV to start.</div>
+    <div id="usps-summary" class="small" style="display:none;margin-top:6px"></div>
+    <div id="usps-download-wrap" style="margin-top:8px;display:none">
+      <a id="usps-download" class="badge" href="#" download="addresses-standardized.csv">Download standardized CSV</a>
+    </div>
+    <div id="usps-preview" class="small muted" style="margin-top:12px">Preview will show first rows after processing.</div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">Submissions</div>
       <div style="display:flex;align-items:center;gap:8px">
         <button type="button" id="refresh-btn">Refresh</button>
@@ -343,6 +367,16 @@ async function dashboardView(req) {
       var input = document.getElementById('filter-input');
       var last = document.getElementById('last-updated');
       var refreshBtn = document.getElementById('refresh-btn');
+      var uspsForm = document.getElementById('usps-form');
+      var uspsFileInput = document.getElementById('usps-file');
+      var uspsStatusEl = document.getElementById('usps-status');
+      var uspsSummaryEl = document.getElementById('usps-summary');
+      var uspsDownloadWrap = document.getElementById('usps-download-wrap');
+      var uspsDownloadEl = document.getElementById('usps-download');
+      var uspsPreviewEl = document.getElementById('usps-preview');
+      var uspsResetBtn = document.getElementById('usps-reset');
+      var uspsLoading = false;
+      var uspsDownloadUrl = null;
       var cache = [];
       var refreshing = false;
 
@@ -356,10 +390,97 @@ async function dashboardView(req) {
       }
       function statusCls(s){
         s = String(s||'').toLowerCase();
-        if(s==='ok') return 'ok';
-        if(s==='error') return 'bad';
+        if(s==='ok' || s==='success' || s==='validated') return 'ok';
+        if(s==='error' || s==='failed' || s==='fail') return 'bad';
+        if(s==='warn' || s==='warning') return 'warn';
         return s ? 'warn' : 'muted';
       }
+      function setUspsStatus(text, tone){
+        if(!uspsStatusEl) return;
+        var toneClass = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'muted';
+        uspsStatusEl.textContent = text;
+        uspsStatusEl.className = 'small ' + toneClass;
+      }
+      function renderUspsPreview(rows){
+        if(!uspsPreviewEl) return;
+        if(!Array.isArray(rows) || !rows.length){
+          uspsPreviewEl.className = 'small muted';
+          uspsPreviewEl.textContent = 'Preview will show first rows after processing.';
+          return;
+        }
+        var total = rows.length;
+        var sample = rows.slice(0, Math.min(total, 5));
+        var items = sample.map(function(row){
+          var status = row && row.status ? String(row.status) : (row && row.error ? 'error' : (row && (row.address1 || row.zip5) ? 'success' : 'pending'));
+          var cls = statusCls(status);
+          var addressParts = [];
+          if(row && row.address1) addressParts.push(row.address1);
+          if(row && row.address2) addressParts.push(row.address2);
+          var cityState = [];
+          if(row && row.city) cityState.push(row.city);
+          if(row && row.state) cityState.push(row.state);
+          if(cityState.length) addressParts.push(cityState.join(', '));
+          var zip = '';
+          if(row){
+            var zip5 = (row.zip5 || '').toString().trim();
+            var zip4 = (row.zip4 || '').toString().trim();
+            if(zip5) zip = zip5 + (zip4 ? '-' + zip4 : '');
+          }
+          if(zip) addressParts.push(zip);
+          var displayAddress = addressParts.join(', ');
+          if(!displayAddress) displayAddress = '(no standardized match)';
+          var inputParts = [];
+          if(row && row.input_address1) inputParts.push(row.input_address1);
+          if(row && row.input_address2) inputParts.push(row.input_address2);
+          var inputCityState = [];
+          if(row && row.input_city) inputCityState.push(row.input_city);
+          if(row && row.input_state) inputCityState.push(row.input_state);
+          if(inputCityState.length) inputParts.push(inputCityState.join(', '));
+          if(row){
+            var inputZip = '';
+            if(row.input_zip5) inputZip = String(row.input_zip5);
+            if(row.input_zip4) inputZip = inputZip ? inputZip + '-' + row.input_zip4 : String(row.input_zip4);
+            if(inputZip) inputParts.push(inputZip);
+          }
+          var metaParts = [];
+          if(row && row.row != null) metaParts.push('row ' + row.row);
+          if(inputParts.length) metaParts.push('input: ' + inputParts.join(', '));
+          if(row && row.dpvConfirmation) metaParts.push('dpv: ' + row.dpvConfirmation);
+          var meta = metaParts.map(function(part){ return htmlEscape(String(part)); }).join(' · ');
+          var errorBlock = row && row.error ? '<div class="bad small">' + htmlEscape(String(row.error)) + '</div>' : '';
+          var notesBlock = row && row.footnotes ? '<div class="muted small">' + htmlEscape('Notes: ' + row.footnotes) + '</div>' : '';
+          return '<li>'
+            + '<span class="badge ' + cls + '">' + htmlEscape(String(status)) + '</span> '
+            + htmlEscape(displayAddress)
+            + (meta ? '<span class="meta">' + meta + '</span>' : '')
+            + errorBlock
+            + notesBlock
+            + '</li>';
+        }).join('');
+        uspsPreviewEl.className = 'small';
+        uspsPreviewEl.innerHTML = '<div class="muted small">Preview (' + sample.length + ' of ' + total + ')</div><ul class="step-list">' + items + '</ul>';
+      }
+      function resetUspsState(options){
+        if(uspsDownloadUrl){
+          URL.revokeObjectURL(uspsDownloadUrl);
+          uspsDownloadUrl = null;
+        }
+        if(uspsSummaryEl){
+          uspsSummaryEl.style.display = 'none';
+          uspsSummaryEl.textContent = '';
+        }
+        if(uspsDownloadWrap){
+          uspsDownloadWrap.style.display = 'none';
+        }
+        renderUspsPreview([]);
+        if(options && options.clearFile && uspsFileInput){
+          uspsFileInput.value = '';
+        }
+        if(!options || options.keepStatus !== true){
+          setUspsStatus('Choose a CSV to start.', 'muted');
+        }
+      }
+      resetUspsState();
       function formatStep(step){
         if(!step) return '';
         var clone = Object.assign({}, step);
@@ -455,6 +576,78 @@ async function dashboardView(req) {
         }catch(e){
           if(last) last.textContent = 'Last updated: failed (' + (e && e.message ? e.message : 'error') + ')';
         }
+      }
+      if(uspsResetBtn){
+        uspsResetBtn.addEventListener('click', function(){
+          resetUspsState({ clearFile: true });
+        });
+      }
+      if(uspsFileInput){
+        uspsFileInput.addEventListener('change', function(){
+          if(uspsFileInput.files && uspsFileInput.files.length){
+            resetUspsState({ keepStatus: true });
+            setUspsStatus('Ready to format ' + uspsFileInput.files[0].name + '.', 'muted');
+          } else {
+            resetUspsState();
+          }
+        });
+      }
+      if(uspsForm){
+        uspsForm.addEventListener('submit', async function(ev){
+          ev.preventDefault();
+          if(uspsLoading) return;
+          if(!uspsFileInput || !uspsFileInput.files || !uspsFileInput.files[0]){
+            setUspsStatus('Choose a CSV file first.', 'warn');
+            return;
+          }
+          uspsLoading = true;
+          resetUspsState({ keepStatus: true });
+          setUspsStatus('Formatting addresses…', 'muted');
+          try{
+            var fd = new FormData();
+            var file = uspsFileInput.files[0];
+            fd.append('file', file, file.name);
+            var res = await fetch('/api/usps-format', { method: 'POST', body: fd });
+            var payload;
+            var ct = res.headers.get('content-type') || '';
+            if(ct.indexOf('application/json') !== -1){
+              payload = await res.json();
+            } else {
+              var rawText = await res.text();
+              try { payload = JSON.parse(rawText); }
+              catch(parseErr){ throw new Error(rawText || ('HTTP ' + res.status)); }
+            }
+            if(!res.ok || (payload && payload.ok === false) || (payload && payload.error)){
+              var errMessage = payload && payload.error ? payload.error : ('HTTP ' + res.status);
+              throw new Error(errMessage);
+            }
+            if(uspsSummaryEl && payload && payload.summary){
+              uspsSummaryEl.style.display = 'block';
+              uspsSummaryEl.className = 'small';
+              uspsSummaryEl.textContent = 'Processed ' + payload.summary.total + ' rows (' + payload.summary.success + ' ok, ' + payload.summary.errors + ' errors).';
+            }
+            if(uspsDownloadWrap && uspsDownloadEl && payload && payload.csv){
+              if(uspsDownloadUrl){ URL.revokeObjectURL(uspsDownloadUrl); }
+              uspsDownloadUrl = URL.createObjectURL(new Blob([payload.csv], { type: 'text/csv;charset=utf-8;' }));
+              uspsDownloadEl.href = uspsDownloadUrl;
+              uspsDownloadEl.download = (payload && payload.filename) || 'addresses-standardized.csv';
+              uspsDownloadWrap.style.display = 'block';
+            }
+            if(payload && Array.isArray(payload.rows)){
+              renderUspsPreview(payload.rows);
+            } else {
+              renderUspsPreview([]);
+            }
+            var tone = payload && payload.summary && payload.summary.errors ? 'warn' : 'ok';
+            var statusMsg = tone === 'warn' ? 'Complete with some errors — review preview below.' : 'Formatting complete. Download is ready.';
+            setUspsStatus(statusMsg, tone);
+          }catch(err){
+            resetUspsState({ keepStatus: true });
+            setUspsStatus('Error: ' + (err && err.message ? err.message : 'Unable to format addresses.'), 'bad');
+          }finally{
+            uspsLoading = false;
+          }
+        });
       }
       input.addEventListener('input', function(){ render(cache); });
       async function handleRefresh(){
