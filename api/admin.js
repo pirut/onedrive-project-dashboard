@@ -427,6 +427,7 @@ async function dashboardView(req) {
             if(zip5) zip = zip5 + (zip4 ? '-' + zip4 : '');
           }
           if(zip) addressParts.push(zip);
+          if(row && row.country) addressParts.push(row.country);
           var displayAddress = addressParts.join(', ');
           if(!displayAddress) displayAddress = '(no standardized match)';
           var inputParts = [];
@@ -442,6 +443,7 @@ async function dashboardView(req) {
             if(row.input_zip4) inputZip = inputZip ? inputZip + '-' + row.input_zip4 : String(row.input_zip4);
             if(inputZip) inputParts.push(inputZip);
           }
+          if(row && row.input_country) inputParts.push(row.input_country);
           var metaParts = [];
           if(row && row.row != null) metaParts.push('row ' + row.row);
           if(inputParts.length) metaParts.push('input: ' + inputParts.join(', '));

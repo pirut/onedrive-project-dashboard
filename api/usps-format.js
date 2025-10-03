@@ -79,6 +79,8 @@ function mapHeaders(headerRow) {
         zip5: ["zip", "zipcode", "zip5", "postal", "postalcode", "postcode", "zip_code"],
         zip4: ["zip4", "plus4", "zipplus4", "zipcode4", "zip4code", "zip+4"],
         urbanization: ["urbanization", "urbanizacion"],
+        country: ["country", "countrycode", "nation", "nationcode"],
+        full: ["fulladdress", "addressfull", "formattedaddress", "addressstring", "address_text"],
     };
 
     const indices = {};
@@ -134,6 +136,100 @@ function splitZip(zipRaw) {
     return { zip5: clean, zip4: "" };
 }
 
+function splitStreetAndUnit(streetRaw = "") {
+    const street = String(streetRaw || "").trim();
+    if (!street) return { address1: "", address2: "" };
+    const unitMatch = street.match(/^(.*?)(?:\s+(Apt|Apartment|Unit|Suite|Ste|Floor|Fl|Bldg|Building|Room|Rm|#)\.?\s*(.+))$/i);
+    if (unitMatch) {
+        const base = unitMatch[1].trim();
+        const label = unitMatch[2] || "";
+        const rest = unitMatch[3] ? `${label} ${unitMatch[3]}` : label;
+        return { address1: base, address2: rest.trim() };
+    }
+    const hashIndex = street.lastIndexOf("#");
+    if (hashIndex > 0 && hashIndex >= street.length - 10) {
+        const base = street.slice(0, hashIndex).trim();
+        const rest = street.slice(hashIndex).trim();
+        if (base && rest) return { address1: base, address2: rest };
+    }
+    return { address1: street, address2: "" };
+}
+
+function normalizeCountry(countryRaw) {
+    const val = String(countryRaw || "").trim();
+    if (!val) return "";
+    const upper = val.toUpperCase();
+    if (["US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA", "UNITEDSTATES"].includes(upper)) return "US";
+    if (["CA", "CAN", "CANADA"].includes(upper)) return "CA";
+    if (/^[A-Z]{2}$/.test(upper)) return upper;
+    return val;
+}
+
+function enrichFromSingleLine(raw, seed) {
+    const result = { ...seed };
+    const cleaned = String(raw || "").replace(/\s+/g, " ").trim();
+    if (!cleaned) return result;
+
+    const segments = cleaned.split(",").map((segment) => segment.trim()).filter(Boolean);
+    let streetSegment = segments[0] || cleaned;
+    const remainderSegments = segments.length > 1 ? segments.slice(1) : [];
+
+    const { address1: baseAddress1, address2: baseAddress2 } = splitStreetAndUnit(streetSegment);
+    if (baseAddress1) result.address1 = baseAddress1;
+    if (!result.address2 && baseAddress2) result.address2 = baseAddress2;
+
+    let lastSegment = remainderSegments.length ? remainderSegments[remainderSegments.length - 1] : "";
+    let midSegments = remainderSegments.length > 1 ? remainderSegments.slice(0, -1) : [];
+
+    if (!lastSegment && segments.length === 1) lastSegment = segments[0];
+
+    let tokens = lastSegment ? lastSegment.split(/\s+/).filter(Boolean) : [];
+    const knownCountry = /^(?:US|USA|UNITED STATES|UNITED STATES OF AMERICA|CAN|CANADA)$/i;
+
+    for (let i = tokens.length - 1; i >= 0; i -= 1) {
+        const token = tokens[i];
+        if (!result.zip5 && /^\d{5}(?:-?\d{4})?$/.test(token)) {
+            const normalizedZip = splitZip(token);
+            result.zip5 = normalizedZip.zip5;
+            if (!result.zip4 && normalizedZip.zip4) result.zip4 = normalizedZip.zip4;
+            tokens.splice(i, 1);
+            continue;
+        }
+        if (!result.state && /^[A-Za-z]{2}$/.test(token)) {
+            result.state = token.toUpperCase();
+            tokens.splice(i, 1);
+            continue;
+        }
+        if (!result.country && knownCountry.test(token)) {
+            result.country = normalizeCountry(token);
+            tokens.splice(i, 1);
+            continue;
+        }
+    }
+
+    const leftover = tokens.join(" ").trim();
+    if (!result.city && leftover) {
+        result.city = leftover;
+    } else if (leftover && !result.country && /^[A-Za-z ]{3,}$/.test(leftover)) {
+        result.country = leftover;
+    }
+
+    if (!result.city && midSegments.length) {
+        result.city = midSegments.join(", ");
+    }
+
+    if (!result.country && remainderSegments.length >= 2) {
+        const maybeCountry = remainderSegments[remainderSegments.length - 1];
+        const normalizedCountry = normalizeCountry(maybeCountry);
+        if (normalizedCountry) result.country = normalizedCountry;
+    }
+
+    if (!result.country) result.country = normalizeCountry(result.country) || "US";
+    else result.country = normalizeCountry(result.country);
+
+    return result;
+}
+
 async function getUspsToken(force = false) {
     if (!force && cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
         return cachedToken.token;
@@ -171,6 +267,7 @@ async function getUspsToken(force = false) {
 
 async function validateSingleAddress(address, attempt = 0) {
     const token = await getUspsToken(attempt > 0);
+    const countryCode = normalizeCountry(address.country) || undefined;
     const payloadAddress = {
         id: `row-${address.row}`,
         streetAddress: address.address1,
@@ -182,6 +279,8 @@ async function validateSingleAddress(address, attempt = 0) {
         zipCode: address.zip5 || undefined,
         zipPlus4: address.zip4 || undefined,
         urbanization: address.urbanization || undefined,
+        country: countryCode,
+        countryCode,
     };
 
     const res = await fetch(USPS_VALIDATE_URL, {
@@ -236,6 +335,9 @@ async function validateSingleAddress(address, attempt = 0) {
     const state = extract(["state", "stateAbbreviation", "stateCode"]);
     const zip5 = extract(["zipCode", "zip5", "zip", "postalCode"]);
     const zip4 = extract(["zipPlus4", "zip4", "plus4"]);
+    const country = normalizeCountry(
+        extract(["countryCode", "country", "countryName", "originCountry", "destinationCountry"])
+    );
 
     return {
         row: address.row,
@@ -249,6 +351,7 @@ async function validateSingleAddress(address, attempt = 0) {
         state,
         zip5,
         zip4,
+        country: country || (countryCode || "US"),
     };
 }
 
@@ -281,35 +384,68 @@ export default async function handler(req, res) {
         }
 
         const headerMap = mapHeaders(header);
-        if (headerMap.address1 === undefined) {
-            res.status(400).json({ error: "CSV must include an address column (e.g. Address1, Street)" });
+        if (headerMap.address1 === undefined && headerMap.full === undefined) {
+            res.status(400).json({ error: "CSV must include an address column (e.g. Address1, Street, FullAddress)" });
             return;
         }
 
         const inputs = [];
         records.forEach((row, idx) => {
             const rowNumber = idx + 2; // include header offset
-            const address1 = columnValue(row, headerMap.address1);
-            const address2 = columnValue(row, headerMap.address2);
-            const city = columnValue(row, headerMap.city);
-            const state = columnValue(row, headerMap.state);
+            const address1Raw = columnValue(row, headerMap.address1);
+            const address2Raw = columnValue(row, headerMap.address2);
+            const cityRaw = columnValue(row, headerMap.city);
+            const stateRaw = columnValue(row, headerMap.state);
             const urbanization = columnValue(row, headerMap.urbanization);
             const zip5Raw = columnValue(row, headerMap.zip5);
             const zip4Raw = columnValue(row, headerMap.zip4);
-            const split = splitZip(zip5Raw);
-            const zip5 = split.zip5;
-            const zip4 = zip4Raw || split.zip4;
+            const countryRaw = columnValue(row, headerMap.country);
+            const fullRaw = columnValue(row, headerMap.full);
 
-            const hasLocation = (city && state) || zip5;
-            if (!address1 || !hasLocation) {
+            let data = {
+                address1: address1Raw || "",
+                address2: address2Raw || "",
+                city: cityRaw || "",
+                state: stateRaw || "",
+                zip5: zip5Raw || "",
+                zip4: zip4Raw || "",
+                country: countryRaw || "",
+                urbanization,
+            };
+
+            if (!data.address1 && fullRaw) {
+                data.address1 = fullRaw;
+            }
+
+            const candidates = [data.address1, fullRaw, [address1Raw, address2Raw].filter(Boolean).join(" ")]
+                .filter(Boolean)
+                .map((candidate) => candidate.trim())
+                .filter(Boolean);
+            const seenCandidates = new Set();
+            for (const candidate of candidates) {
+                const key = candidate.toLowerCase();
+                if (seenCandidates.has(key)) continue;
+                seenCandidates.add(key);
+                data = enrichFromSingleLine(candidate, data);
+                if (data.city && data.state && data.zip5) break;
+            }
+
+            const zipNormalized = splitZip(data.zip5 || data.zip4);
+            data.zip5 = zipNormalized.zip5;
+            if (!data.zip4) data.zip4 = zipNormalized.zip4;
+            data.country = normalizeCountry(data.country) || "US";
+
+            const hasLocation = (data.city && data.state) || data.zip5;
+            if (!data.address1 || !hasLocation) {
                 inputs.push({
                     row: rowNumber,
-                    address1,
-                    address2,
-                    city,
-                    state,
-                    zip5,
-                    zip4,
+                    address1: data.address1,
+                    address2: data.address2,
+                    city: data.city,
+                    state: data.state,
+                    zip5: data.zip5,
+                    zip4: data.zip4,
+                    country: data.country,
                     urbanization,
                     error: "Missing required address / location fields",
                 });
@@ -318,12 +454,13 @@ export default async function handler(req, res) {
 
             inputs.push({
                 row: rowNumber,
-                address1,
-                address2,
-                city,
-                state,
-                zip5,
-                zip4,
+                address1: data.address1,
+                address2: data.address2,
+                city: data.city,
+                state: data.state,
+                zip5: data.zip5,
+                zip4: data.zip4,
+                country: data.country,
                 urbanization,
             });
         });
@@ -342,12 +479,14 @@ export default async function handler(req, res) {
                     input_state: input.state,
                     input_zip5: input.zip5,
                     input_zip4: input.zip4,
+                    input_country: input.country,
                     address1: "",
                     address2: "",
                     city: "",
                     state: "",
                     zip5: "",
                     zip4: "",
+                    country: "",
                     dpvConfirmation: "",
                     footnotes: "",
                     status: "",
@@ -366,12 +505,14 @@ export default async function handler(req, res) {
                     input_state: input.state,
                     input_zip5: input.zip5,
                     input_zip4: input.zip4,
+                    input_country: input.country,
                     address1: validated.address1,
                     address2: validated.address2,
                     city: validated.city,
                     state: validated.state,
                     zip5: validated.zip5,
                     zip4: validated.zip4,
+                    country: validated.country || input.country || "US",
                     dpvConfirmation: validated.dpvConfirmation,
                     footnotes: validated.footnotes,
                     status: validated.status || "success",
@@ -387,12 +528,14 @@ export default async function handler(req, res) {
                     input_state: input.state,
                     input_zip5: input.zip5,
                     input_zip4: input.zip4,
+                    input_country: input.country,
                     address1: "",
                     address2: "",
                     city: "",
                     state: "",
                     zip5: "",
                     zip4: "",
+                    country: "",
                     dpvConfirmation: "",
                     footnotes: "",
                     status: "error",
@@ -410,12 +553,14 @@ export default async function handler(req, res) {
             { key: "input_state", label: "input_state" },
             { key: "input_zip5", label: "input_zip5" },
             { key: "input_zip4", label: "input_zip4" },
+            { key: "input_country", label: "input_country" },
             { key: "address1", label: "standard_address1" },
             { key: "address2", label: "standard_address2" },
             { key: "city", label: "standard_city" },
             { key: "state", label: "standard_state" },
             { key: "zip5", label: "standard_zip5" },
             { key: "zip4", label: "standard_zip4" },
+            { key: "country", label: "standard_country" },
             { key: "dpvConfirmation", label: "dpv_confirmation" },
             { key: "footnotes", label: "footnotes" },
             { key: "status", label: "status" },
