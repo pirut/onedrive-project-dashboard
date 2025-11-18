@@ -251,17 +251,25 @@ function kanbanDashboardHTML() {
     let pollInterval = null;
 
     async function loadData() {
+      const board = document.getElementById('kanban-board');
       try {
+        board.innerHTML = '<div class="loading">Loading projects...</div>';
         const res = await fetch('/api/projects-kanban/data');
-        if (!res.ok) throw new Error('Failed to load data');
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}: ${res.statusText}` }));
+          throw new Error(errorData.error || `HTTP ${res.status}: ${res.statusText}`);
+        }
         const data = await res.json();
         projects = data.projects || [];
         buckets = data.buckets || [];
         lastUpdateTimestamp = data.lastUpdate || null;
+        console.log(`Loaded ${projects.length} projects, ${buckets.length} buckets`);
         renderBoard();
       } catch (e) {
-        document.getElementById('kanban-board').innerHTML = 
-          '<div class="error">Error loading data: ' + escapeHtml(e.message) + '</div>';
+        console.error('Error loading data:', e);
+        board.innerHTML = 
+          '<div class="error">Error loading data: ' + escapeHtml(e.message) + 
+          '<br><button onclick="loadData()" style="margin-top: 8px">Retry</button></div>';
       }
     }
 
@@ -404,13 +412,22 @@ function kanbanDashboardHTML() {
     }
 
     async function syncProjects() {
+      const board = document.getElementById('kanban-board');
       try {
+        board.innerHTML = '<div class="loading">Syncing projects...</div>';
         const res = await fetch('/api/projects-kanban/sync', { method: 'POST' });
-        if (!res.ok) throw new Error('Sync failed');
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          throw new Error(errorData.error || 'Sync failed');
+        }
+        const data = await res.json();
+        console.log(`Sync complete: ${data.synced || 0} folders synced`);
         await loadData();
-        alert('Projects synced successfully');
+        alert(`Projects synced successfully: ${data.synced || 0} folders`);
       } catch (e) {
+        console.error('Sync error:', e);
         alert('Error syncing: ' + e.message);
+        await loadData(); // Try to load existing data
       }
     }
 
@@ -426,18 +443,33 @@ function kanbanDashboardHTML() {
 
     // Auto-sync on page load, then load data
     async function initDashboard() {
+      const board = document.getElementById('kanban-board');
       try {
-        // Trigger sync first
-        await fetch('/api/projects-kanban/sync', { method: 'POST' });
+        board.innerHTML = '<div class="loading">Syncing projects from SharePoint...</div>';
+        const syncRes = await fetch('/api/projects-kanban/sync', { method: 'POST' });
+        if (!syncRes.ok) {
+          const errorData = await syncRes.json().catch(() => ({ error: `HTTP ${syncRes.status}` }));
+          console.warn('Sync warning:', errorData.error);
+          // Continue anyway - might have existing data
+        } else {
+          const syncData = await syncRes.json();
+          console.log(`Sync complete: ${syncData.synced || 0} folders synced`);
+        }
         // Then load the data
         await loadData();
         // Start polling for real-time updates
         startPolling();
       } catch (e) {
         console.error('Init error:', e);
+        board.innerHTML = '<div class="error">Error initializing: ' + escapeHtml(e.message) + 
+          '<br><button onclick="initDashboard()" style="margin-top: 8px">Retry</button></div>';
         // Still try to load data even if sync fails
-        await loadData();
-        startPolling();
+        try {
+          await loadData();
+          startPolling();
+        } catch (loadError) {
+          console.error('Failed to load data:', loadError);
+        }
       }
     }
     
