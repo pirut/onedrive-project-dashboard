@@ -53,6 +53,51 @@ async function graphFetch(path, accessToken, options = {}) {
     return res.arrayBuffer();
 }
 
+async function graphFetchAllPages(path, accessToken, options = {}) {
+    const allItems = [];
+    let nextLink = null;
+    let pageCount = 0;
+
+    // Start with the initial path
+    let currentPath = path;
+
+    do {
+        pageCount++;
+        console.log(`Fetching page ${pageCount}${nextLink ? " (next page)" : ""}...`);
+        
+        const res = await fetch(`https://graph.microsoft.com/v1.0${currentPath}`, {
+            method: options.method || "GET",
+            headers: { Authorization: `Bearer ${accessToken}`, ...(options.headers || {}) },
+            body: options.body,
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(`Graph ${options.method || "GET"} ${currentPath} -> ${res.status}: ${text}`);
+        }
+
+        const data = await res.json();
+        
+        // Collect items from this page
+        if (data.value && Array.isArray(data.value)) {
+            allItems.push(...data.value);
+            console.log(`Page ${pageCount}: Found ${data.value.length} items (total so far: ${allItems.length})`);
+        }
+
+        // Check for next page link
+        nextLink = data["@odata.nextLink"];
+        if (nextLink) {
+            // Extract the path from the full URL (remove the base URL)
+            currentPath = nextLink.replace("https://graph.microsoft.com/v1.0", "");
+        }
+    } while (nextLink);
+
+    console.log(`Fetched all pages: ${pageCount} page(s), ${allItems.length} total items`);
+    
+    // Return in the same format as a single page response
+    return { value: allItems };
+}
+
 function encodeDrivePath(path) {
     const trimmed = String(path || "").replace(/^\/+|\/+$/g, "");
     if (!trimmed) return "";
@@ -95,15 +140,15 @@ async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
     }
     console.log(`Found drive: ${drive.name} (ID: ${drive.id})`);
 
-    // List children (subPath or root)
+    // List children (subPath or root) - fetch all pages to handle pagination
     let resItems;
     if (subPathParts.length === 0) {
-        console.log(`Fetching root children from drive ${drive.id}`);
-        resItems = await graphFetch(`/drives/${drive.id}/root/children`, accessToken);
+        console.log(`Fetching root children from drive ${drive.id} (all pages)...`);
+        resItems = await graphFetchAllPages(`/drives/${drive.id}/root/children`, accessToken);
     } else {
         const subPath = encodeDrivePath(subPathParts.join("/"));
-        console.log(`Fetching children from path: ${subPath}`);
-        resItems = await graphFetch(`/drives/${drive.id}/root:/${subPath}:/children`, accessToken);
+        console.log(`Fetching children from path: ${subPath} (all pages)...`);
+        resItems = await graphFetchAllPages(`/drives/${drive.id}/root:/${subPath}:/children`, accessToken);
     }
 
     // Keep only folders, exclude archive folders
