@@ -256,14 +256,14 @@ function kanbanDashboardHTML() {
         board.innerHTML = '<div class="loading">Loading projects...</div>';
         const res = await fetch('/api/projects-kanban/data');
         if (!res.ok) {
-          const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}: ${res.statusText}` }));
-          throw new Error(errorData.error || `HTTP ${res.status}: ${res.statusText}`);
+          const errorData = await res.json().catch(() => ({ error: 'HTTP ' + res.status + ': ' + res.statusText }));
+          throw new Error(errorData.error || 'HTTP ' + res.status + ': ' + res.statusText);
         }
         const data = await res.json();
         projects = data.projects || [];
         buckets = data.buckets || [];
         lastUpdateTimestamp = data.lastUpdate || null;
-        console.log(`Loaded ${projects.length} projects, ${buckets.length} buckets`);
+        console.log('Loaded ' + projects.length + ' projects, ' + buckets.length + ' buckets');
         renderBoard();
       } catch (e) {
         console.error('Error loading data:', e);
@@ -311,36 +311,34 @@ function kanbanDashboardHTML() {
       const sortedBuckets = [...buckets].sort((a, b) => a.order - b.order);
       board.innerHTML = sortedBuckets.map(bucket => {
         const bucketProjects = projects.filter(p => p.bucketId === bucket.id);
-        return \`
-          <div class="bucket" data-bucket-id="\${bucket.id}" 
-               ondragover="handleDragOver(event)" 
-               ondrop="handleDrop(event)" 
-               ondragleave="handleDragLeave(event)">
-            <div class="bucket-header" style="border-left: 3px solid \${bucket.color}">
-              <span>\${escapeHtml(bucket.name)}</span>
-              <span class="bucket-count">\${bucketProjects.length}</span>
-            </div>
-            <div class="bucket-items">
-              \${bucketProjects.map(p => renderProjectCard(p)).join('')}
-            </div>
-          </div>
-        \`;
+        return '<div class="bucket" data-bucket-id="' + bucket.id + '" ' +
+               'ondragover="handleDragOver(event)" ' +
+               'ondrop="handleDrop(event)" ' +
+               'ondragleave="handleDragLeave(event)">' +
+            '<div class="bucket-header" style="border-left: 3px solid ' + bucket.color + '">' +
+              '<span>' + escapeHtml(bucket.name) + '</span>' +
+              '<span class="bucket-count">' + bucketProjects.length + '</span>' +
+            '</div>' +
+            '<div class="bucket-items">' +
+              bucketProjects.map(p => renderProjectCard(p)).join('') +
+            '</div>' +
+          '</div>';
       }).join('');
     }
 
     function renderProjectCard(project) {
       const archivedClass = project.isArchived ? 'archived' : '';
-      return \`
-        <div class="project-card \${archivedClass}" 
-             draggable="true"
-             data-project-id="\${project.id}"
-             ondragstart="handleDragStart(event, '\${project.id}')"
-             ondragend="handleDragEnd(event)">
-          <div class="project-name">\${escapeHtml(project.name)}</div>
-          \${project.webUrl ? '<a href="' + escapeHtml(project.webUrl) + '" target="_blank" class="project-link">Open in SharePoint</a>' : ''}
-          \${project.isArchived ? '<div class="project-meta">Archived</div>' : ''}
-        </div>
-      \`;
+      const webUrlLink = project.webUrl ? '<a href="' + escapeHtml(project.webUrl) + '" target="_blank" class="project-link">Open in SharePoint</a>' : '';
+      const archivedMeta = project.isArchived ? '<div class="project-meta">Archived</div>' : '';
+      return '<div class="project-card ' + archivedClass + '" ' +
+             'draggable="true" ' +
+             'data-project-id="' + project.id + '" ' +
+             'ondragstart="handleDragStart(event, \'' + project.id + '\')" ' +
+             'ondragend="handleDragEnd(event)">' +
+          '<div class="project-name">' + escapeHtml(project.name) + '</div>' +
+          webUrlLink +
+          archivedMeta +
+        '</div>';
     }
 
     function handleDragStart(e, projectId) {
@@ -417,13 +415,13 @@ function kanbanDashboardHTML() {
         board.innerHTML = '<div class="loading">Syncing projects...</div>';
         const res = await fetch('/api/projects-kanban/sync', { method: 'POST' });
         if (!res.ok) {
-          const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          const errorData = await res.json().catch(() => ({ error: 'HTTP ' + res.status }));
           throw new Error(errorData.error || 'Sync failed');
         }
         const data = await res.json();
-        console.log(`Sync complete: ${data.synced || 0} folders synced`);
+        console.log('Sync complete: ' + (data.synced || 0) + ' folders synced');
         await loadData();
-        alert(`Projects synced successfully: ${data.synced || 0} folders`);
+        alert('Projects synced successfully: ' + (data.synced || 0) + ' folders');
       } catch (e) {
         console.error('Sync error:', e);
         alert('Error syncing: ' + e.message);
@@ -448,12 +446,12 @@ function kanbanDashboardHTML() {
         board.innerHTML = '<div class="loading">Syncing projects from SharePoint...</div>';
         const syncRes = await fetch('/api/projects-kanban/sync', { method: 'POST' });
         if (!syncRes.ok) {
-          const errorData = await syncRes.json().catch(() => ({ error: `HTTP ${syncRes.status}` }));
+          const errorData = await syncRes.json().catch(() => ({ error: 'HTTP ' + syncRes.status }));
           console.warn('Sync warning:', errorData.error);
           // Continue anyway - might have existing data
         } else {
           const syncData = await syncRes.json();
-          console.log(`Sync complete: ${syncData.synced || 0} folders synced`);
+          console.log('Sync complete: ' + (syncData.synced || 0) + ' folders synced');
         }
         // Then load the data
         await loadData();
