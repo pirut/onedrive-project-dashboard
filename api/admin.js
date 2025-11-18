@@ -286,7 +286,10 @@ async function dashboardView(req) {
         .join("");
 
     const inner = `
-  <h1>Project Dashboard — Admin</h1>
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+    <h1 style="margin:0">Project Dashboard — Admin</h1>
+    <a href="/api/projects-kanban" style="background:#2b61d1;color:#fff;text-decoration:none;border-radius:8px;padding:8px 16px;font:inherit;display:inline-block">Kanban Board</a>
+  </div>
   <div class="grid">
     <div class="panel">
       <div class="muted small">Graph env</div>
