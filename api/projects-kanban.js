@@ -256,8 +256,10 @@ function kanbanDashboardHTML() {
         board.innerHTML = '<div class="loading">Loading projects...</div>';
         const res = await fetch('/api/projects-kanban/data');
         if (!res.ok) {
-          const errorData = await res.json().catch(() => ({ error: 'HTTP ' + res.status + ': ' + res.statusText }));
-          throw new Error(errorData.error || 'HTTP ' + res.status + ': ' + res.statusText);
+          const statusText = res.statusText || '';
+          const errorMsg = 'HTTP ' + res.status + (statusText ? ': ' + statusText : '');
+          const errorData = await res.json().catch(() => ({ error: errorMsg }));
+          throw new Error(errorData.error || errorMsg);
         }
         const data = await res.json();
         projects = data.projects || [];
@@ -332,8 +334,8 @@ function kanbanDashboardHTML() {
       const archivedMeta = project.isArchived ? '<div class="project-meta">Archived</div>' : '';
       return '<div class="project-card ' + archivedClass + '" ' +
              'draggable="true" ' +
-             'data-project-id="' + project.id + '" ' +
-             'ondragstart="handleDragStart(event, \'' + project.id + '\')" ' +
+             'data-project-id="' + escapeHtml(project.id) + '" ' +
+             'ondragstart="handleDragStart(event)" ' +
              'ondragend="handleDragEnd(event)">' +
           '<div class="project-name">' + escapeHtml(project.name) + '</div>' +
           webUrlLink +
@@ -341,9 +343,10 @@ function kanbanDashboardHTML() {
         '</div>';
     }
 
-    function handleDragStart(e, projectId) {
+    function handleDragStart(e) {
+      const projectId = e.target.getAttribute('data-project-id') || e.target.closest('[data-project-id]').getAttribute('data-project-id');
       draggedElement = e.target;
-      draggedData = { projectId };
+      draggedData = { projectId: projectId };
       e.target.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
     }
