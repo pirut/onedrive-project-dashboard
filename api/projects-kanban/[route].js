@@ -252,25 +252,31 @@ async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
     const drive = (drives.value || []).find((d) => d.name === driveName);
     if (!drive) throw new Error(`Library not found: ${driveName}`);
 
-    let resItems;
-    if (subPathParts.length === 0) {
-        resItems = await graphFetchAllPages(`/drives/${drive.id}/root/children`, accessToken);
-    } else {
+    // Find the parent folder (root or sub-path)
+    let parentId = "root";
+    if (subPathParts.length > 0) {
         const subPath = encodeDrivePath(subPathParts.join("/"));
-        resItems = await graphFetchAllPages(`/drives/${drive.id}/root:/${subPath}:/children`, accessToken);
+        const parentItem = await graphFetch(`/drives/${drive.id}/root:/${subPath}`, accessToken);
+        parentId = parentItem.id;
     }
 
-    const foldersOnly = (resItems.value || [])
-        .filter((it) => it.folder)
-        .map((it) => {
-            const name = (it.name || "").trim().toLowerCase();
-            const parentPath = it.parentReference?.path || "";
-            const isArchived =
-                name.includes("(archive)") ||
-                name.includes("archive") ||
-                parentPath.toLowerCase().includes("(archive)") ||
-                parentPath.toLowerCase().includes("/archive");
+    // Fetch folders from main location
+    const mainChildrenPath = parentId === "root" 
+        ? `/drives/${drive.id}/root/children`
+        : `/drives/${drive.id}/items/${parentId}/children`;
+    const resItems = await graphFetchAllPages(mainChildrenPath, accessToken);
 
+    const allFolders = [];
+
+    // Process main folders (exclude the (ARCHIVE) folder itself)
+    const mainFolders = (resItems.value || [])
+        .filter((it) => it.folder)
+        .filter((it) => {
+            const name = (it.name || "").trim().toLowerCase();
+            // Exclude the (ARCHIVE) folder itself - we'll fetch its children separately
+            return name !== "(archive)";
+        })
+        .map((it) => {
             return {
                 id: it.id,
                 name: it.name,
@@ -280,11 +286,38 @@ async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
                 size: it.size || 0,
                 driveId: it.parentReference?.driveId || null,
                 parentPath: it.parentReference?.path || null,
-                isArchived,
+                isArchived: false,
             };
         });
 
-    return foldersOnly;
+    allFolders.push(...mainFolders);
+
+    // Find and fetch folders inside (ARCHIVE) folder
+    const archiveFolder = await findFolderByName(accessToken, drive.id, parentId, "(ARCHIVE)");
+    if (archiveFolder) {
+        const archiveChildrenPath = `/drives/${drive.id}/items/${archiveFolder.id}/children`;
+        const archiveItems = await graphFetchAllPages(archiveChildrenPath, accessToken);
+        
+        const archivedFolders = (archiveItems.value || [])
+            .filter((it) => it.folder)
+            .map((it) => {
+                return {
+                    id: it.id,
+                    name: it.name,
+                    webUrl: it.webUrl || null,
+                    createdDateTime: it.createdDateTime || null,
+                    lastModifiedDateTime: it.lastModifiedDateTime || null,
+                    size: it.size || 0,
+                    driveId: it.parentReference?.driveId || null,
+                    parentPath: it.parentReference?.path || null,
+                    isArchived: true, // All folders inside (ARCHIVE) are archived
+                };
+            });
+
+        allFolders.push(...archivedFolders);
+    }
+
+    return allFolders;
 }
 
 export default async function handler(req, res) {
