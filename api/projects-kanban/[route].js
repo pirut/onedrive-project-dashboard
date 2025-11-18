@@ -7,9 +7,12 @@ import {
     getProjectKanbanState,
     setProjectKanbanState,
     getAllProjectKanbanStates,
+    getProjectMetadata,
     setProjectMetadata,
     setMultipleProjectMetadata,
     getAllProjectMetadata,
+    getLastUpdateTimestamp,
+    updateLastUpdateTimestamp,
 } from "../../lib/projects-kv.js";
 
 function readEnv(name, required = false) {
@@ -164,6 +167,79 @@ function encodeDrivePath(path) {
         .join("/");
 }
 
+async function findFolderByName(accessToken, driveId, parentItemId, folderName) {
+    const childrenPath = parentItemId === "root" 
+        ? `/drives/${driveId}/root/children`
+        : `/drives/${driveId}/items/${parentItemId}/children`;
+    const children = await graphFetchAllPages(childrenPath, accessToken);
+    const folder = (children.value || []).find(
+        (it) => it.folder && (it.name || "").trim().toLowerCase() === String(folderName).trim().toLowerCase()
+    );
+    return folder || null;
+}
+
+async function ensureArchiveFolder(accessToken, driveId, libraryPath) {
+    const libPathTrimmed = String(libraryPath || "").replace(/^\/+|\/+$/g, "");
+    const [driveName, ...subPathParts] = libPathTrimmed.split("/");
+    
+    // Find the root or sub-path parent (where projects are stored)
+    let parentId = "root";
+    if (subPathParts.length > 0) {
+        const subPath = encodeDrivePath(subPathParts.join("/"));
+        const parentItem = await graphFetch(`/drives/${driveId}/root:/${subPath}`, accessToken);
+        parentId = parentItem.id;
+    }
+    
+    // Check if (ARCHIVE) folder exists at this level
+    let archiveFolder = await findFolderByName(accessToken, driveId, parentId, "(ARCHIVE)");
+    
+    if (!archiveFolder) {
+        // Create (ARCHIVE) folder if it doesn't exist
+        const payload = {
+            name: "(ARCHIVE)",
+            folder: {},
+            "@microsoft.graph.conflictBehavior": "fail",
+        };
+        const createPath = parentId === "root" 
+            ? `/drives/${driveId}/root/children`
+            : `/drives/${driveId}/items/${parentId}/children`;
+        try {
+            archiveFolder = await graphFetch(createPath, accessToken, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+        } catch (createError) {
+            // If creation fails, try to find it again (might have been created concurrently)
+            archiveFolder = await findFolderByName(accessToken, driveId, parentId, "(ARCHIVE)");
+            if (!archiveFolder) {
+                throw createError;
+            }
+        }
+    }
+    
+    return archiveFolder.id;
+}
+
+async function moveFolderInSharePoint(accessToken, folderId, driveId, targetParentId, folderName) {
+    const moveBody = {
+        parentReference: { id: targetParentId },
+        name: folderName,
+    };
+    
+    const moved = await graphFetch(
+        `/drives/${driveId}/items/${folderId}`,
+        accessToken,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(moveBody),
+        }
+    );
+    
+    return moved;
+}
+
 async function fetchAllFolders(accessToken, siteUrl, libraryPath) {
     const url = new URL(siteUrl);
     const host = url.host;
@@ -236,10 +312,17 @@ export default async function handler(req, res) {
             const buckets = await getBuckets();
             const kanbanStates = await getAllProjectKanbanStates();
             const metadata = await getAllProjectMetadata();
+            const lastUpdate = await getLastUpdateTimestamp();
 
+            const archiveBucket = buckets.buckets.find((b) => b.id === "archive");
+            const defaultBucket = buckets.buckets.find((b) => b.id === "todo") || buckets.buckets[0];
+            
             const projects = Object.values(metadata).map((meta) => {
                 const state = kanbanStates[meta.id] || {};
-                const defaultBucket = buckets.buckets.find((b) => b.id === "todo") || buckets.buckets[0];
+                // If folder is archived, always use archive bucket
+                const bucketId = meta.isArchived 
+                    ? (archiveBucket?.id || "archive")
+                    : (state.bucketId || defaultBucket?.id);
                 return {
                     id: meta.id,
                     name: meta.name,
@@ -247,11 +330,21 @@ export default async function handler(req, res) {
                     createdDateTime: meta.createdDateTime,
                     lastModifiedDateTime: meta.lastModifiedDateTime,
                     isArchived: meta.isArchived || false,
-                    bucketId: state.bucketId || defaultBucket?.id,
+                    bucketId,
                 };
             });
 
-            return res.status(200).json({ projects, buckets: buckets.buckets });
+            return res.status(200).json({ projects, buckets: buckets.buckets, lastUpdate });
+        } catch (e) {
+            return res.status(500).json({ error: e.message || String(e) });
+        }
+    }
+
+    // GET /api/projects-kanban/timestamp - for real-time polling
+    if (req.method === "GET" && route === "timestamp") {
+        try {
+            const timestamp = await getLastUpdateTimestamp();
+            return res.status(200).json({ timestamp });
         } catch (e) {
             return res.status(500).json({ error: e.message || String(e) });
         }
@@ -266,19 +359,100 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "projectId and bucketId required" });
             }
 
+            const buckets = await getBuckets();
+            const archiveBucket = buckets.buckets.find((b) => b.id === "archive");
+            const metadata = await getProjectMetadata(projectId);
+            
+            if (!metadata) {
+                return res.status(404).json({ error: "Project not found" });
+            }
+
+            // Check if project is archived - archived folders must stay in archive bucket
+            if (metadata.isArchived) {
+                if (bucketId !== archiveBucket?.id && bucketId !== "archive") {
+                    return res.status(400).json({ error: "Archived folders must remain in the Archive bucket" });
+                }
+            }
+
+            // Move folder in SharePoint if moving to/from archive bucket
+            const isMovingToArchive = bucketId === archiveBucket?.id || bucketId === "archive";
+            const wasArchived = metadata.isArchived;
+
+            if (isMovingToArchive && !wasArchived) {
+                // Moving TO archive - move folder to (ARCHIVE) folder in SharePoint
+                try {
+                    const accessToken = await getAppToken();
+                    const siteUrl = req.query.siteUrl || DEFAULT_SITE_URL;
+                    const libraryPath = req.query.libraryPath || DEFAULT_LIBRARY;
+                    
+                    const url = new URL(siteUrl);
+                    const host = url.host;
+                    const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
+                    const sitePath = pathname.startsWith("sites/") ? pathname.slice("sites/".length) : pathname;
+                    const site = await graphFetch(`/sites/${host}:/sites/${encodeURIComponent(sitePath)}`, accessToken);
+                    const drives = await graphFetch(`/sites/${site.id}/drives`, accessToken);
+                    const libPathTrimmed = String(libraryPath || "").replace(/^\/+|\/+$/g, "");
+                    const [driveName] = libPathTrimmed.split("/");
+                    const drive = (drives.value || []).find((d) => d.name === driveName);
+                    if (!drive) throw new Error(`Library not found: ${driveName}`);
+
+                    // Ensure archive folder exists and get its ID
+                    const archiveFolderId = await ensureArchiveFolder(accessToken, drive.id, libraryPath);
+                    
+                    // Move the folder
+                    await moveFolderInSharePoint(accessToken, projectId, metadata.driveId || drive.id, archiveFolderId, metadata.name);
+                } catch (moveError) {
+                    console.error("Failed to move folder to archive:", moveError);
+                    return res.status(500).json({ error: `Failed to move folder to archive: ${moveError.message}` });
+                }
+            } else if (!isMovingToArchive && wasArchived) {
+                // Moving FROM archive - move folder back to main folder
+                try {
+                    const accessToken = await getAppToken();
+                    const siteUrl = req.query.siteUrl || DEFAULT_SITE_URL;
+                    const libraryPath = req.query.libraryPath || DEFAULT_LIBRARY;
+                    
+                    const url = new URL(siteUrl);
+                    const host = url.host;
+                    const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
+                    const sitePath = pathname.startsWith("sites/") ? pathname.slice("sites/".length) : pathname;
+                    const site = await graphFetch(`/sites/${host}:/sites/${encodeURIComponent(sitePath)}`, accessToken);
+                    const drives = await graphFetch(`/sites/${site.id}/drives`, accessToken);
+                    const libPathTrimmed = String(libraryPath || "").replace(/^\/+|\/+$/g, "");
+                    const [driveName, ...subPathParts] = libPathTrimmed.split("/");
+                    const drive = (drives.value || []).find((d) => d.name === driveName);
+                    if (!drive) throw new Error(`Library not found: ${driveName}`);
+
+                    // Find the main parent folder (root or sub-path)
+                    let mainParentId = "root";
+                    if (subPathParts.length > 0) {
+                        const subPath = encodeDrivePath(subPathParts.join("/"));
+                        const parentItem = await graphFetch(`/drives/${drive.id}/root:/${subPath}`, accessToken);
+                        mainParentId = parentItem.id;
+                    }
+                    
+                    // Move the folder back to main location
+                    await moveFolderInSharePoint(accessToken, projectId, metadata.driveId || drive.id, mainParentId, metadata.name);
+                } catch (moveError) {
+                    console.error("Failed to move folder from archive:", moveError);
+                    return res.status(500).json({ error: `Failed to move folder from archive: ${moveError.message}` });
+                }
+            }
+
+            // Update kanban state
             const success = await setProjectKanbanState(projectId, { bucketId });
             if (!success) {
                 return res.status(500).json({ error: "Failed to save state" });
             }
 
-            const buckets = await getBuckets();
-            const archiveBucket = buckets.buckets.find((b) => b.id === "archive");
-            if (archiveBucket && (bucketId === "archive" || bucketId === archiveBucket.id)) {
-                const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
-                fetch(`${origin}/api/projects-kanban/sync`, {
-                    method: "POST",
-                }).catch(() => {});
-            }
+            // Update timestamp for real-time updates
+            await updateLastUpdateTimestamp();
+
+            // Trigger sync to refresh metadata
+            const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
+            fetch(`${origin}/api/projects-kanban/sync`, {
+                method: "POST",
+            }).catch(() => {});
 
             return res.status(200).json({ ok: true });
         } catch (e) {
@@ -301,10 +475,41 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Archive bucket not found" });
             }
 
+            // Move folder to archive in SharePoint
+            try {
+                const accessToken = await getAppToken();
+                const siteUrl = req.query.siteUrl || DEFAULT_SITE_URL;
+                const libraryPath = req.query.libraryPath || DEFAULT_LIBRARY;
+                
+                const url = new URL(siteUrl);
+                const host = url.host;
+                const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
+                const sitePath = pathname.startsWith("sites/") ? pathname.slice("sites/".length) : pathname;
+                const site = await graphFetch(`/sites/${host}:/sites/${encodeURIComponent(sitePath)}`, accessToken);
+                const drives = await graphFetch(`/sites/${site.id}/drives`, accessToken);
+                const libPathTrimmed = String(libraryPath || "").replace(/^\/+|\/+$/g, "");
+                const [driveName] = libPathTrimmed.split("/");
+                const drive = (drives.value || []).find((d) => d.name === driveName);
+                if (!drive) throw new Error(`Library not found: ${driveName}`);
+
+                const metadata = await getProjectMetadata(projectId);
+                if (!metadata) {
+                    return res.status(404).json({ error: "Project not found" });
+                }
+
+                const archiveFolderId = await ensureArchiveFolder(accessToken, drive.id, libraryPath);
+                await moveFolderInSharePoint(accessToken, projectId, metadata.driveId || drive.id, archiveFolderId, metadata.name);
+            } catch (moveError) {
+                console.error("Failed to move folder to archive:", moveError);
+                return res.status(500).json({ error: `Failed to move folder to archive: ${moveError.message}` });
+            }
+
             const success = await setProjectKanbanState(projectId, { bucketId: archiveBucket.id });
             if (!success) {
                 return res.status(500).json({ error: "Failed to archive project" });
             }
+
+            await updateLastUpdateTimestamp();
 
             const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
             fetch(`${origin}/api/projects-kanban/sync`, {
@@ -332,10 +537,48 @@ export default async function handler(req, res) {
                 return res.status(400).json({ error: "Default bucket not found" });
             }
 
+            // Move folder from archive back to main folder in SharePoint
+            try {
+                const accessToken = await getAppToken();
+                const siteUrl = req.query.siteUrl || DEFAULT_SITE_URL;
+                const libraryPath = req.query.libraryPath || DEFAULT_LIBRARY;
+                
+                const url = new URL(siteUrl);
+                const host = url.host;
+                const pathname = url.pathname.replace(/^\/+|\/+$/g, "");
+                const sitePath = pathname.startsWith("sites/") ? pathname.slice("sites/".length) : pathname;
+                const site = await graphFetch(`/sites/${host}:/sites/${encodeURIComponent(sitePath)}`, accessToken);
+                const drives = await graphFetch(`/sites/${site.id}/drives`, accessToken);
+                const libPathTrimmed = String(libraryPath || "").replace(/^\/+|\/+$/g, "");
+                const [driveName, ...subPathParts] = libPathTrimmed.split("/");
+                const drive = (drives.value || []).find((d) => d.name === driveName);
+                if (!drive) throw new Error(`Library not found: ${driveName}`);
+
+                const metadata = await getProjectMetadata(projectId);
+                if (!metadata) {
+                    return res.status(404).json({ error: "Project not found" });
+                }
+
+                // Find the main parent folder (root or sub-path)
+                let mainParentId = "root";
+                if (subPathParts.length > 0) {
+                    const subPath = encodeDrivePath(subPathParts.join("/"));
+                    const parentItem = await graphFetch(`/drives/${drive.id}/root:/${subPath}`, accessToken);
+                    mainParentId = parentItem.id;
+                }
+                
+                await moveFolderInSharePoint(accessToken, projectId, metadata.driveId || drive.id, mainParentId, metadata.name);
+            } catch (moveError) {
+                console.error("Failed to move folder from archive:", moveError);
+                return res.status(500).json({ error: `Failed to move folder from archive: ${moveError.message}` });
+            }
+
             const success = await setProjectKanbanState(projectId, { bucketId: defaultBucket.id });
             if (!success) {
                 return res.status(500).json({ error: "Failed to unarchive project" });
             }
+
+            await updateLastUpdateTimestamp();
 
             const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
             fetch(`${origin}/api/projects-kanban/sync`, {
@@ -364,6 +607,7 @@ export default async function handler(req, res) {
                 if (!success) {
                     return res.status(500).json({ error: "Failed to save buckets" });
                 }
+                await updateLastUpdateTimestamp();
                 return res.status(200).json({ ok: true });
             } catch (e) {
                 return res.status(500).json({ error: e.message || String(e) });
@@ -398,14 +642,29 @@ export default async function handler(req, res) {
             await setMultipleProjectMetadata(metadataMap);
 
             const buckets = await getBuckets();
+            const archiveBucket = buckets.buckets.find((b) => b.id === "archive");
             const defaultBucket = buckets.buckets.find((b) => b.id === "todo") || buckets.buckets[0];
             const existingStates = await getAllProjectKanbanStates();
 
             for (const folderId of Object.keys(metadataMap)) {
-                if (!existingStates[folderId] && defaultBucket) {
-                    await setProjectKanbanState(folderId, { bucketId: defaultBucket.id });
+                const metadata = metadataMap[folderId];
+                // If folder is archived, assign to archive bucket
+                // Otherwise, use existing state or default to "todo"
+                if (!existingStates[folderId]) {
+                    const targetBucketId = metadata.isArchived 
+                        ? (archiveBucket?.id || "archive")
+                        : (defaultBucket?.id);
+                    if (targetBucketId) {
+                        await setProjectKanbanState(folderId, { bucketId: targetBucketId });
+                    }
+                } else if (metadata.isArchived && existingStates[folderId].bucketId !== archiveBucket?.id) {
+                    // Update existing archived folders to archive bucket
+                    await setProjectKanbanState(folderId, { bucketId: archiveBucket?.id || "archive" });
                 }
             }
+
+            // Update timestamp for real-time updates
+            await updateLastUpdateTimestamp();
 
             return res.status(200).json({ ok: true, synced: folders.length });
         } catch (e) {

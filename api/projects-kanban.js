@@ -247,6 +247,8 @@ function kanbanDashboardHTML() {
     let buckets = [];
     let draggedElement = null;
     let draggedData = null;
+    let lastUpdateTimestamp = null;
+    let pollInterval = null;
 
     async function loadData() {
       try {
@@ -255,10 +257,39 @@ function kanbanDashboardHTML() {
         const data = await res.json();
         projects = data.projects || [];
         buckets = data.buckets || [];
+        lastUpdateTimestamp = data.lastUpdate || null;
         renderBoard();
       } catch (e) {
         document.getElementById('kanban-board').innerHTML = 
           '<div class="error">Error loading data: ' + escapeHtml(e.message) + '</div>';
+      }
+    }
+
+    async function checkForUpdates() {
+      try {
+        const res = await fetch('/api/projects-kanban/timestamp');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.timestamp && data.timestamp !== lastUpdateTimestamp) {
+          // Timestamp changed, reload data
+          await loadData();
+        }
+      } catch (e) {
+        // Silently fail - polling will continue
+        console.error('Poll error:', e);
+      }
+    }
+
+    function startPolling() {
+      // Poll every 2 seconds for updates
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(checkForUpdates, 2000);
+    }
+
+    function stopPolling() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
       }
     }
 
@@ -337,6 +368,17 @@ function kanbanDashboardHTML() {
       const bucketId = e.currentTarget.dataset.bucketId;
       const projectId = draggedData.projectId;
       
+      // Check if project is archived - prevent moving out of archive bucket
+      const project = projects.find(p => p.id === projectId);
+      if (project && project.isArchived) {
+        const archiveBucket = buckets.find(b => b.id === 'archive');
+        if (bucketId !== archiveBucket?.id && bucketId !== 'archive') {
+          alert('Archived folders must remain in the Archive bucket');
+          renderBoard();
+          return;
+        }
+      }
+      
       try {
         const res = await fetch('/api/projects-kanban/move', {
           method: 'POST',
@@ -350,7 +392,6 @@ function kanbanDashboardHTML() {
         }
         
         // Update local state
-        const project = projects.find(p => p.id === projectId);
         if (project) {
           project.bucketId = bucketId;
         }
@@ -390,12 +431,25 @@ function kanbanDashboardHTML() {
         await fetch('/api/projects-kanban/sync', { method: 'POST' });
         // Then load the data
         await loadData();
+        // Start polling for real-time updates
+        startPolling();
       } catch (e) {
         console.error('Init error:', e);
         // Still try to load data even if sync fails
         await loadData();
+        startPolling();
       }
     }
+    
+    // Stop polling when page is hidden, resume when visible
+    document.addEventListener('visibilitychange', function() {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+        checkForUpdates(); // Check immediately when page becomes visible
+      }
+    });
     
     initDashboard();
   </script>
@@ -417,4 +471,5 @@ export default async function handler(req, res) {
 
     return res.status(200).setHeader("Content-Type", "text/html").send(kanbanDashboardHTML());
 }
+
 
