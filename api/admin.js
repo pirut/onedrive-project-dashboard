@@ -290,8 +290,8 @@ async function dashboardView(req) {
     <h1 style="margin:0">Project Dashboard — Admin</h1>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
       <a href="/api/projects-kanban" style="background:#2b61d1;color:#fff;text-decoration:none;border-radius:8px;padding:8px 16px;font:inherit;display:inline-block">Kanban Board</a>
-      <a href="/api/projects-kanban/export?format=csv" style="background:#1f2a44;color:#e6ecff;text-decoration:none;border-radius:8px;padding:8px 12px;font:inherit;display:inline-block" download="active-projects.csv">Export Active Projects CSV</a>
-      <a href="/api/projects-kanban/export?format=json" style="background:#1f2a44;color:#e6ecff;text-decoration:none;border-radius:8px;padding:8px 12px;font:inherit;display:inline-block" download="active-projects.json">Export Active Projects JSON</a>
+      <button type="button" id="export-active-csv" style="background:#1f2a44;color:#e6ecff;border:1px solid #1f2a44;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer">Export Active Projects CSV</button>
+      <button type="button" id="export-active-json" style="background:#1f2a44;color:#e6ecff;border:1px solid #1f2a44;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer">Export Active Projects JSON</button>
     </div>
   </div>
   <div class="grid">
@@ -389,6 +389,8 @@ async function dashboardView(req) {
       var uspsPreviewEl = document.getElementById('usps-preview');
       var uspsResetBtn = document.getElementById('usps-reset');
       var uspsVerifyBtn = document.getElementById('usps-verify-btn');
+      var exportCsvBtn = document.getElementById('export-active-csv');
+      var exportJsonBtn = document.getElementById('export-active-json');
       var uspsLoading = false;
       var uspsDownloadUrl = null;
       var uspsPendingDownloadUrl = null;
@@ -755,6 +757,59 @@ async function dashboardView(req) {
         });
       }
       input.addEventListener('input', function(){ render(cache); });
+
+      async function downloadActiveProjects(format){
+        var target = format === 'json' ? exportJsonBtn : exportCsvBtn;
+        if(!target) return;
+        var originalText = target.textContent;
+        target.disabled = true;
+        target.textContent = (format === 'json' ? 'Exporting JSON…' : 'Exporting CSV…');
+        try{
+          var res = await fetch('/api/projects-kanban/export?format=' + encodeURIComponent(format || 'csv'), {
+            headers: { 'cache-control': 'no-cache' }
+          });
+          if(!res.ok){
+            var errPayload = null;
+            try { errPayload = await res.json(); } catch(_){}
+            var msg = (errPayload && errPayload.error) ? errPayload.error : ('HTTP ' + res.status);
+            throw new Error(msg);
+          }
+          var ct = res.headers.get('content-type') || '';
+          var filename = (format === 'json') ? 'active-projects.json' : 'active-projects.csv';
+          var blob;
+          if(ct.indexOf('application/json') !== -1 || format === 'json'){
+            var text = await res.text();
+            blob = new Blob([text], { type: 'application/json;charset=utf-8;' });
+          } else {
+            var textCsv = await res.text();
+            blob = new Blob([textCsv], { type: 'text/csv;charset=utf-8;' });
+          }
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        } catch(e){
+          alert('Export failed: ' + (e && e.message ? e.message : 'error'));
+        } finally {
+          target.disabled = false;
+          target.textContent = originalText;
+        }
+      }
+
+      if(exportCsvBtn){
+        exportCsvBtn.addEventListener('click', function(){
+          downloadActiveProjects('csv');
+        });
+      }
+      if(exportJsonBtn){
+        exportJsonBtn.addEventListener('click', function(){
+          downloadActiveProjects('json');
+        });
+      }
       async function handleRefresh(){
         if(refreshing) return;
         refreshing = true;
