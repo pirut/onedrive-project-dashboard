@@ -401,6 +401,81 @@ export default async function handler(req, res) {
         }
     }
 
+    // GET /api/projects-kanban/export
+    if (req.method === "GET" && route === "export") {
+        try {
+            const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+            const format = (url.searchParams.get("format") || "csv").toLowerCase();
+
+            const buckets = await getBuckets();
+            const kanbanStates = await getAllProjectKanbanStates();
+            const metadata = await getAllProjectMetadata();
+
+            const bucketById = {};
+            for (const b of buckets.buckets || []) {
+                bucketById[b.id] = b;
+            }
+
+            // Active = not archived
+            const activeProjects = Object.values(metadata)
+                .filter((meta) => !meta.isArchived)
+                .map((meta) => {
+                    const state = kanbanStates[meta.id] || {};
+                    const bucket = bucketById[state.bucketId] || null;
+                    return {
+                        id: meta.id,
+                        name: meta.name,
+                        bucketId: state.bucketId || null,
+                        bucketName: bucket?.name || null,
+                        webUrl: meta.webUrl || null,
+                        createdDateTime: meta.createdDateTime || null,
+                        lastModifiedDateTime: meta.lastModifiedDateTime || null,
+                    };
+                });
+
+            if (format === "json") {
+                res.setHeader("Content-Type", "application/json; charset=utf-8");
+                res.setHeader("Content-Disposition", 'attachment; filename="active-projects.json"');
+                return res.status(200).json({ projects: activeProjects });
+            }
+
+            // Default to CSV
+            const headers = [
+                "id",
+                "name",
+                "bucketId",
+                "bucketName",
+                "webUrl",
+                "createdDateTime",
+                "lastModifiedDateTime",
+            ];
+
+            const escapeCsv = (value) => {
+                if (value === null || value === undefined) return "";
+                const str = String(value);
+                if (/[",\n]/.test(str)) {
+                    return `"${str.replace(/"/g, '""')}"`;
+                }
+                return str;
+            };
+
+            const lines = [
+                headers.join(","),
+                ...activeProjects.map((p) =>
+                    headers.map((h) => escapeCsv(p[h])).join(",")
+                ),
+            ];
+
+            const csv = lines.join("\r\n");
+            res.setHeader("Content-Type", "text/csv; charset=utf-8");
+            res.setHeader("Content-Disposition", 'attachment; filename="active-projects.csv"');
+            return res.status(200).send(csv);
+        } catch (e) {
+            console.error("[Export] Error:", e);
+            return res.status(500).json({ error: e.message || String(e) });
+        }
+    }
+
     // GET /api/projects-kanban/timestamp - for real-time polling
     if (req.method === "GET" && route === "timestamp") {
         try {
