@@ -407,39 +407,23 @@ export default async function handler(req, res) {
             const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
             const format = (url.searchParams.get("format") || "csv").toLowerCase();
 
-            const buckets = await getBuckets();
-            const kanbanStates = await getAllProjectKanbanStates();
-            const metadata = await getAllProjectMetadata();
+            // Pull live projects from SharePoint, similar to FastField sync
+            const accessToken = await getAppToken();
+            const siteUrl = req.query.siteUrl || DEFAULT_SITE_URL;
+            const libraryPath = req.query.libraryPath || DEFAULT_LIBRARY;
 
-            console.log("[Export] Handling export request", {
+            console.log("[Export] Starting live folder fetch for export", {
                 format,
-                bucketCount: buckets?.buckets?.length || 0,
-                projectCount: Object.keys(metadata || {}).length,
+                siteUrl,
+                libraryPath,
             });
 
-            const bucketById = {};
-            for (const b of buckets.buckets || []) {
-                bucketById[b.id] = b;
-            }
+            const folders = await fetchAllFolders(accessToken, siteUrl, libraryPath);
 
-            // Active = not archived
-            const activeProjects = Object.values(metadata)
-                .filter((meta) => !meta.isArchived)
-                .map((meta) => {
-                    const state = kanbanStates[meta.id] || {};
-                    const bucket = bucketById[state.bucketId] || null;
-                    return {
-                        id: meta.id,
-                        name: meta.name,
-                        bucketId: state.bucketId || null,
-                        bucketName: bucket?.name || null,
-                        webUrl: meta.webUrl || null,
-                        createdDateTime: meta.createdDateTime || null,
-                        lastModifiedDateTime: meta.lastModifiedDateTime || null,
-                    };
-                });
+            // Active projects = all non-archived folders
+            const activeProjects = (folders || []).filter((f) => !f.isArchived);
 
-            console.log("[Export] Active projects count:", activeProjects.length);
+            console.log("[Export] Folders fetched:", folders?.length || 0, "active:", activeProjects.length);
 
             if (format === "json") {
                 res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -451,11 +435,11 @@ export default async function handler(req, res) {
             const headers = [
                 "id",
                 "name",
-                "bucketId",
-                "bucketName",
                 "webUrl",
                 "createdDateTime",
                 "lastModifiedDateTime",
+                "size",
+                "parentPath",
             ];
 
             const escapeCsv = (value) => {
