@@ -411,6 +411,12 @@ export default async function handler(req, res) {
             const kanbanStates = await getAllProjectKanbanStates();
             const metadata = await getAllProjectMetadata();
 
+            console.log("[Export] Handling export request", {
+                format,
+                bucketCount: buckets?.buckets?.length || 0,
+                projectCount: Object.keys(metadata || {}).length,
+            });
+
             const bucketById = {};
             for (const b of buckets.buckets || []) {
                 bucketById[b.id] = b;
@@ -432,6 +438,8 @@ export default async function handler(req, res) {
                         lastModifiedDateTime: meta.lastModifiedDateTime || null,
                     };
                 });
+
+            console.log("[Export] Active projects count:", activeProjects.length);
 
             if (format === "json") {
                 res.setHeader("Content-Type", "application/json; charset=utf-8");

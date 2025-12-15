@@ -761,6 +761,9 @@ async function dashboardView(req) {
       async function downloadActiveProjects(format){
         var target = format === 'json' ? exportJsonBtn : exportCsvBtn;
         if(!target) return;
+        try {
+          console.log('[Export] Starting download for format:', format);
+        } catch(_) {}
         var originalText = target.textContent;
         target.disabled = true;
         target.textContent = (format === 'json' ? 'Exporting JSON…' : 'Exporting CSV…');
@@ -768,20 +771,37 @@ async function dashboardView(req) {
           var res = await fetch('/api/projects-kanban/export?format=' + encodeURIComponent(format || 'csv'), {
             headers: { 'cache-control': 'no-cache' }
           });
+          try {
+            console.log('[Export] Response status:', res.status, 'ok:', res.ok);
+          } catch(_) {}
           if(!res.ok){
             var errPayload = null;
-            try { errPayload = await res.json(); } catch(_){}
+            try { errPayload = await res.json(); } catch(parseErr){
+              try { console.log('[Export] Failed to parse error JSON:', parseErr); } catch(__){}
+            }
             var msg = (errPayload && errPayload.error) ? errPayload.error : ('HTTP ' + res.status);
+            try {
+              console.log('[Export] Error payload:', errPayload);
+            } catch(_) {}
             throw new Error(msg);
           }
           var ct = res.headers.get('content-type') || '';
+          try {
+            console.log('[Export] Content-Type:', ct);
+          } catch(_) {}
           var filename = (format === 'json') ? 'active-projects.json' : 'active-projects.csv';
           var blob;
           if(ct.indexOf('application/json') !== -1 || format === 'json'){
             var text = await res.text();
+            try {
+              console.log('[Export] JSON text length:', text && text.length);
+            } catch(_) {}
             blob = new Blob([text], { type: 'application/json;charset=utf-8;' });
           } else {
             var textCsv = await res.text();
+            try {
+              console.log('[Export] CSV text length:', textCsv && textCsv.length);
+            } catch(_) {}
             blob = new Blob([textCsv], { type: 'text/csv;charset=utf-8;' });
           }
           var url = URL.createObjectURL(blob);
@@ -793,6 +813,9 @@ async function dashboardView(req) {
           document.body.removeChild(a);
           URL.revokeObjectURL(url);
         } catch(e){
+          try {
+            console.error('[Export] Export failed:', e);
+          } catch(_) {}
           alert('Export failed: ' + (e && e.message ? e.message : 'error'));
         } finally {
           target.disabled = false;
