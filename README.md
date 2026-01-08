@@ -112,6 +112,77 @@ Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**,
 - Set envs in Vercel: `TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`, `MS_GRAPH_SCOPE`, `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`, `CORS_ORIGIN`.
 - Test: `GET /api/health`, `POST /api/upload`.
 
+## Planner Sync
+
+Production-ready two-way sync between Business Central Project Tasks and Microsoft Planner.
+
+### Environment variables
+
+```
+# Business Central
+BC_TENANT_ID=
+BC_ENVIRONMENT=
+BC_COMPANY_ID=
+BC_CLIENT_ID=
+BC_CLIENT_SECRET=
+BC_API_BASE=https://api.businesscentral.dynamics.com/v2.0
+BC_API_PUBLISHER=cornerstone
+BC_API_GROUP=plannerSync
+BC_API_VERSION=v1.0
+
+# Microsoft Graph
+GRAPH_TENANT_ID=
+GRAPH_CLIENT_ID=
+GRAPH_CLIENT_SECRET=
+GRAPH_SUBSCRIPTION_CLIENT_STATE=
+
+# Planner
+PLANNER_GROUP_ID=
+PLANNER_DEFAULT_PLAN_ID=
+
+# Sync settings
+SYNC_MODE=perProjectPlan
+SYNC_POLL_MINUTES=10
+SYNC_TIMEZONE=America/New_York
+
+# Optional persistence overrides
+PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
+```
+
+Notes:
+- `PLANNER_DEFAULT_PLAN_ID` is required when `SYNC_MODE=singlePlan`.
+- For `SYNC_MODE=perProjectPlan`, plan creation failures fall back to `PLANNER_DEFAULT_PLAN_ID` (task titles are prefixed with `projectNo`).
+- Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
+- Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
+
+### Admin endpoints
+
+- `POST /api/sync/run-bc-to-planner` (optional JSON: `{ "projectNo": "P-100" }`)
+- `POST /api/sync/run-poll`
+- `POST /api/sync/subscriptions/create`
+- `POST /api/sync/subscriptions/renew`
+- `POST /api/webhooks/graph/planner` (Graph notification receiver)
+
+### Example curl commands
+
+```bash
+# Run BC ➜ Planner for a single project
+curl -X POST http://localhost:3000/api/sync/run-bc-to-planner \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"projectNo\":\"P-100\"}'
+
+# Create Graph subscriptions
+curl -X POST https://your-domain.com/api/sync/subscriptions/create
+
+# Test webhook validation locally
+curl -i -X POST \"http://localhost:3000/api/webhooks/graph/planner?validationToken=test123\"
+
+# Run polling fallback
+curl -X POST http://localhost:3000/api/sync/run-poll
+```
+
 ## Notes
 
 -   The app lists only **subfolders** under the path you provide.

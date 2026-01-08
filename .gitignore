@@ -47,3 +47,4 @@ pids
 .env
 
 .vercel
+.planner-subscriptions.json
