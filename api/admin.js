@@ -366,6 +366,7 @@ async function dashboardView(req) {
     </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
       <button type="button" id="planner-run-bc" onclick="if(window.__plannerAction){window.__plannerAction('bc');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}">Run BC → Planner</button>
+      <button type="button" id="planner-run-bc-pr00001" onclick="if(window.__plannerAction){window.__plannerAction('bc-pr00001');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
       <button type="button" id="planner-run-poll" onclick="if(window.__plannerAction){window.__plannerAction('poll');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Run polling</button>
     </div>
     <div class="row">
