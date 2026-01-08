@@ -5,6 +5,13 @@ import { logger } from "./logger";
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
 const DEFAULT_BUCKET_NAME = "General";
+const HEADING_BUCKETS: Record<string, string | null> = {
+    "JOB NAME": "Pre-Construction",
+    "INSTALLATION": "Installation",
+    "CHANGE ORDER": "Change Orders",
+    "CHANGE ORDERS": "Change Orders",
+    REVENUE: null,
+};
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -15,6 +22,16 @@ function normalizeBucketName(name?: string | null) {
     return trimmed || DEFAULT_BUCKET_NAME;
 }
 
+function resolveBucketFromHeading(description?: string | null) {
+    const heading = (description || "").trim();
+    if (!heading) return { bucket: DEFAULT_BUCKET_NAME, skip: false };
+    const normalized = heading.toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(HEADING_BUCKETS, normalized)) {
+        const mapped = HEADING_BUCKETS[normalized];
+        return { bucket: mapped, skip: mapped == null };
+    }
+    return { bucket: normalizeBucketName(heading), skip: false };
+}
 function normalizeDateOnly(value?: string | null) {
     if (!value) return null;
     const date = new Date(value);
@@ -408,16 +425,25 @@ async function syncProjectTasks(
         const bKey = (b.taskNo || "").toString();
         return aKey.localeCompare(bKey, undefined, { numeric: true, sensitivity: "base" });
     });
-    let currentBucket = DEFAULT_BUCKET_NAME;
+    let currentBucket: string | null = DEFAULT_BUCKET_NAME;
+    let skipSection = false;
 
     for (const task of orderedTasks) {
         const taskType = (task.taskType || "").toLowerCase();
         if (taskType === "heading") {
-            currentBucket = normalizeBucketName(task.description || DEFAULT_BUCKET_NAME);
+            const resolved = resolveBucketFromHeading(task.description);
+            if (resolved.skip) {
+                currentBucket = null;
+                skipSection = true;
+                continue;
+            }
+            currentBucket = resolved.bucket;
+            skipSection = false;
             await ensureBucket(graphClient, planId, currentBucket, bucketCache);
             continue;
         }
         if (taskType !== "posting") continue;
+        if (skipSection || !currentBucket) continue;
         const bucketId = await ensureBucket(graphClient, planId, currentBucket, bucketCache);
         await upsertPlannerTask(bcClient, graphClient, task, planId, bucketId, currentBucket, titlePrefix);
     }
