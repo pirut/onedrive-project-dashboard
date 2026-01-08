@@ -383,6 +383,8 @@ async function dashboardView(req) {
     </div>
     <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
     <pre id="planner-output" class="log-block" style="display:none"></pre>
+    <div class="small muted" style="margin-top:8px">Request log</div>
+    <ul id="planner-log" class="step-list"></ul>
   </div>
 
   <div class="panel">
@@ -455,6 +457,7 @@ async function dashboardView(req) {
       var plannerTestWebhookBtn = document.getElementById('planner-test-webhook');
       var plannerStatusEl = document.getElementById('planner-status');
       var plannerOutputEl = document.getElementById('planner-output');
+      var plannerLogEl = document.getElementById('planner-log');
       var uspsLoading = false;
       var uspsDownloadUrl = null;
       var uspsPendingDownloadUrl = null;
@@ -500,6 +503,23 @@ async function dashboardView(req) {
         catch(e){ text = String(payload); }
         plannerOutputEl.textContent = text;
         plannerOutputEl.style.display = 'block';
+      }
+      function logPlannerEvent(message, tone){
+        if(!plannerLogEl) return;
+        var toneClass = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'muted';
+        var ts = new Date().toLocaleTimeString();
+        var item = '<li><span class="mono small">' + htmlEscape(ts) + '</span> '
+          + '<span class="badge ' + toneClass + '">' + htmlEscape(tone || 'info') + '</span> '
+          + htmlEscape(message) + '</li>';
+        plannerLogEl.insertAdjacentHTML('afterbegin', item);
+        var items = plannerLogEl.querySelectorAll('li');
+        if(items.length > 12){
+          for(var i = items.length - 1; i >= 12; i--){ items[i].remove(); }
+        }
+      }
+      function setPlannerBusy(isBusy){
+        var buttons = [plannerRunBcBtn, plannerRunPollBtn, plannerCreateSubsBtn, plannerRenewSubsBtn, plannerTestWebhookBtn];
+        buttons.forEach(function(btn){ if(btn) btn.disabled = isBusy; });
       }
       function renderUspsPreview(rows){
         if(!uspsPreviewEl) return;
@@ -846,13 +866,26 @@ async function dashboardView(req) {
         var method = options.method || 'POST';
         setPlannerStatus(options.label + '…', 'muted');
         renderPlannerOutput(null);
+        setPlannerBusy(true);
+        logPlannerEvent(options.label + ' started', 'info');
+        logPlannerEvent('Request: ' + method + ' ' + url, 'info');
+        if(body){
+          try {
+            logPlannerEvent('Body: ' + JSON.stringify(body), 'info');
+          } catch(e) {
+            logPlannerEvent('Body: [unserializable]', 'warn');
+          }
+        }
         try{
+          var startTime = Date.now();
           var res = await fetch(url, {
             method: method,
             headers: body ? { 'Content-Type': 'application/json' } : undefined,
             body: body ? JSON.stringify(body) : undefined
           });
           var ct = res.headers.get('content-type') || '';
+          logPlannerEvent('Response: ' + res.status + ' ' + (res.statusText || ''), res.ok ? 'ok' : 'bad');
+          logPlannerEvent('Content-Type: ' + (ct || 'n/a'), 'info');
           var payload;
           if(ct.indexOf('application/json') !== -1){
             payload = await res.json();
@@ -863,12 +896,17 @@ async function dashboardView(req) {
             var msg = payload && payload.error ? payload.error : ('HTTP ' + res.status);
             throw new Error(msg);
           }
-          setPlannerStatus(options.label + ' complete.', 'ok');
+          var elapsed = Date.now() - startTime;
+          setPlannerStatus(options.label + ' complete in ' + elapsed + 'ms.', 'ok');
           renderPlannerOutput(payload);
+          logPlannerEvent(options.label + ' complete', 'ok');
           return;
         }catch(err){
           setPlannerStatus(options.label + ' failed: ' + (err && err.message ? err.message : 'error'), 'bad');
           renderPlannerOutput(err && err.message ? err.message : err);
+          logPlannerEvent(options.label + ' failed: ' + (err && err.message ? err.message : 'error'), 'bad');
+        } finally {
+          setPlannerBusy(false);
         }
       }
       if(plannerRunBcBtn){
