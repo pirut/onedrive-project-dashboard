@@ -205,21 +205,23 @@ async function resolvePlanForProject(
         return { planId: matchingPlan.id, titlePrefix: "" };
     }
 
+    let planCreateError: string | undefined;
     try {
         const createdPlan = await graphClient.createPlan(plannerConfig.groupId, projectNo);
         return { planId: createdPlan.id, titlePrefix: "" };
     } catch (error) {
+        planCreateError = (error as Error)?.message || String(error);
         logger.warn("Plan creation failed", {
             projectNo,
-            error: (error as Error)?.message,
+            error: planCreateError,
         });
     }
 
     if (!allowDefaultPlanFallback) {
-        throw new Error("Plan creation failed and SYNC_ALLOW_DEFAULT_PLAN_FALLBACK is false");
+        throw new Error(`Plan creation failed: ${planCreateError || "unknown error"}`);
     }
     if (!plannerConfig.defaultPlanId) {
-        throw new Error("Plan creation failed and PLANNER_DEFAULT_PLAN_ID is not set");
+        throw new Error(`Plan creation failed and PLANNER_DEFAULT_PLAN_ID is not set: ${planCreateError || "unknown error"}`);
     }
     return { planId: plannerConfig.defaultPlanId, titlePrefix: `${projectNo} - ` };
 }

@@ -365,9 +365,9 @@ async function dashboardView(req) {
       <input id="planner-project-no" placeholder="P-100" />
     </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" id="planner-run-bc" onclick="if(window.__plannerAction){window.__plannerAction('bc');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}">Run BC → Planner</button>
-      <button type="button" id="planner-run-bc-pr00001" onclick="if(window.__plannerAction){window.__plannerAction('bc-pr00001');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
-      <button type="button" id="planner-run-poll" onclick="if(window.__plannerAction){window.__plannerAction('poll');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+      <button type="button" id="planner-run-bc">Run BC → Planner</button>
+      <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
+      <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>
@@ -378,9 +378,9 @@ async function dashboardView(req) {
       <input id="planner-plan-ids" placeholder="planId1, planId2" />
     </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" id="planner-create-subs" onclick="if(window.__plannerAction){window.__plannerAction('create-subs');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#0f8b4c;color:#fff">Create subscriptions</button>
-      <button type="button" id="planner-renew-subs" onclick="if(window.__plannerAction){window.__plannerAction('renew-subs');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
-      <button type="button" id="planner-test-webhook" onclick="if(window.__plannerAction){window.__plannerAction('test-webhook');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
+      <button type="button" id="planner-create-subs" style="background:#0f8b4c;color:#fff">Create subscriptions</button>
+      <button type="button" id="planner-renew-subs" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
+      <button type="button" id="planner-test-webhook" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
     </div>
     <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
     <pre id="planner-output" class="log-block" style="display:none"></pre>
