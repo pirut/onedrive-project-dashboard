@@ -152,7 +152,7 @@ async function resolvePlanForProject(
     projectNo: string,
     tasks: BcProjectTask[]
 ) {
-    const { syncMode } = getSyncConfig();
+    const { syncMode, allowDefaultPlanFallback } = getSyncConfig();
     const plannerConfig = getPlannerConfig();
 
     if (syncMode === "singlePlan") {
@@ -182,12 +182,15 @@ async function resolvePlanForProject(
         const createdPlan = await graphClient.createPlan(plannerConfig.groupId, projectNo);
         return { planId: createdPlan.id, titlePrefix: "" };
     } catch (error) {
-        logger.warn("Plan creation failed; falling back to default plan", {
+        logger.warn("Plan creation failed", {
             projectNo,
             error: (error as Error)?.message,
         });
     }
 
+    if (!allowDefaultPlanFallback) {
+        throw new Error("Plan creation failed and SYNC_ALLOW_DEFAULT_PLAN_FALLBACK is false");
+    }
     if (!plannerConfig.defaultPlanId) {
         throw new Error("Plan creation failed and PLANNER_DEFAULT_PLAN_ID is not set");
     }
@@ -464,6 +467,7 @@ async function syncProjectTasks(
     bucketCache: Map<string, Map<string, string>>,
     projectNo: string
 ) {
+    const { syncMode, allowDefaultPlanFallback } = getSyncConfig();
     const { planId, titlePrefix } = await resolvePlanForProject(graphClient, projectNo, tasks);
     const orderedTasks = [...tasks].sort((a, b) => {
         const aKey = (a.taskNo || "").toString();
@@ -490,7 +494,21 @@ async function syncProjectTasks(
         if (taskType !== "posting") continue;
         if (skipSection || !currentBucket) continue;
         const bucketId = await ensureBucket(graphClient, planId, currentBucket, bucketCache);
-        await upsertPlannerTask(bcClient, graphClient, task, planId, bucketId, currentBucket, titlePrefix);
+        const planMismatch =
+            syncMode === "perProjectPlan" &&
+            !allowDefaultPlanFallback &&
+            task.plannerPlanId &&
+            task.plannerPlanId !== planId;
+        if (planMismatch) {
+            logger.warn("Planner plan mismatch; creating new task in per-project plan", {
+                projectNo,
+                taskNo: task.taskNo,
+                fromPlanId: task.plannerPlanId,
+                toPlanId: planId,
+            });
+        }
+        const syncTask = planMismatch ? { ...task, plannerTaskId: undefined, plannerPlanId: undefined } : task;
+        await upsertPlannerTask(bcClient, graphClient, syncTask, planId, bucketId, currentBucket, titlePrefix);
     }
 
     return planId;

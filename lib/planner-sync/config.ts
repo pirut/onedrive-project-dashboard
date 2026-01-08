@@ -8,6 +8,15 @@ function readEnv(name: string, required = false) {
     return value;
 }
 
+function readBoolEnv(name: string, defaultValue: boolean) {
+    const value = readEnv(name);
+    if (!value) return defaultValue;
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return defaultValue;
+}
+
 export function getBcConfig() {
     return {
         tenantId: readEnv("BC_TENANT_ID", true) as string,
@@ -48,6 +57,7 @@ export function getSyncConfig() {
         syncMode,
         pollMinutes: Number.isNaN(pollMinutes) ? 10 : pollMinutes,
         timeZone: readEnv("SYNC_TIMEZONE") || "America/New_York",
+        allowDefaultPlanFallback: readBoolEnv("SYNC_ALLOW_DEFAULT_PLAN_FALLBACK", true),
     };
 }
 

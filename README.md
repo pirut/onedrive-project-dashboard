@@ -139,11 +139,14 @@ GRAPH_SUBSCRIPTION_CLIENT_STATE=
 # Planner
 PLANNER_GROUP_ID=
 PLANNER_DEFAULT_PLAN_ID=
+PLANNER_TENANT_DOMAIN=
+PLANNER_WEB_BASE=
 
 # Sync settings
 SYNC_MODE=perProjectPlan
 SYNC_POLL_MINUTES=10
 SYNC_TIMEZONE=America/New_York
+SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=true
 
 # Optional persistence overrides
 PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
@@ -154,6 +157,7 @@ KV_REST_API_TOKEN=
 Notes:
 - `PLANNER_DEFAULT_PLAN_ID` is required when `SYNC_MODE=singlePlan`.
 - For `SYNC_MODE=perProjectPlan`, plan creation failures fall back to `PLANNER_DEFAULT_PLAN_ID` (task titles are prefixed with `projectNo`).
+- Set `PLANNER_TENANT_DOMAIN` or `PLANNER_WEB_BASE` to generate clickable plan URLs in sync responses.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
 
