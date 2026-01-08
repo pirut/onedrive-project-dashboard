@@ -373,6 +373,7 @@ async function dashboardView(req) {
       <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
       <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
       <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
+      <button type="button" id="planner-webhook-log" style="background:#0f8b4c;color:#fff">Refresh Webhook Log</button>
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>
@@ -389,6 +390,7 @@ async function dashboardView(req) {
     </div>
     <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
     <pre id="planner-output" class="log-block" style="display:none"></pre>
+    <pre id="planner-webhook-output" class="log-block" style="display:none;margin-top:8px"></pre>
     <div class="small muted" style="margin-top:8px">Request log</div>
     <ul id="planner-log" class="step-list"></ul>
   </div>

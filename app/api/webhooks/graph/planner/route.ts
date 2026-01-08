@@ -1,6 +1,7 @@
 import { enqueueAndProcessNotifications } from "../../../../../lib/planner-sync";
 import { getGraphConfig } from "../../../../../lib/planner-sync/config";
 import { logger } from "../../../../../lib/planner-sync/logger";
+import { appendWebhookLog } from "../../../../../lib/planner-sync/webhook-log";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,11 @@ export async function POST(request: Request) {
         const validationToken = url.searchParams.get("validationToken");
         if (validationToken) {
             logger.info("Validation token received - responding to Graph subscription validation", { requestId });
+            await appendWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "validation",
+            });
             return new Response(validationToken, {
                 status: 200,
                 headers: { 
@@ -58,6 +64,12 @@ export async function POST(request: Request) {
                 error: errorMessage,
                 stack: parseError instanceof Error ? parseError.stack : undefined,
             });
+            await appendWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "invalid_json",
+                error: errorMessage,
+            });
             return new Response(JSON.stringify({ ok: false, error: "Invalid JSON", requestId }), {
                 status: 400,
                 headers: { 
@@ -72,6 +84,14 @@ export async function POST(request: Request) {
         
         if (!notifications.length) {
             logger.info("No notifications in payload", { requestId });
+            await appendWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "notification",
+                notificationCount: 0,
+                validCount: 0,
+                invalidCount: 0,
+            });
             return new Response(JSON.stringify({ ok: true, received: 0, requestId }), {
                 status: 202,
                 headers: { 
@@ -83,7 +103,8 @@ export async function POST(request: Request) {
 
         const { clientState } = getGraphConfig();
         logger.debug("Validating notifications", { requestId, expectedClientState: clientState });
-        
+        let clientStateMismatchCount = 0;
+        let missingTaskIdCount = 0;
         const items = notifications
             .map((notification, index) => {
                 logger.debug("Processing notification", { 
@@ -101,6 +122,7 @@ export async function POST(request: Request) {
                         expected: clientState,
                         received: notification.clientState,
                     });
+                    clientStateMismatchCount += 1;
                     return null;
                 }
                 const taskId = notification.resourceData?.id || notification.resource?.split("/").pop();
@@ -109,6 +131,7 @@ export async function POST(request: Request) {
                         requestId, 
                         notification,
                     });
+                    missingTaskIdCount += 1;
                     return null;
                 }
                 logger.debug("Extracted task ID from notification", { requestId, taskId });
@@ -134,6 +157,18 @@ export async function POST(request: Request) {
             });
         }
 
+        await appendWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "notification",
+            notificationCount: notifications.length,
+            validCount: items.length,
+            invalidCount: notifications.length - items.length,
+            clientStateMismatchCount,
+            missingTaskIdCount,
+            taskIds: items.map((item) => item.taskId).slice(0, 20),
+        });
+
         const duration = Date.now() - startTime;
         logger.info("POST /api/webhooks/graph/planner - Success", {
             requestId,
@@ -158,6 +193,12 @@ export async function POST(request: Request) {
             duration,
             error: errorMessage,
             stack: errorStack,
+        });
+        await appendWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "error",
+            error: errorMessage,
         });
         
         return new Response(JSON.stringify({ 
