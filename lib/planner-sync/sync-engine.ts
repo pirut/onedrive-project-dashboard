@@ -112,10 +112,15 @@ function formatPlannerDescription(task: BcProjectTask) {
     return lines.join("\n");
 }
 
+function buildPlanTitle(projectNo: string, projectDescription?: string | null) {
+    const cleaned = (projectDescription || "").trim();
+    return cleaned ? `${projectNo} - ${cleaned}` : projectNo;
+}
+
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
-    const taskNo = (task.taskNo || "").trim();
     const description = (task.description || "").trim();
-    const base = [taskNo, description].filter(Boolean).join(" - ") || "Untitled Task";
+    const taskNo = (task.taskNo || "").trim();
+    const base = description || taskNo || "Untitled Task";
     return `${prefix || ""}${base}`;
 }
 
@@ -158,7 +163,8 @@ async function updateBcTaskWithSyncLock(
 async function resolvePlanForProject(
     graphClient: GraphClient,
     projectNo: string,
-    tasks: BcProjectTask[]
+    tasks: BcProjectTask[],
+    projectTitle: string
 ) {
     const { syncMode, allowDefaultPlanFallback } = getSyncConfig();
     const plannerConfig = getPlannerConfig();
@@ -175,7 +181,7 @@ async function resolvePlanForProject(
         try {
             const plan = await graphClient.getPlan(existingPlanId);
             const planTitle = (plan?.title || "").trim();
-            if (planTitle && planTitle === projectNo) {
+            if (planTitle && (planTitle === projectTitle || planTitle === projectNo)) {
                 return { planId: existingPlanId, titlePrefix: "" };
             }
             if (planTitle) {
@@ -200,14 +206,17 @@ async function resolvePlanForProject(
     } catch (error) {
         logger.warn("Failed to list plans for group", { error: (error as Error)?.message });
     }
-    const matchingPlan = plans.find((plan) => (plan.title || "").trim() === projectNo);
+    const matchingPlan = plans.find((plan) => {
+        const title = (plan.title || "").trim();
+        return title === projectTitle || title === projectNo;
+    });
     if (matchingPlan?.id) {
         return { planId: matchingPlan.id, titlePrefix: "" };
     }
 
     let planCreateError: string | undefined;
     try {
-        const createdPlan = await graphClient.createPlan(plannerConfig.groupId, projectNo);
+        const createdPlan = await graphClient.createPlan(plannerConfig.groupId, projectTitle);
         return { planId: createdPlan.id, titlePrefix: "" };
     } catch (error) {
         planCreateError = (error as Error)?.message || String(error);
@@ -454,7 +463,15 @@ export async function syncBcToPlanner(projectNo?: string) {
             });
         }
         if (!tasks.length) return { projectNo, tasks: 0 };
-        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo);
+        let projectDescription: string | undefined;
+        try {
+            const projects = await bcClient.listProjects(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
+            projectDescription = projects[0]?.description;
+        } catch (error) {
+            logger.warn("Failed to load project description", { projectNo, error: (error as Error)?.message });
+        }
+        const planTitle = buildPlanTitle(projectNo, projectDescription);
+        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo, planTitle);
         return { projectNo, tasks: tasks.length, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl, tenantId) };
     }
 
@@ -473,6 +490,7 @@ export async function syncBcToPlanner(projectNo?: string) {
     for (const project of projects) {
         const projNo = (project.projectNo || "").trim();
         if (!projNo) continue;
+        const planTitle = buildPlanTitle(projNo, project.description);
         const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projNo.replace(/'/g, "''")}'`);
         const tasks = filterTasksForProject(rawTasks, projNo);
         if (rawTasks.length && tasks.length !== rawTasks.length) {
@@ -483,7 +501,7 @@ export async function syncBcToPlanner(projectNo?: string) {
             });
         }
         totalTasks += tasks.length;
-        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo);
+        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo, planTitle);
         plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl, tenantId) });
     }
 
@@ -495,10 +513,11 @@ async function syncProjectTasks(
     graphClient: GraphClient,
     tasks: BcProjectTask[],
     bucketCache: Map<string, Map<string, string>>,
-    projectNo: string
+    projectNo: string,
+    planTitle: string
 ) {
     const { syncMode, allowDefaultPlanFallback } = getSyncConfig();
-    const { planId, titlePrefix } = await resolvePlanForProject(graphClient, projectNo, tasks);
+    const { planId, titlePrefix } = await resolvePlanForProject(graphClient, projectNo, tasks, planTitle);
     const orderedTasks = [...tasks].sort((a, b) => {
         const aKey = (a.taskNo || "").toString();
         const bKey = (b.taskNo || "").toString();

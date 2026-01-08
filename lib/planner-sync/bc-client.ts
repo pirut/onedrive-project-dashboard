@@ -107,8 +107,9 @@ export class BusinessCentralClient {
         return data?.value || [];
     }
 
-    async listProjects() {
-        const res = await this.request("/projects");
+    async listProjects(filter?: string) {
+        const path = filter ? `/projects?$filter=${encodeURIComponent(filter)}` : "/projects";
+        const res = await this.request(path);
         const data = await readResponseJson<{ value: BcProject[] }>(res);
         return data?.value || [];
     }
