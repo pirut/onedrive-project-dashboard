@@ -374,6 +374,8 @@ async function dashboardView(req) {
       <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
       <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
       <button type="button" id="planner-webhook-log" style="background:#0f8b4c;color:#fff">Refresh Webhook Log</button>
+      <button type="button" id="planner-webhook-stream" style="background:#0f8b4c;color:#fff">Start Webhook Feed</button>
+      <button type="button" id="planner-webhook-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>

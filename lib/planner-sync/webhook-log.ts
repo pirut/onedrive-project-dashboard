@@ -1,3 +1,4 @@
+import { EventEmitter } from "events";
 import { getRedis } from "./redis";
 import { logger } from "./logger";
 
@@ -17,6 +18,15 @@ export type WebhookLogEntry = {
 const LOG_KEY = "planner:webhook:log";
 const MAX_LOG = 100;
 const inMemoryLog: WebhookLogEntry[] = [];
+const emitter = (globalThis as typeof globalThis & { __webhookEmitter?: EventEmitter }).__webhookEmitter || new EventEmitter();
+
+if (!(globalThis as typeof globalThis & { __webhookEmitter?: EventEmitter }).__webhookEmitter) {
+    (globalThis as typeof globalThis & { __webhookEmitter?: EventEmitter }).__webhookEmitter = emitter;
+}
+
+export function getWebhookEmitter() {
+    return emitter;
+}
 
 export async function appendWebhookLog(entry: WebhookLogEntry) {
     const redis = getRedis({ requireWrite: true });
@@ -24,6 +34,7 @@ export async function appendWebhookLog(entry: WebhookLogEntry) {
         try {
             await redis.lpush(LOG_KEY, JSON.stringify(entry));
             await redis.ltrim(LOG_KEY, 0, MAX_LOG - 1);
+            emitter.emit("entry", entry);
             return;
         } catch (error) {
             logger.warn("Webhook log write failed; using memory log", {
@@ -35,6 +46,7 @@ export async function appendWebhookLog(entry: WebhookLogEntry) {
     if (inMemoryLog.length > MAX_LOG) {
         inMemoryLog.length = MAX_LOG;
     }
+    emitter.emit("entry", entry);
 }
 
 export async function listWebhookLog(limit = 50) {
