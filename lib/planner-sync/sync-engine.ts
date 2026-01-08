@@ -25,6 +25,8 @@ function normalizeDateOnly(value?: string | null) {
 function toPlannerDate(value?: string | null) {
     const dateOnly = normalizeDateOnly(value || null);
     if (!dateOnly) return null;
+    // Planner only accepts dates within 1984-01-01 and 2149-12-31.
+    if (dateOnly < "1984-01-01" || dateOnly > "2149-12-31") return null;
     const date = new Date(`${dateOnly}T00:00:00Z`);
     if (Number.isNaN(date.getTime())) return null;
     return date.toISOString();
@@ -197,14 +199,15 @@ async function upsertPlannerTask(
     const desiredDescription = formatPlannerDescription(task);
 
     if (!task.plannerTaskId) {
-        const created = await graphClient.createTask({
+        const payload: Record<string, unknown> = {
             planId,
             bucketId,
             title: desiredTitle,
-            startDateTime: desiredStart,
-            dueDateTime: desiredDue,
             percentComplete: desiredPercent,
-        });
+        };
+        if (desiredStart) payload.startDateTime = desiredStart;
+        if (desiredDue) payload.dueDateTime = desiredDue;
+        const created = await graphClient.createTask(payload);
         const details = await graphClient.getTaskDetails(created.id);
         if (details?.["@odata.etag"]) {
             await graphClient.updateTaskDetails(created.id, { description: desiredDescription }, details["@odata.etag"] as string);
