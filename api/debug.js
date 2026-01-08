@@ -19,6 +19,181 @@ function parseEntitySets(metadataText, limit = 200) {
     return entitySets;
 }
 
+async function runGraphDiagnostics() {
+    const required = ["GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET"];
+    const missing = required.filter((name) => !envPresence(name));
+    const tenantId = process.env.GRAPH_TENANT_ID;
+    const groupIdEnv = process.env.PLANNER_GROUP_ID;
+    const defaultPlanId = process.env.PLANNER_DEFAULT_PLAN_ID || undefined;
+
+    const diagnostics = {
+        ok: false,
+        env: {
+            ok: missing.length === 0,
+            missing,
+            config: {
+                tenantId,
+                groupId: groupIdEnv || undefined,
+                defaultPlanId,
+            },
+        },
+        checks: {},
+    };
+
+    if (missing.length > 0) {
+        return diagnostics;
+    }
+
+    let token;
+    try {
+        const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+        const body = new URLSearchParams({
+            grant_type: "client_credentials",
+            client_id: process.env.GRAPH_CLIENT_ID,
+            client_secret: process.env.GRAPH_CLIENT_SECRET,
+            scope: "https://graph.microsoft.com/.default",
+        });
+        const tokenRes = await fetch(tokenUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body,
+        });
+        if (!tokenRes.ok) {
+            const text = await tokenRes.text();
+            diagnostics.checks.token = {
+                ok: false,
+                status: tokenRes.status,
+                error: truncateText(text),
+                url: tokenUrl,
+            };
+            return diagnostics;
+        }
+        const tokenData = await tokenRes.json().catch(() => null);
+        token = tokenData?.access_token;
+        diagnostics.checks.token = {
+            ok: Boolean(token),
+            status: tokenRes.status,
+            url: tokenUrl,
+        };
+        if (!token) {
+            return diagnostics;
+        }
+    } catch (error) {
+        diagnostics.checks.token = {
+            ok: false,
+            status: 0,
+            error: error && error.message ? error.message : String(error),
+        };
+        return diagnostics;
+    }
+
+    const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+    };
+
+    let resolvedGroupId = groupIdEnv;
+    if (defaultPlanId) {
+        const planUrl = `https://graph.microsoft.com/v1.0/planner/plans/${defaultPlanId}`;
+        try {
+            const planRes = await fetch(planUrl, { headers });
+            if (planRes.ok) {
+                const planData = await planRes.json().catch(() => null);
+                const owner = planData?.owner;
+                if (!resolvedGroupId && owner) {
+                    resolvedGroupId = owner;
+                }
+                diagnostics.checks.defaultPlan = {
+                    ok: true,
+                    status: planRes.status,
+                    url: planUrl,
+                    id: planData?.id,
+                    title: planData?.title,
+                    owner,
+                };
+            } else {
+                diagnostics.checks.defaultPlan = {
+                    ok: false,
+                    status: planRes.status,
+                    url: planUrl,
+                    error: truncateText(await planRes.text()),
+                };
+            }
+        } catch (error) {
+            diagnostics.checks.defaultPlan = {
+                ok: false,
+                status: 0,
+                error: error && error.message ? error.message : String(error),
+            };
+        }
+    }
+
+    if (resolvedGroupId) {
+        const groupUrl = `https://graph.microsoft.com/v1.0/groups/${resolvedGroupId}`;
+        try {
+            const groupRes = await fetch(groupUrl, { headers });
+            if (groupRes.ok) {
+                const groupData = await groupRes.json().catch(() => null);
+                diagnostics.checks.group = {
+                    ok: true,
+                    status: groupRes.status,
+                    url: groupUrl,
+                    id: groupData?.id,
+                    displayName: groupData?.displayName,
+                    mailNickname: groupData?.mailNickname,
+                };
+            } else {
+                diagnostics.checks.group = {
+                    ok: false,
+                    status: groupRes.status,
+                    url: groupUrl,
+                    error: truncateText(await groupRes.text()),
+                };
+            }
+        } catch (error) {
+            diagnostics.checks.group = {
+                ok: false,
+                status: 0,
+                error: error && error.message ? error.message : String(error),
+            };
+        }
+
+        const plansUrl = `https://graph.microsoft.com/v1.0/groups/${resolvedGroupId}/planner/plans`;
+        try {
+            const plansRes = await fetch(plansUrl, { headers });
+            if (plansRes.ok) {
+                const plansData = await plansRes.json().catch(() => null);
+                const plans = Array.isArray(plansData?.value) ? plansData.value : [];
+                diagnostics.checks.groupPlans = {
+                    ok: true,
+                    status: plansRes.status,
+                    url: plansUrl,
+                    plans: plans.slice(0, 50).map((plan) => ({
+                        id: plan?.id,
+                        title: plan?.title,
+                    })),
+                };
+            } else {
+                diagnostics.checks.groupPlans = {
+                    ok: false,
+                    status: plansRes.status,
+                    url: plansUrl,
+                    error: truncateText(await plansRes.text()),
+                };
+            }
+        } catch (error) {
+            diagnostics.checks.groupPlans = {
+                ok: false,
+                status: 0,
+                error: error && error.message ? error.message : String(error),
+            };
+        }
+    }
+
+    diagnostics.ok = diagnostics.env.ok && diagnostics.checks.token?.ok;
+    return diagnostics;
+}
+
 async function runBcDiagnostics() {
     const required = [
         "BC_TENANT_ID",
@@ -240,6 +415,16 @@ export default async function handler(req, res) {
         };
     }
 
+    let graphDiagnostics;
+    try {
+        graphDiagnostics = await runGraphDiagnostics();
+    } catch (error) {
+        graphDiagnostics = {
+            ok: false,
+            error: error && error.message ? error.message : String(error),
+        };
+    }
+
     res.status(200).json({
         ok: true,
         now: new Date().toISOString(),
@@ -248,6 +433,7 @@ export default async function handler(req, res) {
             missing: plannerEnvMissing,
         },
         bc: bcDiagnostics,
+        graph: graphDiagnostics,
         routes,
     });
 }
