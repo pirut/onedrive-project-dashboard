@@ -22,6 +22,26 @@ function normalizeBucketName(name?: string | null) {
     return trimmed || DEFAULT_BUCKET_NAME;
 }
 
+async function resolvePlannerBaseUrl(graphClient: GraphClient) {
+    const envBase = (process.env.PLANNER_WEB_BASE || "").trim();
+    if (envBase) return envBase.replace(/\/+$/, "");
+    const envDomain = (process.env.PLANNER_TENANT_DOMAIN || "").trim();
+    if (envDomain) return `https://tasks.office.com/${envDomain}`;
+    try {
+        const domain = await graphClient.getDefaultDomain();
+        if (domain) return `https://tasks.office.com/${domain}`;
+    } catch (error) {
+        logger.warn("Failed to resolve Planner tenant domain", { error: (error as Error)?.message });
+    }
+    return "https://tasks.office.com";
+}
+
+function buildPlannerPlanUrl(planId: string | undefined, baseUrl: string) {
+    if (!planId) return undefined;
+    const base = (baseUrl || "https://tasks.office.com").replace(/\/+$/, "");
+    return `${base}/Home/PlanViews/${planId}`;
+}
+
 function resolveBucketFromHeading(description?: string | null) {
     const heading = (description || "").trim();
     if (!heading) return { bucket: DEFAULT_BUCKET_NAME, skip: false };
@@ -382,12 +402,13 @@ export async function syncBcToPlanner(projectNo?: string) {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const bucketCache = new Map<string, Map<string, string>>();
+    const plannerBaseUrl = await resolvePlannerBaseUrl(graphClient);
 
     if (projectNo) {
         const tasks = await bcClient.listProjectTasks(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
         if (!tasks.length) return { projectNo, tasks: 0 };
-        await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo);
-        return { projectNo, tasks: tasks.length };
+        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo);
+        return { projectNo, tasks: tasks.length, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) };
     }
 
     let projects: { projectNo?: string }[] | null = null;
@@ -401,15 +422,17 @@ export async function syncBcToPlanner(projectNo?: string) {
     if (!projects || !projects.length) return { projects: 0, tasks: 0 };
 
     let totalTasks = 0;
+    const plans: { projectNo: string; planId?: string; planUrl?: string }[] = [];
     for (const project of projects) {
         const projNo = (project.projectNo || "").trim();
         if (!projNo) continue;
         const tasks = await bcClient.listProjectTasks(`projectNo eq '${projNo.replace(/'/g, "''")}'`);
         totalTasks += tasks.length;
-        await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo);
+        const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo);
+        plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) });
     }
 
-    return { projects: projects.length, tasks: totalTasks };
+    return { projects: projects.length, tasks: totalTasks, plans };
 }
 
 async function syncProjectTasks(
@@ -447,6 +470,8 @@ async function syncProjectTasks(
         const bucketId = await ensureBucket(graphClient, planId, currentBucket, bucketCache);
         await upsertPlannerTask(bcClient, graphClient, task, planId, bucketId, currentBucket, titlePrefix);
     }
+
+    return planId;
 }
 
 export async function runPollingSync() {

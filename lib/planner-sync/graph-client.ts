@@ -34,6 +34,13 @@ export type PlannerPlan = {
     [key: string]: unknown;
 };
 
+export type GraphOrganization = {
+    id?: string;
+    displayName?: string;
+    verifiedDomains?: { name?: string; isDefault?: boolean; isInitial?: boolean }[];
+    [key: string]: unknown;
+};
+
 export type GraphSubscription = {
     id: string;
     resource?: string;
@@ -118,6 +125,21 @@ export class GraphClient {
         const data = await readResponseJson<PlannerPlan>(res);
         if (!data) throw new Error("Graph createPlan response empty");
         return data;
+    }
+
+    async getOrganizations() {
+        const res = await this.request(`/organization`);
+        const data = await readResponseJson<{ value: GraphOrganization[] }>(res);
+        return data?.value || [];
+    }
+
+    async getDefaultDomain() {
+        const orgs = await this.getOrganizations();
+        const org = orgs[0];
+        if (!org?.verifiedDomains?.length) return null;
+        const domains = org.verifiedDomains;
+        const preferred = domains.find((domain) => domain?.isDefault) || domains.find((domain) => domain?.isInitial);
+        return (preferred || domains[0])?.name || null;
     }
 
     async listBuckets(planId: string) {
