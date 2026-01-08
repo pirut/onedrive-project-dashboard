@@ -14,60 +14,176 @@ type GraphNotification = {
 };
 
 export async function POST(request: Request) {
+    const startTime = Date.now();
     const url = new URL(request.url);
-    const validationToken = url.searchParams.get("validationToken");
-    if (validationToken) {
-        return new Response(validationToken, {
-            status: 200,
-            headers: { "Content-Type": "text/plain" },
-        });
-    }
+    const requestId = crypto.randomUUID();
+    
+    logger.info("POST /api/webhooks/graph/planner - Request received", {
+        requestId,
+        method: request.method,
+        url: url.toString(),
+        pathname: url.pathname,
+        searchParams: Object.fromEntries(url.searchParams),
+        headers: Object.fromEntries(request.headers.entries()),
+    });
 
-    let payload: { value?: GraphNotification[] } | null = null;
     try {
-        payload = await request.json();
-    } catch {
-        return new Response(JSON.stringify({ ok: false, error: "Invalid JSON" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-        });
-    }
+        const validationToken = url.searchParams.get("validationToken");
+        if (validationToken) {
+            logger.info("Validation token received - responding to Graph subscription validation", { requestId });
+            return new Response(validationToken, {
+                status: 200,
+                headers: { 
+                    "Content-Type": "text/plain",
+                    "X-Request-ID": requestId,
+                },
+            });
+        }
 
-    const notifications = payload?.value || [];
-    if (!notifications.length) {
-        return new Response(JSON.stringify({ ok: true, received: 0 }), {
-            status: 202,
-            headers: { "Content-Type": "application/json" },
-        });
-    }
-
-    const { clientState } = getGraphConfig();
-    const items = notifications
-        .map((notification) => {
-            if (notification.clientState !== clientState) {
-                logger.warn("Graph notification clientState mismatch", {
-                    subscriptionId: notification.subscriptionId,
+        let payload: { value?: GraphNotification[] } | null = null;
+        try {
+            const bodyText = await request.text();
+            logger.debug("Request body received", { requestId, bodyLength: bodyText.length });
+            if (bodyText) {
+                payload = JSON.parse(bodyText);
+                logger.debug("Request body parsed", { 
+                    requestId, 
+                    notificationCount: payload?.value?.length || 0,
                 });
-                return null;
             }
-            const taskId = notification.resourceData?.id || notification.resource?.split("/").pop();
-            if (!taskId) return null;
-            return {
-                taskId,
-                subscriptionId: notification.subscriptionId,
-                receivedAt: new Date().toISOString(),
-            };
-        })
-        .filter(Boolean) as { taskId: string; subscriptionId?: string; receivedAt: string }[];
+        } catch (parseError) {
+            const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+            logger.error("Failed to parse request body", { 
+                requestId, 
+                error: errorMessage,
+                stack: parseError instanceof Error ? parseError.stack : undefined,
+            });
+            return new Response(JSON.stringify({ ok: false, error: "Invalid JSON", requestId }), {
+                status: 400,
+                headers: { 
+                    "Content-Type": "application/json",
+                    "X-Request-ID": requestId,
+                },
+            });
+        }
 
-    if (items.length) {
-        enqueueAndProcessNotifications(items).catch((error) => {
-            logger.error("Failed to enqueue planner notifications", { error: (error as Error)?.message });
+        const notifications = payload?.value || [];
+        logger.info("Processing notifications", { requestId, count: notifications.length });
+        
+        if (!notifications.length) {
+            logger.info("No notifications in payload", { requestId });
+            return new Response(JSON.stringify({ ok: true, received: 0, requestId }), {
+                status: 202,
+                headers: { 
+                    "Content-Type": "application/json",
+                    "X-Request-ID": requestId,
+                },
+            });
+        }
+
+        const { clientState } = getGraphConfig();
+        logger.debug("Validating notifications", { requestId, expectedClientState: clientState });
+        
+        const items = notifications
+            .map((notification, index) => {
+                logger.debug("Processing notification", { 
+                    requestId, 
+                    index, 
+                    subscriptionId: notification.subscriptionId,
+                    resource: notification.resource,
+                    clientState: notification.clientState,
+                });
+                
+                if (notification.clientState !== clientState) {
+                    logger.warn("Graph notification clientState mismatch", {
+                        requestId,
+                        subscriptionId: notification.subscriptionId,
+                        expected: clientState,
+                        received: notification.clientState,
+                    });
+                    return null;
+                }
+                const taskId = notification.resourceData?.id || notification.resource?.split("/").pop();
+                if (!taskId) {
+                    logger.warn("No task ID found in notification", { 
+                        requestId, 
+                        notification,
+                    });
+                    return null;
+                }
+                logger.debug("Extracted task ID from notification", { requestId, taskId });
+                return {
+                    taskId,
+                    subscriptionId: notification.subscriptionId,
+                    receivedAt: new Date().toISOString(),
+                };
+            })
+            .filter(Boolean) as { taskId: string; subscriptionId?: string; receivedAt: string }[];
+
+        logger.info("Valid notifications extracted", { requestId, validCount: items.length, totalCount: notifications.length });
+
+        if (items.length) {
+            logger.info("Enqueueing notifications for processing", { requestId, count: items.length });
+            enqueueAndProcessNotifications(items).catch((error) => {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                logger.error("Failed to enqueue planner notifications", { 
+                    requestId,
+                    error: errorMessage,
+                    stack: error instanceof Error ? error.stack : undefined,
+                });
+            });
+        }
+
+        const duration = Date.now() - startTime;
+        logger.info("POST /api/webhooks/graph/planner - Success", {
+            requestId,
+            duration,
+            received: items.length,
+        });
+
+        return new Response(JSON.stringify({ ok: true, received: items.length, requestId, duration }), {
+            status: 202,
+            headers: { 
+                "Content-Type": "application/json",
+                "X-Request-ID": requestId,
+            },
+        });
+    } catch (error) {
+        const duration = Date.now() - startTime;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        
+        logger.error("POST /api/webhooks/graph/planner - Unexpected error", {
+            requestId,
+            duration,
+            error: errorMessage,
+            stack: errorStack,
+        });
+        
+        return new Response(JSON.stringify({ 
+            ok: false, 
+            error: errorMessage,
+            requestId,
+            duration,
+            ...(process.env.NODE_ENV === "development" ? { stack: errorStack } : {}),
+        }), {
+            status: 500,
+            headers: { 
+                "Content-Type": "application/json",
+                "X-Request-ID": requestId,
+            },
         });
     }
+}
 
-    return new Response(JSON.stringify({ ok: true, received: items.length }), {
-        status: 202,
+// Handle unsupported methods
+export async function GET() {
+    return new Response(JSON.stringify({ 
+        ok: false, 
+        error: "Method not allowed. Use POST.",
+        supportedMethods: ["POST"],
+    }), {
+        status: 405,
         headers: { "Content-Type": "application/json" },
     });
 }

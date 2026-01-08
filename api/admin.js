@@ -387,6 +387,29 @@ async function dashboardView(req) {
 
   <div class="panel">
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+      <div style="font-weight:600">API Debugging</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button type="button" id="debug-refresh-btn">Refresh Debug Info</button>
+        <div class="small muted">Test routes and view request details</div>
+      </div>
+    </div>
+    <div class="row" style="margin:8px 0 12px 0">
+      <button type="button" id="debug-test-btn" style="background:#2b61d1;color:#fff">Test Debug Endpoint</button>
+      <button type="button" id="debug-clear-btn" style="background:#1f2a44;color:#e6ecff">Clear</button>
+    </div>
+    <div id="debug-status" class="small muted" style="margin-top:8px">Click "Test Debug Endpoint" to fetch debug information.</div>
+    <pre id="debug-output" class="log-block" style="display:none;max-height:400px;overflow:auto"></pre>
+    <div id="debug-routes" style="margin-top:12px;display:none">
+      <div style="font-weight:600;margin-bottom:8px">Available API Routes:</div>
+      <table>
+        <thead><tr><th>Method</th><th>Route</th><th>Description</th><th>Action</th></tr></thead>
+        <tbody id="debug-routes-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">Submissions</div>
       <div style="display:flex;align-items:center;gap:8px">
         <button type="button" id="refresh-btn">Refresh</button>
@@ -974,6 +997,142 @@ async function dashboardView(req) {
         }
       }
       if(refreshBtn){ refreshBtn.addEventListener('click', handleRefresh); }
+
+      // Debug panel handlers
+      var debugTestBtn = document.getElementById('debug-test-btn');
+      var debugClearBtn = document.getElementById('debug-clear-btn');
+      var debugRefreshBtn = document.getElementById('debug-refresh-btn');
+      var debugStatusEl = document.getElementById('debug-status');
+      var debugOutputEl = document.getElementById('debug-output');
+      var debugRoutesEl = document.getElementById('debug-routes');
+      var debugRoutesTbody = document.getElementById('debug-routes-tbody');
+      
+      function setDebugStatus(text, tone){
+        if(!debugStatusEl) return;
+        var toneClass = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'muted';
+        debugStatusEl.textContent = text;
+        debugStatusEl.className = 'small ' + toneClass;
+      }
+      
+      function renderDebugOutput(payload){
+        if(!debugOutputEl) return;
+        if(payload == null){
+          debugOutputEl.style.display = 'none';
+          debugOutputEl.textContent = '';
+          return;
+        }
+        var text = '';
+        try { text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2); }
+        catch(e){ text = String(payload); }
+        debugOutputEl.textContent = text;
+        debugOutputEl.style.display = 'block';
+      }
+      
+      function renderDebugRoutes(routes){
+        if(!debugRoutesTbody || !debugRoutesEl) return;
+        if(!routes || typeof routes !== 'object'){
+          debugRoutesEl.style.display = 'none';
+          return;
+        }
+        
+        var rows = Object.keys(routes).map(function(route){
+          var desc = routes[route];
+          var parts = route.split(' ');
+          var method = parts[0] || 'GET';
+          var path = parts.slice(1).join(' ') || route;
+          var testBtn = '<button type="button" onclick="testRoute(\'' + htmlEscape(route) + '\')" style="background:#2b61d1;color:#fff;border:0;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px">Test</button>';
+          return '<tr>' +
+            '<td><span class="mono small">' + htmlEscape(method) + '</span></td>' +
+            '<td><span class="mono small">' + htmlEscape(path) + '</span></td>' +
+            '<td>' + htmlEscape(desc) + '</td>' +
+            '<td>' + testBtn + '</td>' +
+            '</tr>';
+        }).join('');
+        
+        debugRoutesTbody.innerHTML = rows || '<tr><td colspan="4" class="muted">No routes available</td></tr>';
+        debugRoutesEl.style.display = 'block';
+      }
+      
+      window.testRoute = function(route){
+        var parts = route.split(' ');
+        var method = parts[0] || 'GET';
+        var path = parts.slice(1).join(' ') || route;
+        setDebugStatus('Testing ' + route + '…', 'muted');
+        renderDebugOutput(null);
+        fetch(path, {
+          method: method,
+          headers: method === 'POST' ? { 'Content-Type': 'application/json' } : {}
+        })
+        .then(function(res){
+          return res.text().then(function(text){
+            var payload;
+            try { payload = JSON.parse(text); }
+            catch(e){ payload = text; }
+            return { ok: res.ok, status: res.status, payload: payload };
+          });
+        })
+        .then(function(result){
+          if(result.ok){
+            setDebugStatus('Route test successful (HTTP ' + result.status + ')', 'ok');
+          } else {
+            setDebugStatus('Route test failed (HTTP ' + result.status + ')', 'bad');
+          }
+          renderDebugOutput(result);
+        })
+        .catch(function(err){
+          setDebugStatus('Route test error: ' + (err && err.message ? err.message : 'error'), 'bad');
+          renderDebugOutput({ error: err && err.message ? err.message : String(err) });
+        });
+      };
+      
+      if(debugTestBtn){
+        debugTestBtn.addEventListener('click', async function(){
+          setDebugStatus('Fetching debug information…', 'muted');
+          renderDebugOutput(null);
+          try{
+            var res = await fetch('/api/debug', {
+              method: 'GET',
+              headers: { 'cache-control': 'no-cache' }
+            });
+            var payload;
+            var ct = res.headers.get('content-type') || '';
+            if(ct.indexOf('application/json') !== -1){
+              payload = await res.json();
+            } else {
+              var raw = await res.text();
+              try{ payload = JSON.parse(raw); }
+              catch(e){ throw new Error(raw || ('HTTP ' + res.status)); }
+            }
+            if(!res.ok || (payload && payload.ok === false)){
+              var message = payload && payload.error ? payload.error : ('HTTP ' + res.status);
+              throw new Error(message);
+            }
+            setDebugStatus('Debug information retrieved successfully', 'ok');
+            renderDebugOutput(payload);
+            if(payload && payload.routes){
+              renderDebugRoutes(payload.routes);
+            }
+          }catch(err){
+            setDebugStatus('Failed to fetch debug info: ' + (err && err.message ? err.message : 'error'), 'bad');
+            renderDebugOutput({ error: err && err.message ? err.message : String(err) });
+          }
+        });
+      }
+      
+      if(debugClearBtn){
+        debugClearBtn.addEventListener('click', function(){
+          setDebugStatus('Click "Test Debug Endpoint" to fetch debug information.', 'muted');
+          renderDebugOutput(null);
+          if(debugRoutesEl) debugRoutesEl.style.display = 'none';
+        });
+      }
+      
+      if(debugRefreshBtn){
+        debugRefreshBtn.addEventListener('click', function(){
+          if(debugTestBtn) debugTestBtn.click();
+        });
+      }
+
       fetchAndRender();
     })();
   </script>`;
