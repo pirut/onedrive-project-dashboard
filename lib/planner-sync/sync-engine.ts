@@ -111,6 +111,12 @@ function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
     return `${prefix || ""}${base}`;
 }
 
+function filterTasksForProject(tasks: BcProjectTask[], projectNo: string) {
+    const normalized = (projectNo || "").trim().toLowerCase();
+    if (!normalized) return tasks;
+    return tasks.filter((task) => (task.projectNo || "").trim().toLowerCase() === normalized);
+}
+
 function buildBcPatch(task: BcProjectTask, updates: Record<string, unknown>) {
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
@@ -405,7 +411,15 @@ export async function syncBcToPlanner(projectNo?: string) {
     const plannerBaseUrl = await resolvePlannerBaseUrl(graphClient);
 
     if (projectNo) {
-        const tasks = await bcClient.listProjectTasks(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
+        const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
+        const tasks = filterTasksForProject(rawTasks, projectNo);
+        if (rawTasks.length && tasks.length !== rawTasks.length) {
+            logger.warn("Filtered BC tasks by projectNo", {
+                projectNo,
+                before: rawTasks.length,
+                after: tasks.length,
+            });
+        }
         if (!tasks.length) return { projectNo, tasks: 0 };
         const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo);
         return { projectNo, tasks: tasks.length, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) };
@@ -426,7 +440,15 @@ export async function syncBcToPlanner(projectNo?: string) {
     for (const project of projects) {
         const projNo = (project.projectNo || "").trim();
         if (!projNo) continue;
-        const tasks = await bcClient.listProjectTasks(`projectNo eq '${projNo.replace(/'/g, "''")}'`);
+        const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projNo.replace(/'/g, "''")}'`);
+        const tasks = filterTasksForProject(rawTasks, projNo);
+        if (rawTasks.length && tasks.length !== rawTasks.length) {
+            logger.warn("Filtered BC tasks by projectNo", {
+                projectNo: projNo,
+                before: rawTasks.length,
+                after: tasks.length,
+            });
+        }
         totalTasks += tasks.length;
         const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo);
         plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) });
