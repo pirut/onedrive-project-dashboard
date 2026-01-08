@@ -869,6 +869,12 @@ async function dashboardView(req) {
         setPlannerBusy(true);
         logPlannerEvent(options.label + ' started', 'info');
         logPlannerEvent('Request: ' + method + ' ' + url, 'info');
+        if(typeof fetch !== 'function'){
+          setPlannerStatus('Fetch is not available in this browser.', 'bad');
+          logPlannerEvent('Fetch is not available in this browser.', 'bad');
+          setPlannerBusy(false);
+          return;
+        }
         if(body){
           try {
             logPlannerEvent('Body: ' + JSON.stringify(body), 'info');
@@ -945,6 +951,23 @@ async function dashboardView(req) {
             url: '/api/webhooks/graph/planner?validationToken=' + encodeURIComponent(token),
             method: 'POST'
           });
+        });
+      }
+
+      if(plannerStatusEl){
+        logPlannerEvent('Planner UI ready', 'ok');
+      }
+
+      if(typeof window !== 'undefined'){
+        window.addEventListener('error', function(ev){
+          var msg = ev && ev.message ? ev.message : 'Unknown script error';
+          setPlannerStatus('Script error: ' + msg, 'bad');
+          logPlannerEvent('Script error: ' + msg, 'bad');
+        });
+        window.addEventListener('unhandledrejection', function(ev){
+          var reason = ev && ev.reason ? (ev.reason.message || ev.reason) : 'Unhandled rejection';
+          setPlannerStatus('Unhandled rejection: ' + reason, 'bad');
+          logPlannerEvent('Unhandled rejection: ' + reason, 'bad');
         });
       }
 
