@@ -124,9 +124,9 @@ export class GraphClient {
     }
 
     async createPlan(groupId: string, title: string) {
-        const res = await this.request(`/groups/${groupId}/planner/plans`, {
+        const res = await this.request(`/planner/plans`, {
             method: "POST",
-            body: JSON.stringify({ title }),
+            body: JSON.stringify({ title, owner: groupId }),
         });
         const data = await readResponseJson<PlannerPlan>(res);
         if (!data) throw new Error("Graph createPlan response empty");
