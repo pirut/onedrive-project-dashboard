@@ -1,6 +1,6 @@
 import { BusinessCentralClient, BcProjectTask } from "./bc-client";
 import { GraphClient, PlannerTask, PlannerTaskDetails } from "./graph-client";
-import { getPlannerConfig, getSyncConfig } from "./config";
+import { getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
 import { logger } from "./logger";
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
@@ -33,12 +33,20 @@ async function resolvePlannerBaseUrl(graphClient: GraphClient) {
     } catch (error) {
         logger.warn("Failed to resolve Planner tenant domain", { error: (error as Error)?.message });
     }
-    return "https://tasks.office.com";
+    return "https://planner.cloud.microsoft";
 }
 
-function buildPlannerPlanUrl(planId: string | undefined, baseUrl: string) {
+function buildPlannerPlanUrl(planId: string | undefined, baseUrl: string, tenantId?: string) {
     if (!planId) return undefined;
-    const base = (baseUrl || "https://tasks.office.com").replace(/\/+$/, "");
+    const base = (baseUrl || "https://planner.cloud.microsoft").replace(/\/+$/, "");
+    if (base.includes("planner.cloud.microsoft")) {
+        const tid = tenantId ? `?tid=${encodeURIComponent(tenantId)}` : "";
+        return `${base}/webui/plan/${planId}/view/board${tid}`;
+    }
+    if (base.includes("planner.office.com")) {
+        const tid = tenantId ? `?tid=${encodeURIComponent(tenantId)}` : "";
+        return `${base}/plan/${planId}${tid}`;
+    }
     return `${base}/Home/PlanViews/${planId}`;
 }
 
@@ -431,6 +439,7 @@ export async function syncBcToPlanner(projectNo?: string) {
     const graphClient = new GraphClient();
     const bucketCache = new Map<string, Map<string, string>>();
     const plannerBaseUrl = await resolvePlannerBaseUrl(graphClient);
+    const { tenantId } = getGraphConfig();
 
     if (projectNo) {
         const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
@@ -444,7 +453,7 @@ export async function syncBcToPlanner(projectNo?: string) {
         }
         if (!tasks.length) return { projectNo, tasks: 0 };
         const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projectNo);
-        return { projectNo, tasks: tasks.length, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) };
+        return { projectNo, tasks: tasks.length, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl, tenantId) };
     }
 
     let projects: { projectNo?: string }[] | null = null;
@@ -473,7 +482,7 @@ export async function syncBcToPlanner(projectNo?: string) {
         }
         totalTasks += tasks.length;
         const planId = await syncProjectTasks(bcClient, graphClient, tasks, bucketCache, projNo);
-        plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl) });
+        plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl, tenantId) });
     }
 
     return { projects: projects.length, tasks: totalTasks, plans };
