@@ -8,6 +8,17 @@ function truncateText(text, maxLength = 1000) {
     return `${text.slice(0, maxLength)}...`;
 }
 
+function parseEntitySets(metadataText, limit = 200) {
+    if (!metadataText) return [];
+    const entitySets = [];
+    const regex = /<EntitySet\s+Name="([^"]+)"\s+EntityType="([^"]+)"\s*\/?>/g;
+    let match;
+    while ((match = regex.exec(metadataText)) && entitySets.length < limit) {
+        entitySets.push({ name: match[1], entityType: match[2] });
+    }
+    return entitySets;
+}
+
 async function runBcDiagnostics() {
     const required = [
         "BC_TENANT_ID",
@@ -99,12 +110,13 @@ async function runBcDiagnostics() {
     try {
         const metadataUrl = `${baseUrl}/$metadata`;
         const metadataRes = await fetch(metadataUrl, { headers });
-        const metadataText = metadataRes.ok ? "" : truncateText(await metadataRes.text());
+        const metadataText = await metadataRes.text();
         diagnostics.checks.customApiMetadata = {
             ok: metadataRes.ok,
             status: metadataRes.status,
             url: metadataUrl,
-            error: metadataText || undefined,
+            entitySets: metadataRes.ok ? parseEntitySets(metadataText) : undefined,
+            error: metadataRes.ok ? undefined : truncateText(metadataText),
         };
     } catch (error) {
         diagnostics.checks.customApiMetadata = {
