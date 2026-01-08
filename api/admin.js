@@ -62,16 +62,7 @@ function sessionCookie(username) {
     const value = Buffer.from(`${raw}|${sig}`).toString("base64url");
     const maxAge = 7 * 24 * 60 * 60; // 7 days
     const secure = process.env.NODE_ENV === "production";
-    const cookie = [
-        `admin_session=${value}`,
-        `Path=/` ,
-        `HttpOnly`,
-        `SameSite=Lax`,
-        `Max-Age=${maxAge}`,
-        secure ? "Secure" : null,
-    ]
-        .filter(Boolean)
-        .join("; ");
+    const cookie = [`admin_session=${value}`, `Path=/`, `HttpOnly`, `SameSite=Lax`, `Max-Age=${maxAge}`, secure ? "Secure" : null].filter(Boolean).join("; ");
     return cookie;
 }
 
@@ -96,12 +87,7 @@ function verifySession(cookieVal) {
 }
 
 function htmlEscape(s) {
-    return String(s)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#39;");
+    return String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function layout(title, bodyHtml) {
@@ -141,9 +127,10 @@ function layout(title, bodyHtml) {
 }
 
 function loginView(msg = null) {
-    const warn = (!ADMIN_PASSWORD || !ADMIN_SESSION_SECRET)
-        ? `<div class="panel"><div class="bad">Admin password/secret not configured. Set <span class="mono">ADMIN_PASSWORD</span> and <span class="mono">ADMIN_SESSION_SECRET</span>.</div></div>`
-        : "";
+    const warn =
+        !ADMIN_PASSWORD || !ADMIN_SESSION_SECRET
+            ? `<div class="panel"><div class="bad">Admin password/secret not configured. Set <span class="mono">ADMIN_PASSWORD</span> and <span class="mono">ADMIN_SESSION_SECRET</span>.</div></div>`
+            : "";
     const inner = `
   <h1>Admin Login</h1>
   ${warn}
@@ -185,7 +172,7 @@ function envPresence(name) {
 }
 
 async function dashboardView(req) {
-    const origin = `${(req.headers["x-forwarded-proto"] || "https")}://${req.headers.host}`;
+    const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
 
     // Gather health info
     const endpoints = [
@@ -193,11 +180,24 @@ async function dashboardView(req) {
         { name: "/api/submissions", url: `${origin}/api/submissions?limit=5`, desc: "Recent logs (KV)" },
         { name: "/api/kv-diag", url: `${origin}/api/kv-diag`, desc: "KV diagnostics" },
     ];
-    const checks = await Promise.all(
-        endpoints.map(async (e) => ({ ...e, result: await ping(e.url) }))
-    );
+    const checks = await Promise.all(endpoints.map(async (e) => ({ ...e, result: await ping(e.url) })));
 
     const graphEnvOk = ["TENANT_ID", "MSAL_CLIENT_ID", "MSAL_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"].every(envPresence);
+    const plannerEnvRequired = [
+        "BC_TENANT_ID",
+        "BC_ENVIRONMENT",
+        "BC_COMPANY_ID",
+        "BC_CLIENT_ID",
+        "BC_CLIENT_SECRET",
+        "GRAPH_TENANT_ID",
+        "GRAPH_CLIENT_ID",
+        "GRAPH_CLIENT_SECRET",
+        "GRAPH_SUBSCRIPTION_CLIENT_STATE",
+        "PLANNER_GROUP_ID",
+        "SYNC_MODE",
+    ];
+    const plannerEnvMissing = plannerEnvRequired.filter((name) => !envPresence(name));
+    const plannerEnvOk = plannerEnvMissing.length === 0;
     const kvDiag = await kvDiagnostics();
     const items = await listSubmissions(500);
 
@@ -227,9 +227,9 @@ async function dashboardView(req) {
         .map((c) => {
             const status = c.result.ok ? `<span class="ok">OK</span>` : `<span class="bad">FAIL</span>`;
             const extra = c.result.status ? `${c.result.status}` : c.result.error ? htmlEscape(c.result.error) : "";
-            return `<tr><td><a class="mono" href="${htmlEscape(c.url)}" target="_blank" rel="noreferrer">${htmlEscape(
-                c.name
-            )}</a></td><td>${htmlEscape(c.desc)}</td><td>${status}</td><td class="mono small">${extra}</td></tr>`;
+            return `<tr><td><a class="mono" href="${htmlEscape(c.url)}" target="_blank" rel="noreferrer">${htmlEscape(c.name)}</a></td><td>${htmlEscape(
+                c.desc
+            )}</td><td>${status}</td><td class="mono small">${extra}</td></tr>`;
         })
         .join("");
 
@@ -240,12 +240,7 @@ async function dashboardView(req) {
             const files = Array.isArray(it.files) ? it.files : [];
             const filesCount = files.length ? `${files.length} file${files.length === 1 ? "" : "s"}` : "";
             const filesLinks = files
-                .map(
-                    (f) =>
-                        `<a href="${htmlEscape(f.url || "")}" target="_blank" rel="noreferrer">${htmlEscape(
-                            f.filename || f.url || "file"
-                        )}</a>`
-                )
+                .map((f) => `<a href="${htmlEscape(f.url || "")}" target="_blank" rel="noreferrer">${htmlEscape(f.filename || f.url || "file")}</a>`)
                 .join(", ");
             const detailsParts = [
                 it.folderName ? `folder: <span class=\"mono\">${htmlEscape(it.folderName)}</span>` : null,
@@ -257,11 +252,12 @@ async function dashboardView(req) {
                 it.error ? `error: ${htmlEscape(it.error)}` : null,
             ].filter(Boolean);
             const mainDetails = detailsParts.join(" · ");
-            const stepsBlock = Array.isArray(it.steps) && it.steps.length
-                ? `<details class=\"log\"><summary>Logs (${it.steps.length})</summary><ul class=\"step-list\">${it.steps
-                      .map((step) => formatStep(step))
-                      .join("")}</ul></details>`
-                : "";
+            const stepsBlock =
+                Array.isArray(it.steps) && it.steps.length
+                    ? `<details class=\"log\"><summary>Logs (${it.steps.length})</summary><ul class=\"step-list\">${it.steps
+                          .map((step) => formatStep(step))
+                          .join("")}</ul></details>`
+                    : "";
             const responseBlock = it.errorResponse
                 ? `<details class=\"log\"><summary>Error response</summary><pre class=\"log-block\">${htmlEscape(
                       it.errorResponse.length > 2000 ? `${it.errorResponse.slice(0, 2000)}…` : it.errorResponse
@@ -313,6 +309,11 @@ async function dashboardView(req) {
       <div>${ADMIN_PASSWORD && ADMIN_SESSION_SECRET ? '<span class="ok">Enabled</span>' : '<span class="warn">Setup needed</span>'}</div>
       <div class="small mono">ADMIN_USERNAME=${htmlEscape(ADMIN_USERNAME)}</div>
     </div>
+    <div class="panel">
+      <div class="muted small">Planner sync env</div>
+      <div>${plannerEnvOk ? '<span class="ok">Configured</span>' : '<span class="bad">Missing</span>'}</div>
+      <div class="small mono">${plannerEnvOk ? "All required vars present" : htmlEscape(plannerEnvMissing.join(", "))}</div>
+    </div>
   </div>
 
   <div class="panel">
@@ -356,6 +357,36 @@ async function dashboardView(req) {
 
   <div class="panel">
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+      <div style="font-weight:600">Planner Sync</div>
+      <div class="small muted">Run sync + subscriptions</div>
+    </div>
+    <div class="row">
+      <label for="planner-project-no">Project No (optional)</label>
+      <input id="planner-project-no" placeholder="P-100" />
+    </div>
+    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" id="planner-run-bc">Run BC → Planner</button>
+      <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+    </div>
+    <div class="row">
+      <label for="planner-notify-url">Notification URL (optional)</label>
+      <input id="planner-notify-url" placeholder="https://your-domain.com/api/webhooks/graph/planner" />
+    </div>
+    <div class="row">
+      <label for="planner-plan-ids">Plan IDs (optional, comma-separated)</label>
+      <input id="planner-plan-ids" placeholder="planId1, planId2" />
+    </div>
+    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" id="planner-create-subs" style="background:#0f8b4c;color:#fff">Create subscriptions</button>
+      <button type="button" id="planner-renew-subs" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
+      <button type="button" id="planner-test-webhook" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
+    </div>
+    <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
+    <pre id="planner-output" class="log-block" style="display:none"></pre>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">Submissions</div>
       <div style="display:flex;align-items:center;gap:8px">
         <button type="button" id="refresh-btn">Refresh</button>
@@ -391,6 +422,16 @@ async function dashboardView(req) {
       var uspsVerifyBtn = document.getElementById('usps-verify-btn');
       var exportCsvBtn = document.getElementById('export-active-csv');
       var exportJsonBtn = document.getElementById('export-active-json');
+      var plannerProjectInput = document.getElementById('planner-project-no');
+      var plannerNotifyInput = document.getElementById('planner-notify-url');
+      var plannerPlanIdsInput = document.getElementById('planner-plan-ids');
+      var plannerRunBcBtn = document.getElementById('planner-run-bc');
+      var plannerRunPollBtn = document.getElementById('planner-run-poll');
+      var plannerCreateSubsBtn = document.getElementById('planner-create-subs');
+      var plannerRenewSubsBtn = document.getElementById('planner-renew-subs');
+      var plannerTestWebhookBtn = document.getElementById('planner-test-webhook');
+      var plannerStatusEl = document.getElementById('planner-status');
+      var plannerOutputEl = document.getElementById('planner-output');
       var uspsLoading = false;
       var uspsDownloadUrl = null;
       var uspsPendingDownloadUrl = null;
@@ -417,6 +458,25 @@ async function dashboardView(req) {
         var toneClass = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'muted';
         uspsStatusEl.textContent = text;
         uspsStatusEl.className = 'small ' + toneClass;
+      }
+      function setPlannerStatus(text, tone){
+        if(!plannerStatusEl) return;
+        var toneClass = tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : tone === 'warn' ? 'warn' : 'muted';
+        plannerStatusEl.textContent = text;
+        plannerStatusEl.className = 'small ' + toneClass;
+      }
+      function renderPlannerOutput(payload){
+        if(!plannerOutputEl) return;
+        if(payload == null){
+          plannerOutputEl.style.display = 'none';
+          plannerOutputEl.textContent = '';
+          return;
+        }
+        var text = '';
+        try { text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2); }
+        catch(e){ text = String(payload); }
+        plannerOutputEl.textContent = text;
+        plannerOutputEl.style.display = 'block';
       }
       function renderUspsPreview(rows){
         if(!uspsPreviewEl) return;
@@ -757,6 +817,75 @@ async function dashboardView(req) {
         });
       }
       input.addEventListener('input', function(){ render(cache); });
+      async function runPlannerRequest(options){
+        var url = options.url;
+        var body = options.body;
+        var method = options.method || 'POST';
+        setPlannerStatus(options.label + '…', 'muted');
+        renderPlannerOutput(null);
+        try{
+          var res = await fetch(url, {
+            method: method,
+            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            body: body ? JSON.stringify(body) : undefined
+          });
+          var ct = res.headers.get('content-type') || '';
+          var payload;
+          if(ct.indexOf('application/json') !== -1){
+            payload = await res.json();
+          } else {
+            payload = await res.text();
+          }
+          if(!res.ok || (payload && payload.ok === false)){
+            var msg = payload && payload.error ? payload.error : ('HTTP ' + res.status);
+            throw new Error(msg);
+          }
+          setPlannerStatus(options.label + ' complete.', 'ok');
+          renderPlannerOutput(payload);
+          return;
+        }catch(err){
+          setPlannerStatus(options.label + ' failed: ' + (err && err.message ? err.message : 'error'), 'bad');
+          renderPlannerOutput(err && err.message ? err.message : err);
+        }
+      }
+      if(plannerRunBcBtn){
+        plannerRunBcBtn.addEventListener('click', function(){
+          var projectNo = plannerProjectInput && plannerProjectInput.value ? plannerProjectInput.value.trim() : '';
+          var body = projectNo ? { projectNo: projectNo } : undefined;
+          runPlannerRequest({ label: 'BC → Planner sync', url: '/api/sync/run-bc-to-planner', body: body });
+        });
+      }
+      if(plannerRunPollBtn){
+        plannerRunPollBtn.addEventListener('click', function(){
+          runPlannerRequest({ label: 'Polling sync', url: '/api/sync/run-poll' });
+        });
+      }
+      if(plannerCreateSubsBtn){
+        plannerCreateSubsBtn.addEventListener('click', function(){
+          var notificationUrl = plannerNotifyInput && plannerNotifyInput.value ? plannerNotifyInput.value.trim() : '';
+          var planIdsRaw = plannerPlanIdsInput && plannerPlanIdsInput.value ? plannerPlanIdsInput.value : '';
+          var planIds = planIdsRaw.split(',').map(function(id){ return id.trim(); }).filter(Boolean);
+          var body = {};
+          if(notificationUrl) body.notificationUrl = notificationUrl;
+          if(planIds.length) body.planIds = planIds;
+          runPlannerRequest({ label: 'Create subscriptions', url: '/api/sync/subscriptions/create', body: Object.keys(body).length ? body : undefined });
+        });
+      }
+      if(plannerRenewSubsBtn){
+        plannerRenewSubsBtn.addEventListener('click', function(){
+          runPlannerRequest({ label: 'Renew subscriptions', url: '/api/sync/subscriptions/renew' });
+        });
+      }
+      if(plannerTestWebhookBtn){
+        plannerTestWebhookBtn.addEventListener('click', function(){
+          var token = 'test_' + Math.random().toString(36).slice(2, 10);
+          runPlannerRequest({
+            label: 'Webhook validation',
+            url: '/api/webhooks/graph/planner?validationToken=' + encodeURIComponent(token),
+            method: 'POST'
+          });
+        });
+      }
 
       async function downloadActiveProjects(format){
         var target = format === 'json' ? exportJsonBtn : exportCsvBtn;
