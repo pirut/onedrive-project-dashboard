@@ -364,10 +364,15 @@ async function dashboardView(req) {
       <label for="planner-project-no">Project No (optional)</label>
       <input id="planner-project-no" placeholder="P-100" />
     </div>
+    <div class="row">
+      <label for="planner-debug-task-no">Task No (debug)</label>
+      <input id="planner-debug-task-no" placeholder="1100" />
+    </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
       <button type="button" id="planner-run-bc">Run BC → Planner</button>
       <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
       <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+      <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>
