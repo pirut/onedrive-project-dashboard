@@ -365,8 +365,8 @@ async function dashboardView(req) {
       <input id="planner-project-no" placeholder="P-100" />
     </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" id="planner-run-bc">Run BC → Planner</button>
-      <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+      <button type="button" id="planner-run-bc" onclick="if(window.__plannerAction){window.__plannerAction('bc');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}">Run BC → Planner</button>
+      <button type="button" id="planner-run-poll" onclick="if(window.__plannerAction){window.__plannerAction('poll');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Run polling</button>
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>
@@ -377,9 +377,9 @@ async function dashboardView(req) {
       <input id="planner-plan-ids" placeholder="planId1, planId2" />
     </div>
     <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" id="planner-create-subs" style="background:#0f8b4c;color:#fff">Create subscriptions</button>
-      <button type="button" id="planner-renew-subs" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
-      <button type="button" id="planner-test-webhook" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
+      <button type="button" id="planner-create-subs" onclick="if(window.__plannerAction){window.__plannerAction('create-subs');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#0f8b4c;color:#fff">Create subscriptions</button>
+      <button type="button" id="planner-renew-subs" onclick="if(window.__plannerAction){window.__plannerAction('renew-subs');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
+      <button type="button" id="planner-test-webhook" onclick="if(window.__plannerAction){window.__plannerAction('test-webhook');}else{document.getElementById('planner-status').textContent='Planner JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
     </div>
     <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
     <pre id="planner-output" class="log-block" style="display:none"></pre>
@@ -391,13 +391,13 @@ async function dashboardView(req) {
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">API Debugging</div>
       <div style="display:flex;align-items:center;gap:8px">
-        <button type="button" id="debug-refresh-btn">Refresh Debug Info</button>
+        <button type="button" id="debug-refresh-btn" onclick="if(window.__debugAction){window.__debugAction('refresh');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}">Refresh Debug Info</button>
         <div class="small muted">Test routes and view request details</div>
       </div>
     </div>
     <div class="row" style="margin:8px 0 12px 0">
-      <button type="button" id="debug-test-btn" style="background:#2b61d1;color:#fff">Test Debug Endpoint</button>
-      <button type="button" id="debug-clear-btn" style="background:#1f2a44;color:#e6ecff">Clear</button>
+      <button type="button" id="debug-test-btn" onclick="if(window.__debugAction){window.__debugAction('test');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#2b61d1;color:#fff">Test Debug Endpoint</button>
+      <button type="button" id="debug-clear-btn" onclick="if(window.__debugAction){window.__debugAction('clear');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Clear</button>
     </div>
     <div id="debug-status" class="small muted" style="margin-top:8px">Click "Test Debug Endpoint" to fetch debug information.</div>
     <pre id="debug-output" class="log-block" style="display:none;max-height:400px;overflow:auto"></pre>
@@ -953,6 +953,15 @@ async function dashboardView(req) {
           });
         });
       }
+      window.__plannerAction = function(action){
+        if(action === 'bc' && plannerRunBcBtn){ plannerRunBcBtn.click(); return; }
+        if(action === 'poll' && plannerRunPollBtn){ plannerRunPollBtn.click(); return; }
+        if(action === 'create-subs' && plannerCreateSubsBtn){ plannerCreateSubsBtn.click(); return; }
+        if(action === 'renew-subs' && plannerRenewSubsBtn){ plannerRenewSubsBtn.click(); return; }
+        if(action === 'test-webhook' && plannerTestWebhookBtn){ plannerTestWebhookBtn.click(); return; }
+        setPlannerStatus('Planner action not available: ' + action, 'warn');
+        logPlannerEvent('Planner action not available: ' + action, 'warn');
+      };
 
       if(plannerStatusEl){
         logPlannerEvent('Planner UI ready', 'ok');
@@ -1193,6 +1202,12 @@ async function dashboardView(req) {
           if(debugTestBtn) debugTestBtn.click();
         });
       }
+      window.__debugAction = function(action){
+        if(action === 'test' && debugTestBtn){ debugTestBtn.click(); return; }
+        if(action === 'clear' && debugClearBtn){ debugClearBtn.click(); return; }
+        if(action === 'refresh' && debugRefreshBtn){ debugRefreshBtn.click(); return; }
+        setDebugStatus('Debug action not available: ' + action, 'warn');
+      };
 
       fetchAndRender();
     })();
