@@ -53,11 +53,13 @@ export function getSyncConfig() {
         throw new Error("SYNC_MODE must be perProjectPlan or singlePlan");
     }
     const pollMinutes = Number(readEnv("SYNC_POLL_MINUTES") || 10);
+    const syncLockTimeoutMinutes = Number(readEnv("SYNC_LOCK_TIMEOUT_MINUTES") || 30);
     return {
         syncMode,
         pollMinutes: Number.isNaN(pollMinutes) ? 10 : pollMinutes,
         timeZone: readEnv("SYNC_TIMEZONE") || "America/New_York",
         allowDefaultPlanFallback: readBoolEnv("SYNC_ALLOW_DEFAULT_PLAN_FALLBACK", true),
+        syncLockTimeoutMinutes: Number.isNaN(syncLockTimeoutMinutes) ? 30 : syncLockTimeoutMinutes,
     };
 }
 

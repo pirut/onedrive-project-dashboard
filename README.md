@@ -147,6 +147,7 @@ SYNC_MODE=perProjectPlan
 SYNC_POLL_MINUTES=10
 SYNC_TIMEZONE=America/New_York
 SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=true
+SYNC_LOCK_TIMEOUT_MINUTES=30
 
 # Optional persistence overrides
 PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
