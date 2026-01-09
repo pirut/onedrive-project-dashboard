@@ -223,6 +223,12 @@ export class GraphClient {
         return data;
     }
 
+    async listSubscriptions() {
+        const res = await this.request(`/subscriptions`);
+        const data = await readResponseJson<{ value: GraphSubscription[] }>(res);
+        return data?.value || [];
+    }
+
     async renewSubscription(id: string, expirationDateTime: string) {
         const res = await this.request(`/subscriptions/${id}`, {
             method: "PATCH",

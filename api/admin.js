@@ -391,8 +391,19 @@ async function dashboardView(req) {
       <button type="button" id="planner-renew-subs" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
       <button type="button" id="planner-test-webhook" style="background:#1f2a44;color:#e6ecff">Test webhook validation</button>
     </div>
+    <div class="small muted" style="margin-top:8px">Webhook Debug</div>
+    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" id="planner-webhook-stream" style="background:#0f8b4c;color:#fff">Start Webhook Feed</button>
+      <button type="button" id="planner-webhook-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
+      <button type="button" id="planner-webhook-clear" style="background:#1f2a44;color:#e6ecff">Clear Feed</button>
+      <button type="button" id="planner-webhook-log" style="background:#0f8b4c;color:#fff">Refresh Webhook Snapshot</button>
+      <button type="button" id="planner-subscriptions-list" style="background:#1f2a44;color:#e6ecff">List Graph Subscriptions</button>
+    </div>
     <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
     <pre id="planner-output" class="log-block" style="display:none"></pre>
+    <div class="small muted" style="margin-top:8px">Webhook Feed (live)</div>
+    <pre id="planner-webhook-feed" class="log-block" style="display:none"></pre>
+    <div class="small muted" style="margin-top:8px">Webhook Snapshot</div>
     <pre id="planner-webhook-output" class="log-block" style="display:none;margin-top:8px"></pre>
     <div class="small muted" style="margin-top:8px">Request log</div>
     <ul id="planner-log" class="step-list"></ul>
