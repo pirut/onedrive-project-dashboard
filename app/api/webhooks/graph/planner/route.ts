@@ -218,7 +218,25 @@ export async function POST(request: Request) {
 }
 
 // Handle unsupported methods
-export async function GET() {
+export async function GET(request: Request) {
+    const url = new URL(request.url);
+    const requestId = crypto.randomUUID();
+    const validationToken = url.searchParams.get("validationToken");
+    if (validationToken) {
+        logger.info("GET /api/webhooks/graph/planner - Validation token received", { requestId });
+        await appendWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "validation",
+        });
+        return new Response(validationToken, {
+            status: 200,
+            headers: {
+                "Content-Type": "text/plain",
+                "X-Request-ID": requestId,
+            },
+        });
+    }
     return new Response(JSON.stringify({ 
         ok: false, 
         error: "Method not allowed. Use POST.",
