@@ -65,7 +65,8 @@ export default async function handler(req, res) {
         return;
     }
 
-    const baseUrl = body?.notificationUrl || `${resolveBaseUrl(req)}/api/webhooks/graph/planner`;
+    const envNotificationUrl = process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL;
+    const baseUrl = body?.notificationUrl || envNotificationUrl || `${resolveBaseUrl(req)}/api/webhooks/graph/planner`;
     if (!baseUrl.startsWith("https://")) {
         logger.warn("Graph subscription notificationUrl is not HTTPS", { notificationUrl: baseUrl });
     }
@@ -119,5 +120,5 @@ export default async function handler(req, res) {
     }
     await saveStoredSubscriptions(updated);
 
-    res.status(200).json({ ok: true, created });
+    res.status(200).json({ ok: true, created, notificationUrl: baseUrl });
 }

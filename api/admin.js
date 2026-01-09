@@ -173,6 +173,7 @@ function envPresence(name) {
 
 async function dashboardView(req) {
     const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
+    const notificationUrlDefault = process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL || `${origin}/api/webhooks/graph/planner`;
 
     // Gather health info
     const endpoints = [
@@ -379,7 +380,7 @@ async function dashboardView(req) {
     </div>
     <div class="row">
       <label for="planner-notify-url">Notification URL (optional)</label>
-      <input id="planner-notify-url" placeholder="https://your-domain.com/api/webhooks/graph/planner" />
+      <input id="planner-notify-url" placeholder="https://your-domain.com/api/webhooks/graph/planner" value="${htmlEscape(notificationUrlDefault)}" />
     </div>
     <div class="row">
       <label for="planner-plan-ids">Plan IDs (optional, comma-separated)</label>

@@ -135,6 +135,7 @@ GRAPH_TENANT_ID=
 GRAPH_CLIENT_ID=
 GRAPH_CLIENT_SECRET=
 GRAPH_SUBSCRIPTION_CLIENT_STATE=
+GRAPH_NOTIFICATION_URL=
 
 # Planner
 PLANNER_GROUP_ID=
@@ -159,6 +160,7 @@ Notes:
 - `PLANNER_DEFAULT_PLAN_ID` is required when `SYNC_MODE=singlePlan`.
 - For `SYNC_MODE=perProjectPlan`, plan creation failures fall back to `PLANNER_DEFAULT_PLAN_ID` (task titles are prefixed with `projectNo`).
 - Set `PLANNER_TENANT_DOMAIN` or `PLANNER_WEB_BASE` to generate clickable plan URLs in sync responses (defaults to the new Planner web UI).
+- Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
 

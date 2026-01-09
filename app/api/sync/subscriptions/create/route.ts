@@ -109,7 +109,8 @@ export async function POST(request: Request) {
         });
     }
 
-    const baseUrl = body?.notificationUrl || `${resolveBaseUrl(request)}/api/webhooks/graph/planner`;
+    const envNotificationUrl = process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL;
+    const baseUrl = body?.notificationUrl || envNotificationUrl || `${resolveBaseUrl(request)}/api/webhooks/graph/planner`;
     logger.info("Using notification URL", { requestId, baseUrl });
     
     if (!baseUrl.startsWith("https://")) {
@@ -194,7 +195,7 @@ export async function POST(request: Request) {
         planIds: Array.from(planIds),
     });
 
-    return new Response(JSON.stringify({ ok: true, created, requestId, duration }), {
+    return new Response(JSON.stringify({ ok: true, created, notificationUrl: baseUrl, requestId, duration }), {
         status: 200,
         headers: { 
             "Content-Type": "application/json",
