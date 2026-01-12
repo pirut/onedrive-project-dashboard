@@ -1,5 +1,5 @@
-import { GraphClient } from "../../../../lib/planner-sync/graph-client.js";
-import { logger } from "../../../../lib/planner-sync/logger.js";
+import { GraphClient } from "../../../lib/planner-sync/graph-client.js";
+import { logger } from "../../../lib/planner-sync/logger.js";
 
 async function readJsonBody(req) {
     const chunks = [];
