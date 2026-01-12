@@ -426,7 +426,7 @@ async function dashboardView(req) {
             <th>Project</th>
             <th>Description</th>
             <th>Planner Plan</th>
-            <th>Last update</th>
+            <th>Last sync</th>
             <th>Sync</th>
             <th>Actions</th>
           </tr>
