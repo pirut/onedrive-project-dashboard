@@ -495,6 +495,7 @@ async function upsertPlannerTask(
 
     const changes = buildChanges(plannerTask);
 
+    let updatedPlanner = false;
     if (Object.keys(changes).length) {
         const etag = plannerTask["@odata.etag"] || task.lastPlannerEtag;
         if (!etag) {
@@ -502,6 +503,7 @@ async function upsertPlannerTask(
         } else {
             try {
                 await graphClient.updateTask(task.plannerTaskId, changes, etag);
+                updatedPlanner = true;
             } catch (error) {
                 if (!isConflict(error)) {
                     throw error;
@@ -530,6 +532,7 @@ async function upsertPlannerTask(
                 }
                 try {
                     await graphClient.updateTask(task.plannerTaskId, retryChanges, retryEtag);
+                    updatedPlanner = true;
                 } catch (retryError) {
                     logger.warn("Planner retry update failed", {
                         taskId: task.plannerTaskId,
@@ -543,6 +546,16 @@ async function upsertPlannerTask(
 
     if (details?.description !== desiredDescription && details?.["@odata.etag"]) {
         await graphClient.updateTaskDetails(task.plannerTaskId, { description: desiredDescription }, details["@odata.etag"] as string);
+        updatedPlanner = true;
+    }
+
+    if (!updatedPlanner) {
+        logger.info("No BC → Planner changes detected; skipping metadata update", {
+            taskId: task.plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+        });
+        return;
     }
 
     const latest = await graphClient.getTask(task.plannerTaskId);
