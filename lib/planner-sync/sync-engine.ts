@@ -6,13 +6,12 @@ import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } 
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
 const DEFAULT_BUCKET_NAME = "General";
-const HEADING_BUCKETS: Record<string, string | null> = {
-    "JOB NAME": "Pre-Construction",
-    "INSTALLATION": "Installation",
-    "CHANGE ORDER": "Change Orders",
-    "CHANGE ORDERS": "Change Orders",
-    REVENUE: null,
-};
+const HEADING_BUCKETS = [
+    { match: "JOB NAME", bucket: "Pre-Construction" },
+    { match: "INSTALL", bucket: "Installation" },
+    { match: "CHANGE ORDER", bucket: "Change Orders" },
+    { match: "REVENUE", bucket: null },
+] as const;
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -117,9 +116,10 @@ function resolveBucketFromHeading(description?: string | null) {
     const heading = (description || "").trim();
     if (!heading) return { bucket: DEFAULT_BUCKET_NAME, skip: false };
     const normalized = heading.toUpperCase();
-    if (Object.prototype.hasOwnProperty.call(HEADING_BUCKETS, normalized)) {
-        const mapped = HEADING_BUCKETS[normalized];
-        return { bucket: mapped, skip: mapped == null };
+    for (const entry of HEADING_BUCKETS) {
+        if (normalized.includes(entry.match)) {
+            return { bucket: entry.bucket ?? null, skip: entry.bucket == null };
+        }
     }
     return { bucket: normalizeBucketName(heading), skip: false };
 }
