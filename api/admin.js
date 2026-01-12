@@ -392,6 +392,7 @@ async function dashboardView(req) {
         <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
         <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
         <button type="button" id="planner-debug-bc-timestamps" style="background:#1f2a44;color:#e6ecff">Inspect BC timestamps</button>
+        <button type="button" id="planner-debug-decision" style="background:#1f2a44;color:#e6ecff">Inspect sync decision</button>
       </div>
       <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
       <pre id="planner-output" class="log-block" style="display:none"></pre>

@@ -44,6 +44,8 @@ export default async function handler(req, res) {
         return;
     }
 
+    const includePlanner = req.url?.includes("includePlanner=1");
+
     const body = await readJsonBody(req);
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const taskNo = body?.taskNo ? String(body.taskNo).trim() : "";
@@ -128,6 +130,38 @@ export default async function handler(req, res) {
         }
 
         const reasons = targetInfo.reasons || [];
+        let plannerTask = null;
+        if (includePlanner && targetInfo.task.plannerTaskId) {
+            try {
+                const { GraphClient } = await import("../../lib/planner-sync/graph-client.js");
+                const graphClient = new GraphClient();
+                plannerTask = await graphClient.getTask(targetInfo.task.plannerTaskId);
+            } catch (error) {
+                logger.warn("Planner task lookup failed in debug", {
+                    taskId: targetInfo.task.plannerTaskId,
+                    error: error?.message || String(error),
+                });
+            }
+        }
+        const bcModified =
+            targetInfo.task.systemModifiedAt ||
+            targetInfo.task.lastModifiedDateTime ||
+            targetInfo.task.lastModifiedAt ||
+            targetInfo.task.modifiedAt ||
+            targetInfo.task.modifiedOn ||
+            targetInfo.task.lastModifiedOn ||
+            targetInfo.task.systemModifiedOn ||
+            null;
+        const lastSyncAt = targetInfo.task.lastSyncAt || null;
+        const plannerModifiedAt = plannerTask?.lastModifiedDateTime || null;
+        const bcModifiedMs = bcModified ? Date.parse(String(bcModified)) : NaN;
+        const lastSyncMs = lastSyncAt ? Date.parse(String(lastSyncAt)) : NaN;
+        const plannerModifiedMs = plannerModifiedAt ? Date.parse(String(plannerModifiedAt)) : NaN;
+        const bcChangedSinceSync =
+            Number.isNaN(bcModifiedMs) || Number.isNaN(lastSyncMs) ? null : bcModifiedMs > lastSyncMs;
+        const plannerChangedSinceSync =
+            Number.isNaN(plannerModifiedMs) || Number.isNaN(lastSyncMs) ? null : plannerModifiedMs > lastSyncMs;
+
         res.status(200).json({
             ok: true,
             projectNo,
@@ -150,12 +184,33 @@ export default async function handler(req, res) {
                 endDate: targetInfo.task.endDate,
                 budgetTotalCost: targetInfo.task.budgetTotalCost,
                 actualTotalCost: targetInfo.task.actualTotalCost,
+                systemModifiedAt: targetInfo.task.systemModifiedAt,
+                lastSyncAt: targetInfo.task.lastSyncAt,
             },
             context: {
                 heading: targetInfo.heading,
                 bucket: targetInfo.bucket,
                 skipSection: targetInfo.skipSection,
             },
+            timestamps: {
+                bcModifiedAt: bcModified,
+                lastSyncAt,
+                bcChangedSinceSync,
+                plannerModifiedAt,
+                plannerChangedSinceSync,
+            },
+            planner: plannerTask
+                ? {
+                      id: plannerTask.id,
+                      title: plannerTask.title,
+                      bucketId: plannerTask.bucketId,
+                      percentComplete: plannerTask.percentComplete,
+                      startDateTime: plannerTask.startDateTime,
+                      dueDateTime: plannerTask.dueDateTime,
+                      lastModifiedDateTime: plannerTask.lastModifiedDateTime,
+                      etag: plannerTask["@odata.etag"],
+                  }
+                : null,
             decision: {
                 willSync: reasons.length === 0,
                 reasons,
