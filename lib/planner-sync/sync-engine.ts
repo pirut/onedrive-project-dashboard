@@ -187,6 +187,14 @@ function resolvePlannerModifiedAt(task: PlannerTask | null) {
     return { ms: parseDateMs(raw), raw };
 }
 
+function hasBcChangedSinceSync(task: BcProjectTask, bcGraceMs: number) {
+    const lastSyncAt = parseDateMs(task.lastSyncAt || null);
+    if (lastSyncAt == null) return null;
+    const bcModified = resolveBcModifiedAt(task);
+    if (bcModified.ms == null) return null;
+    return bcModified.ms > lastSyncAt + bcGraceMs;
+}
+
 type SyncDecision = "bc" | "planner" | "none";
 
 function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | null) {
@@ -893,6 +901,9 @@ async function syncProjectTasks(
     let currentBucket: string | null = DEFAULT_BUCKET_NAME;
     let skipSection = false;
 
+    const { bcModifiedGraceMs } = getSyncConfig();
+    const bcGraceMs = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
+
     for (const task of orderedTasks) {
         const taskType = (task.taskType || "").toLowerCase();
         if (taskType === "heading") {
@@ -915,6 +926,15 @@ async function syncProjectTasks(
             !allowDefaultPlanFallback &&
             task.plannerPlanId &&
             task.plannerPlanId !== planId;
+        const bcChanged = hasBcChangedSinceSync(task, bcGraceMs);
+        if (!planMismatch && task.plannerTaskId && bcChanged === false) {
+            logger.info("Skipping BC → Planner update; no changes since last sync", {
+                projectNo,
+                taskNo: task.taskNo,
+                lastSyncAt: task.lastSyncAt,
+            });
+            continue;
+        }
         if (planMismatch) {
             logger.warn("Planner plan mismatch; creating new task in per-project plan", {
                 projectNo,
