@@ -1,6 +1,6 @@
-import { GraphClient } from "../../../lib/planner-sync/graph-client.js";
-import { getGraphConfig, getPlannerConfig } from "../../../lib/planner-sync/config.js";
-import { logger } from "../../../lib/planner-sync/logger.js";
+import { GraphClient } from "../../lib/planner-sync/graph-client.js";
+import { getGraphConfig, getPlannerConfig } from "../../lib/planner-sync/config.js";
+import { logger } from "../../lib/planner-sync/logger.js";
 
 async function resolvePlannerBaseUrl(graphClient) {
     const envBase = (process.env.PLANNER_WEB_BASE || "").trim();
