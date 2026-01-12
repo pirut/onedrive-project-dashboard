@@ -1,4 +1,4 @@
-import { syncBcToPlanner } from "../../lib/planner-sync/index.js";
+import { runPollingSync, syncBcToPlanner } from "../../lib/planner-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 async function readJsonBody(req) {
@@ -20,10 +20,20 @@ export default async function handler(req, res) {
     }
     const body = await readJsonBody(req);
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
+    const includePlanner =
+        body?.includePlanner === true ||
+        body?.includePlanner === "true" ||
+        body?.includePlanner === 1 ||
+        body?.includePlanner === "1";
 
     try {
-        const result = await syncBcToPlanner(projectNo || undefined);
-        res.status(200).json({ ok: true, result });
+        const bcResult = await syncBcToPlanner(projectNo || undefined);
+        if (!includePlanner) {
+            res.status(200).json({ ok: true, result: bcResult });
+            return;
+        }
+        const pollResult = await runPollingSync({ force: true });
+        res.status(200).json({ ok: true, result: { bcToPlanner: bcResult, plannerToBc: pollResult } });
     } catch (error) {
         logger.error("BC to Planner sync failed", { error: error?.message || String(error) });
         res.status(400).json({ ok: false, error: error?.message || String(error) });

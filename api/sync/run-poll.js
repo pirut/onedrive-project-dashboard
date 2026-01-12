@@ -8,7 +8,10 @@ export default async function handler(req, res) {
     }
 
     try {
-        const result = await runPollingSync();
+        const base = `http://${req.headers.host || "localhost"}`;
+        const url = new URL(req.url || "", base);
+        const force = url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true";
+        const result = await runPollingSync({ force });
         res.status(200).json({ ok: true, result });
     } catch (error) {
         logger.error("Polling sync failed", { error: error?.message || String(error) });

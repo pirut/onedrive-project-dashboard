@@ -19,7 +19,8 @@ export async function POST(request: Request) {
 
     try {
         logger.info("Starting polling sync", { requestId });
-        const result = await runPollingSync();
+        const force = url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true";
+        const result = await runPollingSync({ force });
         const duration = Date.now() - startTime;
         
         logger.info("POST /api/sync/run-poll - Success", {
