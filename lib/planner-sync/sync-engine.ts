@@ -96,6 +96,94 @@ function toBcPercent(value?: number | null) {
     return 0;
 }
 
+const BC_MODIFIED_FIELDS = [
+    "systemModifiedAt",
+    "lastModifiedDateTime",
+    "lastModifiedAt",
+    "modifiedAt",
+    "modifiedOn",
+    "lastModifiedOn",
+    "systemModifiedOn",
+] as const;
+
+function parseDateMs(value?: string | null) {
+    if (!value) return null;
+    const ms = Date.parse(value);
+    if (Number.isNaN(ms)) return null;
+    return ms;
+}
+
+function resolveBcModifiedAt(task: BcProjectTask) {
+    for (const field of BC_MODIFIED_FIELDS) {
+        const raw = (task as Record<string, unknown>)[field];
+        if (typeof raw !== "string") continue;
+        const ms = parseDateMs(raw);
+        if (ms != null) {
+            return { ms, field, raw };
+        }
+    }
+    return { ms: null as number | null, field: null as string | null, raw: null as string | null };
+}
+
+function resolvePlannerModifiedAt(task: PlannerTask | null) {
+    const raw = task?.lastModifiedDateTime || null;
+    return { ms: parseDateMs(raw), raw };
+}
+
+type SyncDecision = "bc" | "planner" | "none";
+
+function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | null) {
+    const lastSyncAt = parseDateMs(bcTask.lastSyncAt || null);
+    const bcModified = resolveBcModifiedAt(bcTask);
+    const plannerModified = resolvePlannerModifiedAt(plannerTask);
+    const bcChangedSinceSync = lastSyncAt != null && bcModified.ms != null ? bcModified.ms > lastSyncAt : null;
+    const plannerChangedSinceSync = lastSyncAt != null && plannerModified.ms != null ? plannerModified.ms > lastSyncAt : null;
+    const { preferBc } = getSyncConfig();
+
+    if (lastSyncAt != null) {
+        if (bcChangedSinceSync && plannerChangedSinceSync) {
+            if (!preferBc && bcModified.ms != null && plannerModified.ms != null) {
+                return { decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            }
+            return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        if (bcChangedSinceSync && !plannerChangedSinceSync) {
+            return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        if (!bcChangedSinceSync && plannerChangedSinceSync) {
+            return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        if (bcChangedSinceSync === false && plannerChangedSinceSync === false) {
+            return { decision: "none", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        if (plannerChangedSinceSync) {
+            return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+    }
+
+    if (bcModified.ms != null && plannerModified.ms != null) {
+        if (bcModified.ms === plannerModified.ms) {
+            return { decision: "none", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        }
+        return {
+            decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+        };
+    }
+    if (bcModified.ms != null) {
+        return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+    }
+    if (plannerModified.ms != null) {
+        return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+    }
+    return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+}
+
 function formatPlannerDescription(task: BcProjectTask) {
     const formatValue = (val: unknown) => (val == null ? "" : String(val));
     const lines = [
@@ -365,6 +453,26 @@ async function upsertPlannerTask(
 
     if (!plannerTask) return;
 
+    const syncDecision = resolveSyncDecision(task, plannerTask);
+    if (syncDecision.decision === "planner") {
+        logger.info("Skipping BC → Planner update; Planner is newer", {
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+            lastSyncAt: task.lastSyncAt,
+            plannerModifiedAt: syncDecision.plannerModified.raw,
+            bcModifiedAt: syncDecision.bcModified.raw,
+        });
+        return;
+    }
+    if (syncDecision.decision === "none") {
+        logger.info("Skipping BC → Planner update; no changes since last sync", {
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+            lastSyncAt: task.lastSyncAt,
+        });
+        return;
+    }
+
     const desiredStartDate = normalizeDateOnly(desiredStart || null);
     const desiredDueDate = normalizeDateOnly(desiredDue || null);
     const buildChanges = (currentTask: PlannerTask) => {
@@ -460,19 +568,24 @@ async function applyPlannerUpdateToBc(
         return;
     }
 
-    const { preferBc } = getSyncConfig();
-    if (preferBc) {
-        const lastSyncAt = bcTask.lastSyncAt ? Date.parse(bcTask.lastSyncAt) : NaN;
-        const plannerModifiedAt = plannerTask.lastModifiedDateTime ? Date.parse(plannerTask.lastModifiedDateTime) : NaN;
-        if (!Number.isNaN(lastSyncAt) && !Number.isNaN(plannerModifiedAt) && lastSyncAt >= plannerModifiedAt) {
-            logger.info("Skipping inbound Planner update; BC sync is newer", {
-                projectNo: bcTask.projectNo,
-                taskNo: bcTask.taskNo,
-                lastSyncAt: bcTask.lastSyncAt,
-                plannerModifiedAt: plannerTask.lastModifiedDateTime,
-            });
-            return;
-        }
+    const syncDecision = resolveSyncDecision(bcTask, plannerTask);
+    if (syncDecision.decision === "bc") {
+        logger.info("Skipping inbound Planner update; BC is newer", {
+            projectNo: bcTask.projectNo,
+            taskNo: bcTask.taskNo,
+            lastSyncAt: bcTask.lastSyncAt,
+            plannerModifiedAt: syncDecision.plannerModified.raw,
+            bcModifiedAt: syncDecision.bcModified.raw,
+        });
+        return;
+    }
+    if (syncDecision.decision === "none") {
+        logger.info("Skipping inbound Planner update; no changes since last sync", {
+            projectNo: bcTask.projectNo,
+            taskNo: bcTask.taskNo,
+            lastSyncAt: bcTask.lastSyncAt,
+        });
+        return;
     }
 
     let bucketName: string | undefined;

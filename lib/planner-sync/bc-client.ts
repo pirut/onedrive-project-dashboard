@@ -23,6 +23,9 @@ export type BcProjectTask = {
     lastSyncAt?: string;
     lastPlannerEtag?: string;
     syncLock?: boolean;
+    systemModifiedAt?: string;
+    lastModifiedDateTime?: string;
+    modifiedAt?: string;
     [key: string]: unknown;
 };
 
