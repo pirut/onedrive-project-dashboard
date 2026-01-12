@@ -140,6 +140,13 @@ export class GraphClient {
         return data;
     }
 
+    async deletePlan(planId: string) {
+        const res = await this.request(`/planner/plans/${planId}`, {
+            method: "DELETE",
+        });
+        return res.status === 204 || res.status === 202 || res.status === 200;
+    }
+
     async getOrganizations() {
         const res = await this.request(`/organization`);
         const data = await readResponseJson<{ value: GraphOrganization[] }>(res);

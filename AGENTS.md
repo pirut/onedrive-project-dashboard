@@ -19,8 +19,7 @@ Key behaviors (Planner sync)
   - `SYNC_LOCK_TIMEOUT_MINUTES` (default 30) clears stale locks.
 
 Important endpoints
-- Sync: `POST /api/sync/run-bc-to-planner` (optional `{ "projectNo": "PR00001" }`)
-- Poll: `POST /api/sync/run-poll`
+- Sync: `POST /api/sync/run-bc-to-planner` (optional `{ "projectNo": "PR00001" }`, runs BC <-> Planner)
 - Debug: `GET /api/debug`
 - Webhook (Graph): `POST /api/webhooks/graph/planner`
 - Webhook validation (GET): `.../api/webhooks/graph/planner?validationToken=ping`
@@ -36,10 +35,11 @@ Important endpoints
 Admin dashboard (UI)
 - `api/admin.js` renders the dashboard.
 - Planner panel includes:
-  - Run BC -> Planner
-  - Run BC -> Planner (PR00001) quick test
+  - Run Sync
+  - Run Sync (PR00001) quick test
   - Inspect BC Task (enter Project No + Task No)
   - Webhook debug: Start/Stop feed, Clear, Snapshot, List subscriptions
+ - Planner Projects panel includes per-project sync toggles and plan deletion.
 
 Graph / Planner notes
 - Plan creation must use `POST /planner/plans` with `{ title, owner: groupId }`.

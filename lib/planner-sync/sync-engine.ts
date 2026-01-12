@@ -885,11 +885,9 @@ async function syncProjectTasks(
     return planId;
 }
 
-export async function runPollingSync(options?: { force?: boolean }) {
+export async function runPollingSync() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
-    const { pollMinutes } = getSyncConfig();
-    const force = options?.force === true;
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
 
     const isNotFound = (error: unknown) => {
@@ -898,7 +896,6 @@ export async function runPollingSync(options?: { force?: boolean }) {
     };
 
     const tasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
-    const cutoff = Date.now() - pollMinutes * 60 * 1000;
 
     let processed = 0;
     let skippedDisabled = 0;
@@ -907,8 +904,6 @@ export async function runPollingSync(options?: { force?: boolean }) {
             skippedDisabled += 1;
             continue;
         }
-        const lastSync = task.lastSyncAt ? Date.parse(task.lastSyncAt) : 0;
-        if (!force && lastSync && lastSync > cutoff) continue;
         if (!task.plannerTaskId) continue;
         let plannerTask: PlannerTask | null = null;
         try {

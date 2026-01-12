@@ -387,10 +387,8 @@ async function dashboardView(req) {
         <input id="planner-debug-task-no" placeholder="1100" />
       </div>
       <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="button" id="planner-run-bc">Run BC → Planner</button>
-        <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
-        <button type="button" id="planner-run-full-sync" style="background:#0f8b4c;color:#fff">Run Full Sync</button>
-        <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+        <button type="button" id="planner-run-bc">Run Sync</button>
+        <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run Sync (PR00001)</button>
         <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
         <button type="button" id="planner-debug-bc-timestamps" style="background:#1f2a44;color:#e6ecff">Inspect BC timestamps</button>
         <button type="button" id="planner-debug-decision" style="background:#1f2a44;color:#e6ecff">Inspect sync decision</button>
@@ -437,7 +435,8 @@ async function dashboardView(req) {
         </tbody>
       </table>
       <div id="planner-orphan-plans" class="small muted" style="margin-top:8px"></div>
-      <div class="small muted" style="margin-top:8px">Disable sync to prevent plan recreation after deleting a plan in Planner.</div>
+      <div class="small muted" style="margin-top:8px">Disable sync to prevent plan recreation after deleting a plan.</div>
+      <div class="small muted" style="margin-top:6px">Delete plan disables sync and clears Planner links in BC.</div>
     </div>
   </details>
 

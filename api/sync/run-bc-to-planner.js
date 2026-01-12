@@ -20,19 +20,10 @@ export default async function handler(req, res) {
     }
     const body = await readJsonBody(req);
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
-    const includePlanner =
-        body?.includePlanner === true ||
-        body?.includePlanner === "true" ||
-        body?.includePlanner === 1 ||
-        body?.includePlanner === "1";
 
     try {
         const bcResult = await syncBcToPlanner(projectNo || undefined);
-        if (!includePlanner) {
-            res.status(200).json({ ok: true, result: bcResult });
-            return;
-        }
-        const pollResult = await runPollingSync({ force: true });
+        const pollResult = await runPollingSync();
         res.status(200).json({ ok: true, result: { bcToPlanner: bcResult, plannerToBc: pollResult } });
     } catch (error) {
         logger.error("BC to Planner sync failed", { error: error?.message || String(error) });

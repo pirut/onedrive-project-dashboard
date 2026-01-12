@@ -168,14 +168,13 @@ Notes:
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
 - `SYNC_PREFER_BC=true` skips Planner → BC updates when BC has been synced more recently than the Planner change.
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms) to avoid treating sync metadata updates as user changes.
-- Use `POST /api/sync/projects` to disable sync for specific projects (prevents plan re-creation after manual deletion).
+- Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
 
 ### Admin endpoints
 
-- `POST /api/sync/run-bc-to-planner` (optional JSON: `{ "projectNo": "P-100" }`)
-- `POST /api/sync/run-poll`
+- `POST /api/sync/run-bc-to-planner` (optional JSON: `{ "projectNo": "P-100" }`) - runs BC <-> Planner sync
 - `GET /api/sync/projects` (list Planner projects + sync state)
-- `POST /api/sync/projects` (toggle per-project sync)
+- `POST /api/sync/projects` (toggle per-project sync or delete plan)
 - `POST /api/sync/subscriptions/create`
 - `POST /api/sync/subscriptions/renew`
 - `POST /api/webhooks/graph/planner` (Graph notification receiver)
@@ -183,7 +182,7 @@ Notes:
 ### Example curl commands
 
 ```bash
-# Run BC ➜ Planner for a single project
+# Run full sync (BC <-> Planner) for a single project
 curl -X POST http://localhost:3000/api/sync/run-bc-to-planner \\
   -H 'Content-Type: application/json' \\
   -d '{\"projectNo\":\"P-100\"}'
@@ -194,8 +193,6 @@ curl -X POST https://your-domain.com/api/sync/subscriptions/create
 # Test webhook validation locally
 curl -i -X POST \"http://localhost:3000/api/webhooks/graph/planner?validationToken=test123\"
 
-# Run polling fallback
-curl -X POST http://localhost:3000/api/sync/run-poll
 ```
 
 ## Notes

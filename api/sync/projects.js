@@ -58,6 +58,69 @@ function normalizeTitle(title) {
     return (title || "").trim().toLowerCase();
 }
 
+async function setProjectSyncDisabled(projectNo, disabled, note) {
+    const settings = await listProjectSyncSettings();
+    const normalized = normalizeProjectNo(projectNo);
+    const idx = settings.findIndex((item) => normalizeProjectNo(item.projectNo) === normalized);
+
+    if (disabled) {
+        const entry = {
+            projectNo,
+            disabled: true,
+            updatedAt: new Date().toISOString(),
+            ...(note ? { note } : {}),
+        };
+        if (idx >= 0) {
+            settings[idx] = { ...settings[idx], ...entry };
+        } else {
+            settings.push(entry);
+        }
+    } else if (idx >= 0) {
+        settings.splice(idx, 1);
+    }
+
+    await saveProjectSyncSettings(settings);
+}
+
+async function clearPlannerLinksForProject(bcClient, projectNo) {
+    const escaped = projectNo.replace(/'/g, "''");
+    const result = { total: 0, cleared: 0, skipped: 0, failed: 0 };
+    let tasks = [];
+    try {
+        tasks = await bcClient.listProjectTasks(`projectNo eq '${escaped}'`);
+    } catch (error) {
+        result.error = error?.message || String(error);
+        return result;
+    }
+    result.total = tasks.length;
+    for (const task of tasks) {
+        if (!result.resolvedPlanId && task.plannerPlanId) {
+            result.resolvedPlanId = task.plannerPlanId;
+        }
+        if (!task.plannerTaskId && !task.plannerPlanId && !task.plannerBucket) {
+            result.skipped += 1;
+            continue;
+        }
+        if (!task.systemId) {
+            result.failed += 1;
+            continue;
+        }
+        try {
+            await bcClient.patchProjectTask(task.systemId, {
+                plannerTaskId: "",
+                plannerPlanId: "",
+                plannerBucket: "",
+                lastPlannerEtag: "",
+                syncLock: false,
+            });
+            result.cleared += 1;
+        } catch {
+            result.failed += 1;
+        }
+    }
+    return result;
+}
+
 async function loadProjects() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
@@ -159,6 +222,7 @@ export default async function handler(req, res) {
             res.status(400).json({ ok: false, error: "projectNo required" });
             return;
         }
+        const action = typeof body?.action === "string" ? body.action.trim().toLowerCase() : "";
         const disabled =
             body?.disabled === true ||
             body?.disabled === "true" ||
@@ -166,27 +230,38 @@ export default async function handler(req, res) {
             body?.disabled === "1";
         const note = typeof body?.note === "string" ? body.note.trim() : "";
 
-        const settings = await listProjectSyncSettings();
-        const normalized = normalizeProjectNo(projectNo);
-        const idx = settings.findIndex((item) => normalizeProjectNo(item.projectNo) === normalized);
-
-        if (disabled) {
-            const entry = {
-                projectNo,
-                disabled: true,
-                updatedAt: new Date().toISOString(),
-                ...(note ? { note } : {}),
-            };
-            if (idx >= 0) {
-                settings[idx] = { ...settings[idx], ...entry };
-            } else {
-                settings.push(entry);
+        if (action === "deleteplan" || action === "delete-plan") {
+            await setProjectSyncDisabled(projectNo, true, note);
+            const bcClient = new BusinessCentralClient();
+            const graphClient = new GraphClient();
+            const clearedTasks = await clearPlannerLinksForProject(bcClient, projectNo);
+            if (clearedTasks.error) {
+                logger.warn("Failed to clear BC Planner links", { projectNo, error: clearedTasks.error });
             }
-        } else if (idx >= 0) {
-            settings.splice(idx, 1);
+            let resolvedPlanId = typeof body?.planId === "string" ? body.planId.trim() : "";
+            if (!resolvedPlanId && clearedTasks.resolvedPlanId) {
+                resolvedPlanId = clearedTasks.resolvedPlanId;
+            }
+            let planDelete = { attempted: false };
+            if (resolvedPlanId) {
+                try {
+                    const ok = await graphClient.deletePlan(resolvedPlanId);
+                    planDelete = { attempted: true, ok, planId: resolvedPlanId };
+                } catch (error) {
+                    planDelete = {
+                        attempted: true,
+                        ok: false,
+                        planId: resolvedPlanId,
+                        error: error?.message || String(error),
+                    };
+                    logger.warn("Planner plan deletion failed", { projectNo, planId: resolvedPlanId, error: planDelete.error });
+                }
+            }
+            res.status(200).json({ ok: true, projectNo, disabled: true, clearedTasks, planDelete });
+            return;
         }
 
-        await saveProjectSyncSettings(settings);
+        await setProjectSyncDisabled(projectNo, disabled, note);
         res.status(200).json({ ok: true, projectNo, disabled });
         return;
     }

@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     });
 
     try {
-        let body: { projectNo?: string; includePlanner?: boolean | string | number } | null = null;
+        let body: { projectNo?: string } | null = null;
         try {
             const bodyText = await request.text();
             logger.debug("Request body received", { requestId, bodyLength: bodyText.length });
@@ -36,20 +36,12 @@ export async function POST(request: Request) {
         }
         
         const projectNo = body?.projectNo?.trim();
-        const includePlanner =
-            body?.includePlanner === true ||
-            body?.includePlanner === "true" ||
-            body?.includePlanner === 1 ||
-            body?.includePlanner === "1";
         logger.info("Processing sync request", { requestId, projectNo: projectNo || "all projects" });
 
         try {
             const bcResult = await syncBcToPlanner(projectNo || undefined);
-            let result: unknown = bcResult;
-            if (includePlanner) {
-                const pollResult = await runPollingSync({ force: true });
-                result = { bcToPlanner: bcResult, plannerToBc: pollResult };
-            }
+            const pollResult = await runPollingSync();
+            const result = { bcToPlanner: bcResult, plannerToBc: pollResult };
             const duration = Date.now() - startTime;
             logger.info("POST /api/sync/run-bc-to-planner - Success", {
                 requestId,
