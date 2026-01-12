@@ -365,25 +365,71 @@ async function upsertPlannerTask(
 
     if (!plannerTask) return;
 
-    const changes: Record<string, unknown> = {};
-    if ((plannerTask.title || "") !== desiredTitle) changes.title = desiredTitle;
-    if (plannerTask.bucketId !== bucketId) changes.bucketId = bucketId;
-
-    const plannerStart = normalizeDateOnly(plannerTask.startDateTime || null);
-    const plannerDue = normalizeDateOnly(plannerTask.dueDateTime || null);
     const desiredStartDate = normalizeDateOnly(desiredStart || null);
     const desiredDueDate = normalizeDateOnly(desiredDue || null);
+    const buildChanges = (currentTask: PlannerTask) => {
+        const changes: Record<string, unknown> = {};
+        if ((currentTask.title || "") !== desiredTitle) changes.title = desiredTitle;
+        if (currentTask.bucketId !== bucketId) changes.bucketId = bucketId;
 
-    if (plannerStart !== desiredStartDate) changes.startDateTime = desiredStart;
-    if (plannerDue !== desiredDueDate) changes.dueDateTime = desiredDue;
-    if ((plannerTask.percentComplete || 0) !== desiredPercent) changes.percentComplete = desiredPercent;
+        const plannerStart = normalizeDateOnly(currentTask.startDateTime || null);
+        const plannerDue = normalizeDateOnly(currentTask.dueDateTime || null);
+
+        if (plannerStart !== desiredStartDate) changes.startDateTime = desiredStart;
+        if (plannerDue !== desiredDueDate) changes.dueDateTime = desiredDue;
+        if ((currentTask.percentComplete || 0) !== desiredPercent) changes.percentComplete = desiredPercent;
+        return changes;
+    };
+    const isConflict = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 409") || msg.toLowerCase().includes("conflict");
+    };
+
+    const changes = buildChanges(plannerTask);
 
     if (Object.keys(changes).length) {
-        const etag = task.lastPlannerEtag || plannerTask["@odata.etag"];
+        const etag = plannerTask["@odata.etag"] || task.lastPlannerEtag;
         if (!etag) {
             logger.warn("Missing Planner ETag; skipping update", { taskId: task.plannerTaskId });
         } else {
-            await graphClient.updateTask(task.plannerTaskId, changes, etag);
+            try {
+                await graphClient.updateTask(task.plannerTaskId, changes, etag);
+            } catch (error) {
+                if (!isConflict(error)) {
+                    throw error;
+                }
+                logger.warn("Planner update conflict; retrying with latest task", {
+                    taskId: task.plannerTaskId,
+                    error: (error as Error)?.message,
+                });
+                let latestTask: PlannerTask | null = null;
+                try {
+                    latestTask = await graphClient.getTask(task.plannerTaskId);
+                } catch (reloadError) {
+                    logger.warn("Planner task reload failed after conflict", {
+                        taskId: task.plannerTaskId,
+                        error: (reloadError as Error)?.message,
+                    });
+                    return;
+                }
+                if (!latestTask) return;
+                const retryChanges = buildChanges(latestTask);
+                if (!Object.keys(retryChanges).length) return;
+                const retryEtag = latestTask["@odata.etag"];
+                if (!retryEtag) {
+                    logger.warn("Missing Planner ETag after conflict; skipping update", { taskId: task.plannerTaskId });
+                    return;
+                }
+                try {
+                    await graphClient.updateTask(task.plannerTaskId, retryChanges, retryEtag);
+                } catch (retryError) {
+                    logger.warn("Planner retry update failed", {
+                        taskId: task.plannerTaskId,
+                        error: (retryError as Error)?.message,
+                    });
+                    return;
+                }
+            }
         }
     }
 
