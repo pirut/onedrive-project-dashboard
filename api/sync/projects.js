@@ -9,6 +9,17 @@ import {
 } from "../../lib/planner-sync/project-sync-store.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
+const BC_UPDATED_FIELDS = [
+    "systemModifiedAt",
+    "lastModifiedDateTime",
+    "lastModifiedAt",
+    "modifiedAt",
+    "modifiedOn",
+    "lastModifiedOn",
+    "systemModifiedOn",
+    "lastSyncAt",
+];
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -56,6 +67,25 @@ function buildPlannerPlanUrl(planId, baseUrl, tenantId) {
 
 function normalizeTitle(title) {
     return (title || "").trim().toLowerCase();
+}
+
+function parseDateMs(value) {
+    if (!value) return null;
+    const ms = Date.parse(String(value));
+    return Number.isNaN(ms) ? null : ms;
+}
+
+function resolveTaskUpdatedMs(task) {
+    let latest = null;
+    for (const field of BC_UPDATED_FIELDS) {
+        const raw = task?.[field];
+        if (typeof raw !== "string") continue;
+        const ms = parseDateMs(raw);
+        if (ms != null && (latest == null || ms > latest)) {
+            latest = ms;
+        }
+    }
+    return latest;
 }
 
 async function setProjectSyncDisabled(projectNo, disabled, note) {
@@ -149,11 +179,19 @@ async function loadProjects() {
     const planMap = new Map(plans.map((plan) => [plan.id, plan]));
     const planByTitle = new Map(plans.map((plan) => [normalizeTitle(plan.title), plan]));
     const projectPlanMap = new Map();
+    const projectUpdatedMap = new Map();
     for (const task of tasks) {
         const projectNo = (task.projectNo || "").trim();
         if (!projectNo || !task.plannerPlanId) continue;
         if (!projectPlanMap.has(projectNo)) {
             projectPlanMap.set(projectNo, task.plannerPlanId);
+        }
+        const updatedMs = resolveTaskUpdatedMs(task);
+        if (updatedMs != null) {
+            const current = projectUpdatedMap.get(projectNo);
+            if (current == null || updatedMs > current) {
+                projectUpdatedMap.set(projectNo, updatedMs);
+            }
         }
     }
 
@@ -173,6 +211,7 @@ async function loadProjects() {
             }
             const plan = planId ? planMap.get(planId) : null;
             const planUrl = buildPlannerPlanUrl(planId, baseUrl, tenantId);
+            const lastUpdatedMs = projectUpdatedMap.get(projectNo) || null;
             return {
                 projectNo,
                 description: project.description || "",
@@ -183,6 +222,7 @@ async function loadProjects() {
                 planLinked,
                 planUrl,
                 syncDisabled: disabledProjects.has(normalizeProjectNo(projectNo)),
+                lastUpdatedAt: lastUpdatedMs ? new Date(lastUpdatedMs).toISOString() : "",
             };
         })
         .filter(Boolean)

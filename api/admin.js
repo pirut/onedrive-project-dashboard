@@ -426,12 +426,13 @@ async function dashboardView(req) {
             <th>Project</th>
             <th>Description</th>
             <th>Planner Plan</th>
+            <th>Last update</th>
             <th>Sync</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="planner-projects-tbody">
-          <tr><td colspan="6" class="muted">Loading…</td></tr>
+          <tr><td colspan="7" class="muted">Loading…</td></tr>
         </tbody>
       </table>
       <div id="planner-orphan-plans" class="small muted" style="margin-top:8px"></div>
