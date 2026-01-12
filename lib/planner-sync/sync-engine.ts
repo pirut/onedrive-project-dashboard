@@ -927,7 +927,11 @@ async function syncProjectTasks(
             task.plannerPlanId &&
             task.plannerPlanId !== planId;
         const bcChanged = hasBcChangedSinceSync(task, bcGraceMs);
-        if (!planMismatch && task.plannerTaskId && bcChanged === false) {
+        const desiredBucketName = normalizeBucketName(currentBucket);
+        const currentBcBucket = (task.plannerBucket || "").trim().toLowerCase();
+        const desiredBucket = desiredBucketName.toLowerCase();
+        const bucketMatches = currentBcBucket ? currentBcBucket === desiredBucket : false;
+        if (!planMismatch && task.plannerTaskId && bcChanged === false && bucketMatches) {
             logger.info("Skipping BC → Planner update; no changes since last sync", {
                 projectNo,
                 taskNo: task.taskNo,
