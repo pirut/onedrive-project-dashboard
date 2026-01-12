@@ -403,6 +403,7 @@ export default async function handler(req, res) {
         "GET /api/sync/poll-cron": "BC ↔ Planner sync (cron)",
         "GET /api/sync/projects": "List Planner project sync state",
         "POST /api/sync/projects": "Toggle Planner project sync",
+        "GET /api/sync/debug-bc-timestamps": "Inspect BC modified timestamps",
         "GET /api/sync/planner-test": "Verify Planner API connectivity",
         "POST /api/sync/subscriptions/create": "Create Graph subscriptions",
         "POST /api/sync/subscriptions/delete": "Delete Graph subscriptions",
