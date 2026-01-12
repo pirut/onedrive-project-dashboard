@@ -104,6 +104,7 @@ export async function POST(request: Request) {
         const { clientState } = getGraphConfig();
         logger.debug("Validating notifications", { requestId, expectedClientState: clientState });
         let clientStateMismatchCount = 0;
+        let clientStateMissingCount = 0;
         let missingTaskIdCount = 0;
         const items = notifications
             .map((notification, index) => {
@@ -115,7 +116,13 @@ export async function POST(request: Request) {
                     clientState: notification.clientState,
                 });
                 
-                if (notification.clientState !== clientState) {
+                if (clientState && !notification.clientState) {
+                    clientStateMissingCount += 1;
+                    logger.warn("Graph notification missing clientState", {
+                        requestId,
+                        subscriptionId: notification.subscriptionId,
+                    });
+                } else if (clientState && notification.clientState !== clientState) {
                     logger.warn("Graph notification clientState mismatch", {
                         requestId,
                         subscriptionId: notification.subscriptionId,
@@ -165,6 +172,7 @@ export async function POST(request: Request) {
             validCount: items.length,
             invalidCount: notifications.length - items.length,
             clientStateMismatchCount,
+            clientStateMissingCount,
             missingTaskIdCount,
             taskIds: items.map((item) => item.taskId).slice(0, 20),
         });

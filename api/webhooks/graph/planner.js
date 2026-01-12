@@ -84,10 +84,13 @@ export default async function handler(req, res) {
 
     const { clientState } = getGraphConfig();
     let clientStateMismatchCount = 0;
+    let clientStateMissingCount = 0;
     let missingTaskIdCount = 0;
     const items = notifications
         .map((notification) => {
-            if (notification.clientState !== clientState) {
+            if (clientState && !notification.clientState) {
+                clientStateMissingCount += 1;
+            } else if (clientState && notification.clientState !== clientState) {
                 clientStateMismatchCount += 1;
                 return null;
             }
@@ -118,6 +121,7 @@ export default async function handler(req, res) {
         validCount: items.length,
         invalidCount: notifications.length - items.length,
         clientStateMismatchCount,
+        clientStateMissingCount,
         missingTaskIdCount,
         taskIds: items.map((item) => item.taskId).slice(0, 20),
     });

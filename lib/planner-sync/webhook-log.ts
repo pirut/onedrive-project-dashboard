@@ -10,6 +10,7 @@ export type WebhookLogEntry = {
     validCount?: number;
     invalidCount?: number;
     clientStateMismatchCount?: number;
+    clientStateMissingCount?: number;
     missingTaskIdCount?: number;
     taskIds?: string[];
     error?: string;
