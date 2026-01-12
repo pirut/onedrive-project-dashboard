@@ -6,12 +6,12 @@ import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } 
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
 const DEFAULT_BUCKET_NAME = "General";
-const HEADING_BUCKETS = [
-    { match: "JOB NAME", bucket: "Pre-Construction" },
-    { match: "INSTALL", bucket: "Installation" },
-    { match: "CHANGE ORDER", bucket: "Change Orders" },
-    { match: "REVENUE", bucket: null },
-] as const;
+const HEADING_TASK_BUCKETS = new Map<number, string | null>([
+    [1000, "Pre-Construction"],
+    [2000, "Installation"],
+    [3000, null],
+    [4000, "Change Orders"],
+]);
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -112,15 +112,16 @@ function buildPlannerPlanUrl(planId: string | undefined, baseUrl: string, tenant
     return `${base}/Home/PlanViews/${planId}`;
 }
 
-function resolveBucketFromHeading(description?: string | null) {
+function resolveBucketFromHeading(taskNo?: string | number | null, description?: string | null) {
+    const rawTaskNo = String(taskNo || "").trim();
+    const match = rawTaskNo.match(/\d+/);
+    const taskNumber = match ? Number(match[0]) : Number.NaN;
+    if (!Number.isNaN(taskNumber) && HEADING_TASK_BUCKETS.has(taskNumber)) {
+        const mapped = HEADING_TASK_BUCKETS.get(taskNumber) ?? null;
+        return { bucket: mapped, skip: mapped == null };
+    }
     const heading = (description || "").trim();
     if (!heading) return { bucket: DEFAULT_BUCKET_NAME, skip: false };
-    const normalized = heading.toUpperCase();
-    for (const entry of HEADING_BUCKETS) {
-        if (normalized.includes(entry.match)) {
-            return { bucket: entry.bucket ?? null, skip: entry.bucket == null };
-        }
-    }
     return { bucket: normalizeBucketName(heading), skip: false };
 }
 function normalizeDateOnly(value?: string | null) {
@@ -895,7 +896,7 @@ async function syncProjectTasks(
     for (const task of orderedTasks) {
         const taskType = (task.taskType || "").toLowerCase();
         if (taskType === "heading") {
-            const resolved = resolveBucketFromHeading(task.description);
+            const resolved = resolveBucketFromHeading(task.taskNo, task.description);
             if (resolved.skip) {
                 currentBucket = null;
                 skipSection = true;

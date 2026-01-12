@@ -2,27 +2,28 @@ import { BusinessCentralClient } from "../../lib/planner-sync/bc-client.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 const DEFAULT_BUCKET_NAME = "General";
-const HEADING_BUCKETS = [
-    { match: "JOB NAME", bucket: "Pre-Construction" },
-    { match: "INSTALL", bucket: "Installation" },
-    { match: "CHANGE ORDER", bucket: "Change Orders" },
-    { match: "REVENUE", bucket: null },
-];
+const HEADING_TASK_BUCKETS = new Map([
+    [1000, "Pre-Construction"],
+    [2000, "Installation"],
+    [3000, null],
+    [4000, "Change Orders"],
+]);
 
 function normalizeBucketName(name) {
     const trimmed = (name || "").trim();
     return trimmed || DEFAULT_BUCKET_NAME;
 }
 
-function resolveBucketFromHeading(description) {
+function resolveBucketFromHeading(taskNo, description) {
+    const rawTaskNo = String(taskNo || "").trim();
+    const match = rawTaskNo.match(/\d+/);
+    const taskNumber = match ? Number(match[0]) : Number.NaN;
+    if (!Number.isNaN(taskNumber) && HEADING_TASK_BUCKETS.has(taskNumber)) {
+        const mapped = HEADING_TASK_BUCKETS.get(taskNumber) ?? null;
+        return { bucket: mapped, skip: mapped == null };
+    }
     const heading = (description || "").trim();
     if (!heading) return { bucket: DEFAULT_BUCKET_NAME, skip: false };
-    const normalized = heading.toUpperCase();
-    for (const entry of HEADING_BUCKETS) {
-        if (normalized.includes(entry.match)) {
-            return { bucket: entry.bucket ?? null, skip: entry.bucket == null };
-        }
-    }
     return { bucket: normalizeBucketName(heading), skip: false };
 }
 
@@ -79,7 +80,7 @@ export default async function handler(req, res) {
 
             if (taskType === "heading") {
                 currentHeading = (task.description || "").trim() || null;
-                const resolved = resolveBucketFromHeading(task.description);
+                const resolved = resolveBucketFromHeading(task.taskNo, task.description);
                 if (resolved.skip) {
                     currentBucket = null;
                     skipSection = true;
