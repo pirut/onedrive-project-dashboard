@@ -1,5 +1,5 @@
 import { BusinessCentralClient, BcProjectTask } from "./bc-client";
-import { GraphClient, PlannerTask, PlannerTaskDetails } from "./graph-client";
+import { GraphClient, GraphUser, PlannerTask, PlannerTaskDetails } from "./graph-client";
 import { getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
 import { logger } from "./logger";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "./project-sync-store";
@@ -12,6 +12,8 @@ const HEADING_TASK_BUCKETS = new Map<number, string | null>([
     [3000, null],
     [4000, "Change Orders"],
 ]);
+const assignmentCache = new Map<string, string | null>();
+let groupMembersCache: GraphUser[] | null = null;
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -20,6 +22,62 @@ function hasField(task: BcProjectTask, field: string) {
 function normalizeBucketName(name?: string | null) {
     const trimmed = (name || "").trim();
     return trimmed || DEFAULT_BUCKET_NAME;
+}
+
+function resolveAssigneeIdentity(task: BcProjectTask) {
+    const code = (task.assignedPersonCode || "").trim();
+    const name = (task.assignedPersonName || "").trim();
+    if (code && code.includes("@")) return code;
+    return name || code || null;
+}
+
+function hasPlannerAssignments(task: PlannerTask | null) {
+    const assignments = (task as PlannerTask & { assignments?: Record<string, unknown> })?.assignments;
+    if (!assignments || typeof assignments !== "object") return false;
+    return Object.keys(assignments).length > 0;
+}
+
+function buildPlannerAssignments(userId: string) {
+    return {
+        [userId]: {
+            "@odata.type": "microsoft.graph.plannerAssignment",
+            orderHint: " !",
+        },
+    };
+}
+
+async function resolveAssigneeUserId(graphClient: GraphClient, identity: string) {
+    const trimmed = identity.trim();
+    if (!trimmed) return null;
+    const key = trimmed.toLowerCase();
+    if (assignmentCache.has(key)) return assignmentCache.get(key) || null;
+    if (groupMembersCache == null) {
+        try {
+            const { groupId } = getPlannerConfig();
+            groupMembersCache = await graphClient.listGroupMembers(groupId);
+        } catch (error) {
+            logger.warn("Planner group member lookup failed", { error: (error as Error)?.message });
+            groupMembersCache = [];
+        }
+    }
+    const isEmail = key.includes("@");
+    const match = groupMembersCache.find((member) => {
+        if (!member?.id) return false;
+        const mail = (member.mail || "").toLowerCase();
+        const upn = (member.userPrincipalName || "").toLowerCase();
+        const displayName = (member.displayName || "").toLowerCase();
+        return isEmail ? mail === key || upn === key : displayName === key;
+    });
+    let userId = match?.id || null;
+    if (!userId) {
+        try {
+            userId = await graphClient.findUserIdByIdentity(trimmed);
+        } catch (error) {
+            logger.warn("Planner user lookup failed", { identity: trimmed, error: (error as Error)?.message });
+        }
+    }
+    assignmentCache.set(key, userId || null);
+    return userId;
 }
 
 function hasTimeZoneSuffix(value: string) {
@@ -518,8 +576,22 @@ async function upsertPlannerTask(
     const desiredDue = toPlannerDate(task.manualEndDate || task.endDate || null);
     const desiredPercent = toPlannerPercent(task.percentComplete || 0);
     const desiredDescription = formatPlannerDescription(task);
+    const assigneeIdentity = resolveAssigneeIdentity(task);
 
     if (!task.plannerTaskId) {
+        let desiredAssignments: Record<string, unknown> | null = null;
+        if (assigneeIdentity) {
+            const assigneeId = await resolveAssigneeUserId(graphClient, assigneeIdentity);
+            if (assigneeId) {
+                desiredAssignments = buildPlannerAssignments(assigneeId);
+            } else {
+                logger.warn("Planner assignee not found for BC task", {
+                    projectNo: task.projectNo,
+                    taskNo: task.taskNo,
+                    assignee: assigneeIdentity,
+                });
+            }
+        }
         const payload: Record<string, unknown> = {
             planId,
             bucketId,
@@ -528,6 +600,7 @@ async function upsertPlannerTask(
         };
         if (desiredStart) payload.startDateTime = desiredStart;
         if (desiredDue) payload.dueDateTime = desiredDue;
+        if (desiredAssignments) payload.assignments = desiredAssignments;
         const created = await graphClient.createTask(payload);
         const details = await graphClient.getTaskDetails(created.id);
         if (details?.["@odata.etag"]) {
@@ -559,6 +632,21 @@ async function upsertPlannerTask(
     }
 
     if (!plannerTask) return;
+
+    const plannerHasAssignments = hasPlannerAssignments(plannerTask);
+    let desiredAssignments: Record<string, unknown> | null = null;
+    if (!plannerHasAssignments && assigneeIdentity) {
+        const assigneeId = await resolveAssigneeUserId(graphClient, assigneeIdentity);
+        if (assigneeId) {
+            desiredAssignments = buildPlannerAssignments(assigneeId);
+        } else {
+            logger.warn("Planner assignee not found for BC task", {
+                projectNo: task.projectNo,
+                taskNo: task.taskNo,
+                assignee: assigneeIdentity,
+            });
+        }
+    }
 
     const syncDecision = resolveSyncDecision(task, plannerTask);
     if (syncDecision.decision === "planner") {
@@ -593,6 +681,7 @@ async function upsertPlannerTask(
         if (plannerStart !== desiredStartDate) changes.startDateTime = desiredStart;
         if (plannerDue !== desiredDueDate) changes.dueDateTime = desiredDue;
         if ((currentTask.percentComplete || 0) !== desiredPercent) changes.percentComplete = desiredPercent;
+        if (!plannerHasAssignments && desiredAssignments) changes.assignments = desiredAssignments;
         return changes;
     };
     const isConflict = (error: unknown) => {

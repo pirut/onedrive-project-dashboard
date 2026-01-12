@@ -42,6 +42,15 @@ export type GraphOrganization = {
     [key: string]: unknown;
 };
 
+export type GraphUser = {
+    id?: string;
+    displayName?: string;
+    mail?: string;
+    userPrincipalName?: string;
+    "@odata.type"?: string;
+    [key: string]: unknown;
+};
+
 export type GraphSubscription = {
     id: string;
     resource?: string;
@@ -160,6 +169,48 @@ export class GraphClient {
         const domains = org.verifiedDomains;
         const preferred = domains.find((domain) => domain?.isDefault) || domains.find((domain) => domain?.isInitial);
         return (preferred || domains[0])?.name || null;
+    }
+
+    async listGroupMembers(groupId: string) {
+        const members: GraphUser[] = [];
+        let path = `/groups/${groupId}/members?$select=id,displayName,mail,userPrincipalName&$top=999`;
+        while (path) {
+            const res = await this.request(path);
+            const data = await readResponseJson<{ value: GraphUser[]; "@odata.nextLink"?: string }>(res);
+            if (data?.value?.length) members.push(...data.value);
+            const next = data?.["@odata.nextLink"];
+            if (next && next.startsWith(this.baseUrl)) {
+                path = next.slice(this.baseUrl.length);
+                continue;
+            }
+            path = "";
+        }
+        return members;
+    }
+
+    async findUserIdByIdentity(identity: string) {
+        const trimmed = identity.trim();
+        if (!trimmed) return null;
+        const escaped = trimmed.replace(/'/g, "''");
+        const isEmail = trimmed.includes("@");
+        const filter = isEmail
+            ? `userPrincipalName eq '${escaped}' or mail eq '${escaped}'`
+            : `displayName eq '${escaped}'`;
+        let path = `/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,mail,userPrincipalName&$top=5`;
+        let res = await this.request(path);
+        let data = await readResponseJson<{ value: GraphUser[] }>(res);
+        let users = data?.value || [];
+        if (!users.length && !isEmail) {
+            const fallback = `startswith(displayName,'${escaped}')`;
+            path = `/users?$filter=${encodeURIComponent(fallback)}&$select=id,displayName,mail,userPrincipalName&$top=5`;
+            res = await this.request(path);
+            data = await readResponseJson<{ value: GraphUser[] }>(res);
+            users = data?.value || [];
+        }
+        if (users.length > 1) {
+            logger.warn("Multiple Graph users matched identity", { identity: trimmed, count: users.length });
+        }
+        return users[0]?.id || null;
     }
 
     async listBuckets(planId: string) {
