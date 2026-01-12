@@ -1,4 +1,4 @@
-import { runPollingSync } from "../../lib/planner-sync/index.js";
+import { runPollingSync, syncBcToPlanner } from "../../lib/planner-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 export default async function handler(req, res) {
@@ -8,10 +8,11 @@ export default async function handler(req, res) {
     }
 
     try {
-        const result = await runPollingSync();
-        res.status(200).json({ ok: true, result });
+        const bcResult = await syncBcToPlanner();
+        const pollResult = await runPollingSync();
+        res.status(200).json({ ok: true, result: { bcToPlanner: bcResult, plannerToBc: pollResult } });
     } catch (error) {
-        logger.error("Polling cron failed", { error: error?.message || String(error) });
+        logger.error("Sync cron failed", { error: error?.message || String(error) });
         res.status(500).json({ ok: false, error: error?.message || String(error) });
     }
 }

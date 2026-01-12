@@ -149,9 +149,11 @@ SYNC_POLL_MINUTES=10
 SYNC_TIMEZONE=America/New_York
 SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=true
 SYNC_LOCK_TIMEOUT_MINUTES=30
+SYNC_PREFER_BC=true
 
 # Optional persistence overrides
 PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
+PLANNER_PROJECT_SYNC_FILE=.planner-project-sync.json
 KV_REST_API_URL=
 KV_REST_API_TOKEN=
 ```
@@ -163,11 +165,15 @@ Notes:
 - Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
+- `SYNC_PREFER_BC=true` skips Planner → BC updates when BC has been synced more recently than the Planner change.
+- Use `POST /api/sync/projects` to disable sync for specific projects (prevents plan re-creation after manual deletion).
 
 ### Admin endpoints
 
 - `POST /api/sync/run-bc-to-planner` (optional JSON: `{ "projectNo": "P-100" }`)
 - `POST /api/sync/run-poll`
+- `GET /api/sync/projects` (list Planner projects + sync state)
+- `POST /api/sync/projects` (toggle per-project sync)
 - `POST /api/sync/subscriptions/create`
 - `POST /api/sync/subscriptions/renew`
 - `POST /api/webhooks/graph/planner` (Graph notification receiver)

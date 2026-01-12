@@ -1,6 +1,7 @@
 import { BusinessCentralClient } from "../../../lib/planner-sync/bc-client.js";
 import { GraphClient } from "../../../lib/planner-sync/graph-client.js";
 import { getGraphConfig, getPlannerConfig, getSyncConfig } from "../../../lib/planner-sync/config.js";
+import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../../../lib/planner-sync/project-sync-store.js";
 import { listStoredSubscriptions, saveStoredSubscriptions } from "../../../lib/planner-sync/subscriptions-store.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
@@ -33,6 +34,7 @@ export default async function handler(req, res) {
     const plannerConfig = getPlannerConfig();
     const syncConfig = getSyncConfig();
     const graphClient = new GraphClient();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
 
     const planIds = new Set();
     if (Array.isArray(body?.planIds)) {
@@ -50,6 +52,7 @@ export default async function handler(req, res) {
             const bcClient = new BusinessCentralClient();
             const tasks = await bcClient.listProjectTasks("plannerPlanId ne ''");
             for (const task of tasks) {
+                if (disabledProjects.has(normalizeProjectNo(task.projectNo))) continue;
                 if (task.plannerPlanId) planIds.add(task.plannerPlanId);
             }
         } catch (error) {

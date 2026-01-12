@@ -1,4 +1,4 @@
-import { runPollingSync } from "../../../../../lib/planner-sync";
+import { runPollingSync, syncBcToPlanner } from "../../../../../lib/planner-sync";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,8 @@ export async function GET(request: Request) {
     });
 
     try {
-        const result = await runPollingSync();
+        const bcResult = await syncBcToPlanner();
+        const pollResult = await runPollingSync();
         const duration = Date.now() - startTime;
 
         logger.info("GET /api/sync/poll-cron - Success", {
@@ -24,13 +25,16 @@ export async function GET(request: Request) {
             duration,
         });
 
-        return new Response(JSON.stringify({ ok: true, result, requestId, duration }, null, 2), {
-            status: 200,
-            headers: {
-                "Content-Type": "application/json",
-                "X-Request-ID": requestId,
-            },
-        });
+        return new Response(
+            JSON.stringify({ ok: true, result: { bcToPlanner: bcResult, plannerToBc: pollResult }, requestId, duration }, null, 2),
+            {
+                status: 200,
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Request-ID": requestId,
+                },
+            }
+        );
     } catch (error) {
         const duration = Date.now() - startTime;
         const errorMessage = error instanceof Error ? error.message : String(error);

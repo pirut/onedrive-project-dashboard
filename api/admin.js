@@ -385,6 +385,35 @@ async function dashboardView(req) {
 
   <div class="panel">
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
+      <div style="font-weight:600">Planner Projects</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" id="planner-projects-refresh" style="background:#1f2a44;color:#e6ecff">Refresh list</button>
+      </div>
+    </div>
+    <div class="row" style="margin:8px 0 12px 0">
+      <input id="planner-projects-filter" placeholder="Filter by project no, status, or plan..." />
+    </div>
+    <div id="planner-projects-status" class="small muted" style="margin-bottom:8px">Loading planner projects…</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Project</th>
+          <th>Description</th>
+          <th>Planner Plan</th>
+          <th>Sync</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="planner-projects-tbody">
+        <tr><td colspan="5" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+    <div id="planner-orphan-plans" class="small muted" style="margin-top:8px"></div>
+    <div class="small muted" style="margin-top:8px">Disable sync to prevent plan recreation after deleting a plan in Planner.</div>
+  </div>
+
+  <div class="panel">
+    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">API Debugging</div>
       <div style="display:flex;align-items:center;gap:8px">
         <button type="button" id="debug-refresh-btn" onclick="if(window.__debugAction){window.__debugAction('refresh');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}">Refresh Debug Info</button>

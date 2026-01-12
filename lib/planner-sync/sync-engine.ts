@@ -2,6 +2,7 @@ import { BusinessCentralClient, BcProjectTask } from "./bc-client";
 import { GraphClient, PlannerTask, PlannerTaskDetails } from "./graph-client";
 import { getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
 import { logger } from "./logger";
+import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "./project-sync-store";
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
 const DEFAULT_BUCKET_NAME = "General";
@@ -136,6 +137,12 @@ function filterTasksForProject(tasks: BcProjectTask[], projectNo: string) {
     const normalized = (projectNo || "").trim().toLowerCase();
     if (!normalized) return tasks;
     return tasks.filter((task) => (task.projectNo || "").trim().toLowerCase() === normalized);
+}
+
+function isProjectDisabled(disabledProjects: Set<string>, projectNo?: string | null) {
+    if (!projectNo) return false;
+    const normalized = normalizeProjectNo(projectNo);
+    return normalized ? disabledProjects.has(normalized) : false;
 }
 
 function buildBcPatch(task: BcProjectTask, updates: Record<string, unknown>) {
@@ -407,6 +414,21 @@ async function applyPlannerUpdateToBc(
         return;
     }
 
+    const { preferBc } = getSyncConfig();
+    if (preferBc) {
+        const lastSyncAt = bcTask.lastSyncAt ? Date.parse(bcTask.lastSyncAt) : NaN;
+        const plannerModifiedAt = plannerTask.lastModifiedDateTime ? Date.parse(plannerTask.lastModifiedDateTime) : NaN;
+        if (!Number.isNaN(lastSyncAt) && !Number.isNaN(plannerModifiedAt) && lastSyncAt >= plannerModifiedAt) {
+            logger.info("Skipping inbound Planner update; BC sync is newer", {
+                projectNo: bcTask.projectNo,
+                taskNo: bcTask.taskNo,
+                lastSyncAt: bcTask.lastSyncAt,
+                plannerModifiedAt: plannerTask.lastModifiedDateTime,
+            });
+            return;
+        }
+    }
+
     let bucketName: string | undefined;
     if (plannerTask.bucketId) {
         try {
@@ -449,10 +471,18 @@ async function applyPlannerUpdateToBc(
 export async function syncPlannerNotification(notification: PlannerNotification) {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
 
     const bcTask = await bcClient.findProjectTaskByPlannerTaskId(notification.taskId);
     if (!bcTask) {
         logger.info("No BC task found for Planner notification", { taskId: notification.taskId });
+        return;
+    }
+    if (isProjectDisabled(disabledProjects, bcTask.projectNo)) {
+        logger.info("Skipping Planner notification for disabled project", {
+            taskId: notification.taskId,
+            projectNo: bcTask.projectNo,
+        });
         return;
     }
 
@@ -486,8 +516,13 @@ export async function syncBcToPlanner(projectNo?: string) {
     const bucketCache = new Map<string, Map<string, string>>();
     const plannerBaseUrl = await resolvePlannerBaseUrl(graphClient);
     const { tenantId } = getGraphConfig();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
 
     if (projectNo) {
+        if (isProjectDisabled(disabledProjects, projectNo)) {
+            logger.info("Project sync disabled; skipping BC → Planner", { projectNo });
+            return { projectNo, tasks: 0, skipped: true, reason: "sync disabled" };
+        }
         const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projectNo.replace(/'/g, "''")}'`);
         const tasks = filterTasksForProject(rawTasks, projectNo);
         if (rawTasks.length && tasks.length !== rawTasks.length) {
@@ -522,9 +557,14 @@ export async function syncBcToPlanner(projectNo?: string) {
 
     let totalTasks = 0;
     const plans: { projectNo: string; planId?: string; planUrl?: string }[] = [];
+    const skippedProjects: string[] = [];
     for (const project of projects) {
         const projNo = (project.projectNo || "").trim();
         if (!projNo) continue;
+        if (isProjectDisabled(disabledProjects, projNo)) {
+            skippedProjects.push(projNo);
+            continue;
+        }
         const planTitle = buildPlanTitle(projNo, project.description);
         const rawTasks = await bcClient.listProjectTasks(`projectNo eq '${projNo.replace(/'/g, "''")}'`);
         const tasks = filterTasksForProject(rawTasks, projNo);
@@ -540,7 +580,7 @@ export async function syncBcToPlanner(projectNo?: string) {
         plans.push({ projectNo: projNo, planId, planUrl: buildPlannerPlanUrl(planId, plannerBaseUrl, tenantId) });
     }
 
-    return { projects: projects.length, tasks: totalTasks, plans };
+    return { projects: projects.length, tasks: totalTasks, plans, skippedProjects };
 }
 
 async function syncProjectTasks(
@@ -602,6 +642,7 @@ export async function runPollingSync() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const { pollMinutes } = getSyncConfig();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
 
     const isNotFound = (error: unknown) => {
         const msg = error instanceof Error ? error.message : String(error);
@@ -612,7 +653,12 @@ export async function runPollingSync() {
     const cutoff = Date.now() - pollMinutes * 60 * 1000;
 
     let processed = 0;
+    let skippedDisabled = 0;
     for (const task of tasks) {
+        if (isProjectDisabled(disabledProjects, task.projectNo)) {
+            skippedDisabled += 1;
+            continue;
+        }
         const lastSync = task.lastSyncAt ? Date.parse(task.lastSyncAt) : 0;
         if (lastSync && lastSync > cutoff) continue;
         if (!task.plannerTaskId) continue;
@@ -653,7 +699,7 @@ export async function runPollingSync() {
         processed += 1;
     }
 
-    return { processed, total: tasks.length };
+    return { processed, total: tasks.length, skippedDisabled };
 }
 
 export async function enqueueAndProcessNotifications(items: PlannerNotification[]) {

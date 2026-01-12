@@ -9,6 +9,7 @@ export type PlannerTask = {
     bucketId?: string;
     startDateTime?: string | null;
     dueDateTime?: string | null;
+    lastModifiedDateTime?: string | null;
     percentComplete?: number;
     "@odata.etag"?: string;
     [key: string]: unknown;
