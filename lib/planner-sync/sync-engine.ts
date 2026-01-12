@@ -136,8 +136,8 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     const lastSyncAt = parseDateMs(bcTask.lastSyncAt || null);
     const bcModified = resolveBcModifiedAt(bcTask);
     const plannerModified = resolvePlannerModifiedAt(plannerTask);
-    const bcChangedSinceSync = lastSyncAt != null && bcModified.ms != null ? bcModified.ms > lastSyncAt : null;
-    const plannerChangedSinceSync = lastSyncAt != null && plannerModified.ms != null ? plannerModified.ms > lastSyncAt : null;
+    const bcChangedSinceSync = lastSyncAt != null ? (bcModified.ms != null ? bcModified.ms > lastSyncAt : false) : null;
+    const plannerChangedSinceSync = lastSyncAt != null ? (plannerModified.ms != null ? plannerModified.ms > lastSyncAt : false) : null;
     const { preferBc } = getSyncConfig();
 
     if (lastSyncAt != null) {
@@ -635,6 +635,20 @@ async function applyPlannerUpdateToBc(
         updates.manualEndDate = dueDate;
     } else {
         updates.endDate = dueDate;
+    }
+
+    const hasChanges = Object.entries(updates).some(([key, value]) => {
+        const current = (bcTask as Record<string, unknown>)[key];
+        if (current == null && value == null) return false;
+        return current !== value;
+    });
+    if (!hasChanges) {
+        logger.info("No Planner → BC changes detected; skipping update", {
+            projectNo: bcTask.projectNo,
+            taskNo: bcTask.taskNo,
+            taskId: plannerTask.id,
+        });
+        return;
     }
 
     await updateBcTaskWithSyncLock(bcClient, bcTask, updates);
