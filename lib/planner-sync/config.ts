@@ -54,7 +54,7 @@ export function getSyncConfig() {
     }
     const pollMinutes = Number(readEnv("SYNC_POLL_MINUTES") || 10);
     const syncLockTimeoutMinutes = Number(readEnv("SYNC_LOCK_TIMEOUT_MINUTES") || 30);
-    const preferBc = readBoolEnv("SYNC_PREFER_BC", true);
+    const preferBc = readBoolEnv("SYNC_PREFER_BC", false);
     const bcModifiedGraceMs = Number(readEnv("SYNC_BC_MODIFIED_GRACE_MS") || 2000);
     return {
         syncMode,
