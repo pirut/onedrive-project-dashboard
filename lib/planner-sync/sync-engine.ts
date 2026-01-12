@@ -603,6 +603,11 @@ export async function runPollingSync() {
     const graphClient = new GraphClient();
     const { pollMinutes } = getSyncConfig();
 
+    const isNotFound = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 404");
+    };
+
     const tasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
     const cutoff = Date.now() - pollMinutes * 60 * 1000;
 
@@ -619,6 +624,27 @@ export async function runPollingSync() {
                 taskId: task.plannerTaskId,
                 error: (error as Error)?.message,
             });
+            if (task.systemId && isNotFound(error)) {
+                try {
+                    await bcClient.patchProjectTask(task.systemId, {
+                        plannerTaskId: "",
+                        plannerPlanId: "",
+                        plannerBucket: "",
+                        lastPlannerEtag: "",
+                        syncLock: false,
+                    });
+                    logger.warn("Cleared stale Planner linkage after 404", {
+                        taskId: task.plannerTaskId,
+                        projectNo: task.projectNo,
+                        taskNo: task.taskNo,
+                    });
+                } catch (patchError) {
+                    logger.warn("Failed to clear stale Planner linkage", {
+                        taskId: task.plannerTaskId,
+                        error: (patchError as Error)?.message,
+                    });
+                }
+            }
             continue;
         }
         if (!plannerTask) continue;
