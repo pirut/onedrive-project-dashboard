@@ -195,10 +195,8 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     const plannerEtag = typeof plannerTask?.["@odata.etag"] === "string" ? plannerTask["@odata.etag"] : null;
     const lastPlannerEtag = typeof bcTask.lastPlannerEtag === "string" ? bcTask.lastPlannerEtag : null;
     const plannerEtagChanged = plannerEtag && lastPlannerEtag ? plannerEtag !== lastPlannerEtag : null;
-    const { preferBc, bcModifiedGraceMs, pollMinutes } = getSyncConfig();
+    const { bcModifiedGraceMs } = getSyncConfig();
     const bcGrace = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
-    const recentWindowMs = Number.isFinite(pollMinutes) ? pollMinutes * 60 * 1000 : 0;
-    const bcIsRecent = bcModified.ms != null && recentWindowMs > 0 ? Date.now() - bcModified.ms <= recentWindowMs : false;
     const bcChangedSinceSync = lastSyncAt != null
         ? bcModified.ms != null
             ? bcModified.ms > lastSyncAt + bcGrace
@@ -218,51 +216,7 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     if (lastSyncAt != null) {
         const bcChanged = bcChangedSinceSync === true;
         const plannerChanged = plannerChangedSinceSync === true;
-        if (bcChanged && plannerChanged) {
-            if (bcModified.ms != null && plannerModified.ms != null) {
-                return {
-                    decision: bcModified.ms > plannerModified.ms ? "bc" : "planner",
-                    lastSyncAt,
-                    bcModified,
-                    plannerModified,
-                    bcChangedSinceSync,
-                    plannerChangedSinceSync,
-                    plannerEtagChanged,
-                };
-            }
-            if (bcIsRecent) {
-                return {
-                    decision: "bc",
-                    lastSyncAt,
-                    bcModified,
-                    plannerModified,
-                    bcChangedSinceSync,
-                    plannerChangedSinceSync,
-                    plannerEtagChanged,
-                };
-            }
-            if (preferBc) {
-                return {
-                    decision: "bc",
-                    lastSyncAt,
-                    bcModified,
-                    plannerModified,
-                    bcChangedSinceSync,
-                    plannerChangedSinceSync,
-                    plannerEtagChanged,
-                };
-            }
-            return {
-                decision: "planner",
-                lastSyncAt,
-                bcModified,
-                plannerModified,
-                bcChangedSinceSync,
-                plannerChangedSinceSync,
-                plannerEtagChanged,
-            };
-        }
-        if (bcChanged && !plannerChanged) {
+        if (bcChanged) {
             return {
                 decision: "bc",
                 lastSyncAt,
@@ -273,7 +227,7 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
                 plannerEtagChanged,
             };
         }
-        if (!bcChanged && plannerChanged) {
+        if (plannerChanged) {
             return {
                 decision: "planner",
                 lastSyncAt,
@@ -295,41 +249,7 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
         };
     }
 
-    if (bcModified.ms != null && plannerModified.ms != null) {
-        if (bcModified.ms === plannerModified.ms) {
-            return {
-                decision: preferBc ? "bc" : "planner",
-                lastSyncAt,
-                bcModified,
-                plannerModified,
-                bcChangedSinceSync,
-                plannerChangedSinceSync,
-                plannerEtagChanged,
-            };
-        }
-        return {
-            decision: bcModified.ms > plannerModified.ms ? "bc" : "planner",
-            lastSyncAt,
-            bcModified,
-            plannerModified,
-            bcChangedSinceSync,
-            plannerChangedSinceSync,
-            plannerEtagChanged,
-        };
-    }
-    if (bcModified.ms != null) {
-        const decision = bcIsRecent || preferBc ? "bc" : "planner";
-        return {
-            decision,
-            lastSyncAt,
-            bcModified,
-            plannerModified,
-            bcChangedSinceSync,
-            plannerChangedSinceSync,
-            plannerEtagChanged,
-        };
-    }
-    if (plannerModified.ms != null) {
+    if (plannerModified.ms != null || plannerEtagChanged === true) {
         return {
             decision: "planner",
             lastSyncAt,
@@ -340,8 +260,19 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
             plannerEtagChanged,
         };
     }
+    if (bcModified.ms != null) {
+        return {
+            decision: "bc",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+            plannerEtagChanged,
+        };
+    }
     return {
-        decision: preferBc ? "bc" : "planner",
+        decision: "planner",
         lastSyncAt,
         bcModified,
         plannerModified,

@@ -166,9 +166,8 @@ Notes:
 - Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
-- `SYNC_PREFER_BC=true` forces BC to win conflicts; default is to prefer Planner unless BC changed recently.
+- If BC changed since `lastSyncAt`, BC wins; otherwise Planner is treated as the source of truth.
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms) to avoid treating sync metadata updates as user changes.
-- "Recent BC change" checks use the `SYNC_POLL_MINUTES` window when Planner timestamps are missing.
 - Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
 
 ### Admin endpoints
