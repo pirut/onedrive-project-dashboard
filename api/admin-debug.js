@@ -110,17 +110,18 @@ async function debugView(req) {
     <pre id="validation-output" class="log" style="display:none"></pre>
   </div>
 
-  <div class="panel">
-    <div style="font-weight:600">Quick Actions</div>
-    <div class="row">
-      <button type="button" id="planner-test-btn">Test Planner API</button>
-      <button type="button" id="subs-list-btn" style="background:#1f2a44;color:#e6ecff">List Subscriptions</button>
-      <button type="button" id="webhook-snapshot-btn" style="background:#1f2a44;color:#e6ecff">Load Webhook Snapshot</button>
-      <button type="button" id="webhook-feed-start" style="background:#0f8b4c;color:#fff">Start Live Feed</button>
-      <button type="button" id="webhook-feed-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
-      <button type="button" id="webhook-feed-clear" style="background:#1f2a44;color:#e6ecff">Clear Feed</button>
-    </div>
-    <div class="small muted">Planner webhooks only fire on task create/update/delete for subscribed plan IDs.</div>
+    <div class="panel">
+      <div style="font-weight:600">Quick Actions</div>
+      <div class="row">
+        <button type="button" id="planner-test-btn">Test Planner API</button>
+        <button type="button" id="subs-list-btn" style="background:#1f2a44;color:#e6ecff">List Subscriptions</button>
+        <button type="button" id="subs-delete-btn" style="background:#ef4444;color:#fff">Delete Planner Subscriptions</button>
+        <button type="button" id="webhook-snapshot-btn" style="background:#1f2a44;color:#e6ecff">Load Webhook Snapshot</button>
+        <button type="button" id="webhook-feed-start" style="background:#0f8b4c;color:#fff">Start Live Feed</button>
+        <button type="button" id="webhook-feed-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
+        <button type="button" id="webhook-feed-clear" style="background:#1f2a44;color:#e6ecff">Clear Feed</button>
+      </div>
+      <div class="small muted">Planner webhooks only fire on task create/update/delete for subscribed plan IDs.</div>
   </div>
 
   <div class="grid">
@@ -262,6 +263,24 @@ async function debugView(req) {
         }
       }
 
+      async function deleteSubscriptions(){
+        var ok = window.confirm('Delete all Planner subscriptions? This cannot be undone.');
+        if(!ok) return;
+        setStatus(subsStatus, 'Deleting…', 'warn');
+        try {
+          var res = await fetchJson('/api/sync/subscriptions/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ all: true })
+          });
+          renderJson(subsOutput, res.payload);
+          setStatus(subsStatus, res.ok ? 'Deleted' : 'Error', res.ok ? 'ok' : 'bad');
+        } catch(e){
+          renderJson(subsOutput, e && e.message ? e.message : String(e));
+          setStatus(subsStatus, 'Error', 'bad');
+        }
+      }
+
       async function loadWebhookSnapshot(){
         setStatus(webhookStatus, 'Loading…', 'muted');
         try {
@@ -324,6 +343,7 @@ async function debugView(req) {
 
       byId('planner-test-btn').addEventListener('click', loadPlannerTest);
       byId('subs-list-btn').addEventListener('click', loadSubscriptions);
+      byId('subs-delete-btn').addEventListener('click', deleteSubscriptions);
       byId('webhook-snapshot-btn').addEventListener('click', loadWebhookSnapshot);
       byId('webhook-feed-start').addEventListener('click', startFeed);
       byId('webhook-feed-stop').addEventListener('click', stopFeed);

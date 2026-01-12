@@ -235,6 +235,13 @@ export class GraphClient {
         return data?.value || [];
     }
 
+    async deleteSubscription(id: string) {
+        const res = await this.request(`/subscriptions/${id}`, {
+            method: "DELETE",
+        });
+        return res.status === 204 || res.status === 202 || res.status === 200;
+    }
+
     async renewSubscription(id: string, expirationDateTime: string) {
         const res = await this.request(`/subscriptions/${id}`, {
             method: "PATCH",
