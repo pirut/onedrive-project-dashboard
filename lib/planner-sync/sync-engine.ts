@@ -710,7 +710,14 @@ async function applyPlannerUpdateToBc(
             });
         }
     }
-    const bcPercent = toBcPercent(plannerTask.percentComplete ?? 0);
+    const plannerPercent = plannerTask.percentComplete ?? 0;
+    const plannerInProgress = plannerPercent > 0 && plannerPercent < 100;
+    const currentBcPercent = typeof bcTask.percentComplete === "number" ? bcTask.percentComplete : null;
+    const bcPercent = plannerInProgress
+        ? currentBcPercent != null && currentBcPercent > 0 && currentBcPercent < 100
+            ? currentBcPercent
+            : 50
+        : toBcPercent(plannerPercent);
     const startDate = toBcDate(plannerTask.startDateTime || null);
     const dueDate = toBcDate(plannerTask.dueDateTime || null);
 
