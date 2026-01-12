@@ -11,7 +11,14 @@ type PlannerTestChecks = {
     tasks?: {
         ok: boolean;
         count?: number;
-        sample?: { id: string; title?: string; bucketId?: string; percentComplete?: number }[];
+        sample?: {
+            id: string;
+            title?: string;
+            bucketId?: string;
+            percentComplete?: number;
+            startDateTime?: string | null;
+            dueDateTime?: string | null;
+        }[];
         error?: string;
     };
     plannerBaseUrl?: { ok: boolean; value?: string };
@@ -148,6 +155,8 @@ export async function GET(request: Request) {
                         title: task.title,
                         bucketId: task.bucketId,
                         percentComplete: task.percentComplete,
+                        startDateTime: task.startDateTime ?? null,
+                        dueDateTime: task.dueDateTime ?? null,
                     })),
                 };
             } catch (error) {

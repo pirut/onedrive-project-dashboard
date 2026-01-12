@@ -116,6 +116,8 @@ export default async function handler(req, res) {
                         title: task.title,
                         bucketId: task.bucketId,
                         percentComplete: task.percentComplete,
+                        startDateTime: task.startDateTime ?? null,
+                        dueDateTime: task.dueDateTime ?? null,
                     })),
                 };
             } catch (error) {
