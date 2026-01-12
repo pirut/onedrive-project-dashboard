@@ -8,6 +8,10 @@
         {
             "path": "/api/sync-folders-cron",
             "schedule": "0 9 * * *"
+        },
+        {
+            "path": "/api/sync/poll-cron",
+            "schedule": "*/10 * * * *"
         }
     ],
     "headers": [
