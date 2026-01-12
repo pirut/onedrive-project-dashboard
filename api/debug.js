@@ -400,6 +400,7 @@ export default async function handler(req, res) {
         "GET /api/debug": "Admin debug info",
         "POST /api/sync/run-bc-to-planner": "BC → Planner sync",
         "POST /api/sync/run-poll": "Planner → BC polling",
+        "GET /api/sync/planner-test": "Verify Planner API connectivity",
         "POST /api/sync/subscriptions/create": "Create Graph subscriptions",
         "POST /api/sync/subscriptions/renew": "Renew Graph subscriptions",
         "POST /api/webhooks/graph/planner?validationToken=debug": "Webhook validation",

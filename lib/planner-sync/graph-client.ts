@@ -123,6 +123,12 @@ export class GraphClient {
         return data || null;
     }
 
+    async listTasks(planId: string) {
+        const res = await this.request(`/planner/plans/${planId}/tasks`);
+        const data = await readResponseJson<{ value: PlannerTask[] }>(res);
+        return data?.value || [];
+    }
+
     async createPlan(groupId: string, title: string) {
         const res = await this.request(`/planner/plans`, {
             method: "POST",
