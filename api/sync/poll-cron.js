@@ -1,5 +1,5 @@
-import { runPollingSync } from "../../../lib/planner-sync/index.js";
-import { logger } from "../../../lib/planner-sync/logger.js";
+import { runPollingSync } from "../../lib/planner-sync/index.js";
+import { logger } from "../../lib/planner-sync/logger.js";
 
 export default async function handler(req, res) {
     if (req.method !== "GET") {
