@@ -359,7 +359,9 @@ async function dashboardView(req) {
   <div class="panel">
     <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
       <div style="font-weight:600">Planner Sync</div>
-      <div class="small muted">Run sync + subscriptions</div>
+      <div class="row">
+        <a class="badge" href="/api/admin-debug">Open Debug Console</a>
+      </div>
     </div>
     <div class="row">
       <label for="planner-project-no">Project No (optional)</label>
