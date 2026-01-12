@@ -23,6 +23,68 @@ function normalizeBucketName(name?: string | null) {
     return trimmed || DEFAULT_BUCKET_NAME;
 }
 
+function hasTimeZoneSuffix(value: string) {
+    return /([zZ]|[+-]\d{2}:\d{2})$/.test(value);
+}
+
+function getTimeZoneOffsetMs(date: Date, timeZone: string) {
+    try {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+        });
+        const parts = formatter.formatToParts(date);
+        const values: Record<string, string> = {};
+        for (const part of parts) {
+            if (part.type !== "literal") values[part.type] = part.value;
+        }
+        const asUtc = Date.UTC(
+            Number(values.year),
+            Number(values.month) - 1,
+            Number(values.day),
+            Number(values.hour),
+            Number(values.minute),
+            Number(values.second)
+        );
+        return asUtc - date.getTime();
+    } catch {
+        return 0;
+    }
+}
+
+function parseNaiveDateInTimeZone(value: string, timeZone: string) {
+    const match = value.trim().match(
+        /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?)?$/
+    );
+    if (!match) return null;
+    const [, y, mo, d, h = "0", mi = "0", s = "0", msRaw = "0"] = match;
+    const ms = Number(msRaw.padEnd(3, "0"));
+    const guessUtc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s), ms);
+    const offset = getTimeZoneOffsetMs(new Date(guessUtc), timeZone);
+    return guessUtc - offset;
+}
+
+function parseDateMs(value?: string | null) {
+    if (!value) return null;
+    const str = String(value).trim();
+    if (!str) return null;
+    if (hasTimeZoneSuffix(str)) {
+        const ms = Date.parse(str);
+        return Number.isNaN(ms) ? null : ms;
+    }
+    const { timeZone } = getSyncConfig();
+    const tzMs = parseNaiveDateInTimeZone(str, timeZone);
+    if (tzMs != null) return tzMs;
+    const fallback = Date.parse(str);
+    return Number.isNaN(fallback) ? null : fallback;
+}
+
 async function resolvePlannerBaseUrl(graphClient: GraphClient) {
     const envBase = (process.env.PLANNER_WEB_BASE || "").trim();
     if (envBase) return envBase.replace(/\/+$/, "");
@@ -62,8 +124,9 @@ function resolveBucketFromHeading(description?: string | null) {
     return { bucket: normalizeBucketName(heading), skip: false };
 }
 function normalizeDateOnly(value?: string | null) {
-    if (!value) return null;
-    const date = new Date(value);
+    const ms = parseDateMs(value || null);
+    if (ms == null) return null;
+    const date = new Date(ms);
     if (Number.isNaN(date.getTime())) return null;
     return date.toISOString().slice(0, 10);
 }
@@ -105,13 +168,6 @@ const BC_MODIFIED_FIELDS = [
     "lastModifiedOn",
     "systemModifiedOn",
 ] as const;
-
-function parseDateMs(value?: string | null) {
-    if (!value) return null;
-    const ms = Date.parse(value);
-    if (Number.isNaN(ms)) return null;
-    return ms;
-}
 
 function resolveBcModifiedAt(task: BcProjectTask) {
     for (const field of BC_MODIFIED_FIELDS) {
