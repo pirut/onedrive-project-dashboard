@@ -154,13 +154,19 @@ export default async function handler(req, res) {
             null;
         const lastSyncAt = targetInfo.task.lastSyncAt || null;
         const plannerModifiedAt = plannerTask?.lastModifiedDateTime || null;
+        const lastPlannerEtag = targetInfo.task.lastPlannerEtag || null;
+        const plannerEtag = plannerTask?.["@odata.etag"] || null;
         const bcModifiedMs = bcModified ? Date.parse(String(bcModified)) : NaN;
         const lastSyncMs = lastSyncAt ? Date.parse(String(lastSyncAt)) : NaN;
         const plannerModifiedMs = plannerModifiedAt ? Date.parse(String(plannerModifiedAt)) : NaN;
         const bcChangedSinceSync =
             Number.isNaN(bcModifiedMs) || Number.isNaN(lastSyncMs) ? null : bcModifiedMs > lastSyncMs;
-        const plannerChangedSinceSync =
-            Number.isNaN(plannerModifiedMs) || Number.isNaN(lastSyncMs) ? null : plannerModifiedMs > lastSyncMs;
+        const plannerEtagChanged = plannerEtag && lastPlannerEtag ? plannerEtag !== lastPlannerEtag : null;
+        const plannerChangedSinceSync = Number.isNaN(lastSyncMs)
+            ? plannerEtagChanged
+            : Number.isNaN(plannerModifiedMs)
+                ? plannerEtagChanged
+                : plannerModifiedMs > lastSyncMs;
 
         res.status(200).json({
             ok: true,
@@ -186,6 +192,7 @@ export default async function handler(req, res) {
                 actualTotalCost: targetInfo.task.actualTotalCost,
                 systemModifiedAt: targetInfo.task.systemModifiedAt,
                 lastSyncAt: targetInfo.task.lastSyncAt,
+                lastPlannerEtag: targetInfo.task.lastPlannerEtag,
             },
             context: {
                 heading: targetInfo.heading,
@@ -198,6 +205,7 @@ export default async function handler(req, res) {
                 bcChangedSinceSync,
                 plannerModifiedAt,
                 plannerChangedSinceSync,
+                plannerEtagChanged,
             },
             planner: plannerTask
                 ? {
@@ -209,6 +217,7 @@ export default async function handler(req, res) {
                       dueDateTime: plannerTask.dueDateTime,
                       lastModifiedDateTime: plannerTask.lastModifiedDateTime,
                       etag: plannerTask["@odata.etag"],
+                      lastPlannerEtag: targetInfo.task.lastPlannerEtag,
                   }
                 : null,
             decision: {

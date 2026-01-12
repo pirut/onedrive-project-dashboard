@@ -192,6 +192,9 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     const lastSyncAt = parseDateMs(bcTask.lastSyncAt || null);
     const bcModified = resolveBcModifiedAt(bcTask);
     const plannerModified = resolvePlannerModifiedAt(plannerTask);
+    const plannerEtag = typeof plannerTask?.["@odata.etag"] === "string" ? plannerTask["@odata.etag"] : null;
+    const lastPlannerEtag = typeof bcTask.lastPlannerEtag === "string" ? bcTask.lastPlannerEtag : null;
+    const plannerEtagChanged = plannerEtag && lastPlannerEtag ? plannerEtag !== lastPlannerEtag : null;
     const { preferBc, bcModifiedGraceMs } = getSyncConfig();
     const bcGrace = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
     const bcChangedSinceSync = lastSyncAt != null
@@ -199,33 +202,106 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
             ? bcModified.ms > lastSyncAt + bcGrace
             : false
         : null;
-    const plannerChangedSinceSync = lastSyncAt != null ? (plannerModified.ms != null ? plannerModified.ms > lastSyncAt : false) : null;
+    let plannerChangedSinceSync: boolean | null = null;
+    if (lastSyncAt != null) {
+        if (plannerModified.ms != null) {
+            plannerChangedSinceSync = plannerModified.ms > lastSyncAt;
+        } else if (plannerEtagChanged != null) {
+            plannerChangedSinceSync = plannerEtagChanged;
+        }
+    } else if (plannerEtagChanged != null) {
+        plannerChangedSinceSync = plannerEtagChanged;
+    }
 
     if (lastSyncAt != null) {
         if (bcChangedSinceSync && plannerChangedSinceSync) {
             if (!preferBc && bcModified.ms != null && plannerModified.ms != null) {
-                return { decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+                return {
+                    decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner",
+                    lastSyncAt,
+                    bcModified,
+                    plannerModified,
+                    bcChangedSinceSync,
+                    plannerChangedSinceSync,
+                    plannerEtagChanged,
+                };
             }
-            return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "bc",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
         if (bcChangedSinceSync && !plannerChangedSinceSync) {
-            return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "bc",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
         if (!bcChangedSinceSync && plannerChangedSinceSync) {
-            return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "planner",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
         if (bcChangedSinceSync === false && plannerChangedSinceSync === false) {
-            return { decision: "none", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "none",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
         if (plannerChangedSinceSync) {
-            return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "planner",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
-        return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        return {
+            decision: "bc",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+            plannerEtagChanged,
+        };
     }
 
     if (bcModified.ms != null && plannerModified.ms != null) {
         if (bcModified.ms === plannerModified.ms) {
-            return { decision: "none", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+            return {
+                decision: "none",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
         }
         return {
             decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner",
@@ -234,15 +310,40 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
             plannerModified,
             bcChangedSinceSync,
             plannerChangedSinceSync,
+            plannerEtagChanged,
         };
     }
     if (bcModified.ms != null) {
-        return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        return {
+            decision: "bc",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+            plannerEtagChanged,
+        };
     }
     if (plannerModified.ms != null) {
-        return { decision: "planner", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+        return {
+            decision: "planner",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+            plannerEtagChanged,
+        };
     }
-    return { decision: "bc", lastSyncAt, bcModified, plannerModified, bcChangedSinceSync, plannerChangedSinceSync };
+    return {
+        decision: "bc",
+        lastSyncAt,
+        bcModified,
+        plannerModified,
+        bcChangedSinceSync,
+        plannerChangedSinceSync,
+        plannerEtagChanged,
+    };
 }
 
 function formatPlannerDescription(task: BcProjectTask) {
