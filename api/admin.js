@@ -100,6 +100,14 @@ function layout(title, bodyHtml) {
   .wrap{max-width:1100px;margin:32px auto;padding:0 16px}
   h1{font-size:20px;margin:0 0 16px 0}
   .panel{background:var(--panel);border:1px solid #1f2a44;border-radius:12px;padding:16px;margin:0 0 16px 0}
+  details.panel{padding:0}
+  details.panel > summary{list-style:none;cursor:pointer;padding:14px 16px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  details.panel > summary::-webkit-details-marker{display:none}
+  details.panel > summary::after{content:"+";color:var(--muted);font-weight:700}
+  details.panel[open] > summary::after{content:"-"}
+  details.panel[open] > summary{border-bottom:1px solid #1f2a44}
+  .panel-body{padding:16px}
+  .summary-meta{color:var(--muted);font-size:12px;font-weight:400}
   table{width:100%;border-collapse:collapse}
   th,td{padding:8px;border-top:1px solid #1f2a44;text-align:left;vertical-align:top}
   th{color:#b9c2da}
@@ -292,166 +300,184 @@ async function dashboardView(req) {
     </div>
   </div>
   <div class="grid">
-    <div class="panel">
-      <div class="muted small">Graph env</div>
-      <div>${graphEnvOk ? '<span class="ok">Configured</span>' : '<span class="bad">Missing</span>'}</div>
-      <div class="small mono">TENANT_ID, MSAL_CLIENT_ID, MSAL_CLIENT_SECRET, DEFAULT_SITE_URL, DEFAULT_LIBRARY</div>
-    </div>
-    <div class="panel">
-      <div class="muted small">KV status</div>
-      <div>${kvDiag.ok ? '<span class="ok">OK</span>' : '<span class="bad">ERROR</span>'}</div>
-      <div class="small mono">${htmlEscape(kvDiag.info?.provider || "unknown")} · url=${kvDiag.info?.urlPresent ? "yes" : "no"} · token=${
+    <details class="panel">
+      <summary>Graph env</summary>
+      <div class="panel-body">
+        <div>${graphEnvOk ? '<span class="ok">Configured</span>' : '<span class="bad">Missing</span>'}</div>
+        <div class="small mono">TENANT_ID, MSAL_CLIENT_ID, MSAL_CLIENT_SECRET, DEFAULT_SITE_URL, DEFAULT_LIBRARY</div>
+      </div>
+    </details>
+    <details class="panel">
+      <summary>KV status</summary>
+      <div class="panel-body">
+        <div>${kvDiag.ok ? '<span class="ok">OK</span>' : '<span class="bad">ERROR</span>'}</div>
+        <div class="small mono">${htmlEscape(kvDiag.info?.provider || "unknown")} · url=${kvDiag.info?.urlPresent ? "yes" : "no"} · token=${
         kvDiag.info?.tokenPresent ? "yes" : "no"
     }</div>
-      ${kvDiag.ok ? "" : `<div class="small muted" style="margin-top:6px">${htmlEscape(kvDiag.error || "not configured")}</div>`}
-    </div>
-    <div class="panel">
-      <div class="muted small">Admin auth</div>
-      <div>${ADMIN_PASSWORD && ADMIN_SESSION_SECRET ? '<span class="ok">Enabled</span>' : '<span class="warn">Setup needed</span>'}</div>
-      <div class="small mono">ADMIN_USERNAME=${htmlEscape(ADMIN_USERNAME)}</div>
-    </div>
-    <div class="panel">
-      <div class="muted small">Planner sync env</div>
-      <div>${plannerEnvOk ? '<span class="ok">Configured</span>' : '<span class="bad">Missing</span>'}</div>
-      <div class="small mono">${plannerEnvOk ? "All required vars present" : htmlEscape(plannerEnvMissing.join(", "))}</div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
-      <div style="font-weight:600">Endpoint Health</div>
-      <div class="small muted">Pings via ${htmlEscape(origin)}</div>
-    </div>
-    <table>
-      <thead><tr><th>Endpoint</th><th>Description</th><th>Status</th><th class="small">Info</th></tr></thead>
-      <tbody>${endpointsTableRows || '<tr><td colspan="4" class="muted">No checks</td></tr>'}</tbody>
-    </table>
-  </div>
-
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-      <div style="font-weight:600">USPS Address Formatter</div>
-      <div class="small muted">Uploads → USPS Addresses 3.0</div>
-    </div>
-    <form id="usps-form">
-      <div class="row">
-        <label for="usps-file">CSV file</label>
-        <input id="usps-file" name="file" type="file" accept=".csv,text/csv" />
+        ${kvDiag.ok ? "" : `<div class="small muted" style="margin-top:6px">${htmlEscape(kvDiag.error || "not configured")}</div>`}
       </div>
-      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="submit" id="usps-submit">Format addresses</button>
-        <button type="button" id="usps-reset" style="background:#1f2a44;color:#e6ecff">Reset</button>
-        <button type="button" id="usps-verify-btn" style="background:#0f8b4c;color:#fff">Verify USPS connection</button>
+    </details>
+    <details class="panel">
+      <summary>Admin auth</summary>
+      <div class="panel-body">
+        <div>${ADMIN_PASSWORD && ADMIN_SESSION_SECRET ? '<span class="ok">Enabled</span>' : '<span class="warn">Setup needed</span>'}</div>
+        <div class="small mono">ADMIN_USERNAME=${htmlEscape(ADMIN_USERNAME)}</div>
       </div>
-      <div class="small muted">Header row required. Include <span class="mono">Address1</span> and either <span class="mono">City + State</span> or <span class="mono">Zip</span>.</div>
-    </form>
-    <div id="usps-status" class="small muted" style="margin-top:8px">Choose a CSV to start.</div>
-    <div id="usps-summary" class="small" style="display:none;margin-top:6px"></div>
-    <div id="usps-download-wrap" style="margin-top:8px;display:none">
-      <a id="usps-download" class="badge" href="#" download="addresses-standardized.csv">Download standardized CSV</a>
-    </div>
-    <div id="usps-pending-download-wrap" style="margin-top:8px;display:none">
-      <a id="usps-pending-download" class="badge" href="#" download="addresses-pending.csv">Download pending CSV</a>
-    </div>
-    <div id="usps-preview" class="small muted" style="margin-top:12px">Preview will show first rows after processing.</div>
+    </details>
+    <details class="panel">
+      <summary>Planner sync env</summary>
+      <div class="panel-body">
+        <div>${plannerEnvOk ? '<span class="ok">Configured</span>' : '<span class="bad">Missing</span>'}</div>
+        <div class="small mono">${plannerEnvOk ? "All required vars present" : htmlEscape(plannerEnvMissing.join(", "))}</div>
+      </div>
+    </details>
   </div>
 
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-      <div style="font-weight:600">Planner Sync</div>
-      <div class="row">
+  <details class="panel">
+    <summary>Endpoint Health</summary>
+    <div class="panel-body">
+      <div class="small muted" style="margin-bottom:8px">Pings via ${htmlEscape(origin)}</div>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Description</th><th>Status</th><th class="small">Info</th></tr></thead>
+        <tbody>${endpointsTableRows || '<tr><td colspan="4" class="muted">No checks</td></tr>'}</tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary>USPS Address Formatter</summary>
+    <div class="panel-body">
+      <div class="small muted" style="margin-bottom:8px">Uploads → USPS Addresses 3.0</div>
+      <form id="usps-form">
+        <div class="row">
+          <label for="usps-file">CSV file</label>
+          <input id="usps-file" name="file" type="file" accept=".csv,text/csv" />
+        </div>
+        <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="submit" id="usps-submit">Format addresses</button>
+          <button type="button" id="usps-reset" style="background:#1f2a44;color:#e6ecff">Reset</button>
+          <button type="button" id="usps-verify-btn" style="background:#0f8b4c;color:#fff">Verify USPS connection</button>
+        </div>
+        <div class="small muted">Header row required. Include <span class="mono">Address1</span> and either <span class="mono">City + State</span> or <span class="mono">Zip</span>.</div>
+      </form>
+      <div id="usps-status" class="small muted" style="margin-top:8px">Choose a CSV to start.</div>
+      <div id="usps-summary" class="small" style="display:none;margin-top:6px"></div>
+      <div id="usps-download-wrap" style="margin-top:8px;display:none">
+        <a id="usps-download" class="badge" href="#" download="addresses-standardized.csv">Download standardized CSV</a>
+      </div>
+      <div id="usps-pending-download-wrap" style="margin-top:8px;display:none">
+        <a id="usps-pending-download" class="badge" href="#" download="addresses-pending.csv">Download pending CSV</a>
+      </div>
+      <div id="usps-preview" class="small muted" style="margin-top:12px">Preview will show first rows after processing.</div>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary>Planner Sync</summary>
+    <div class="panel-body">
+      <div style="margin-bottom:8px">
         <a class="badge" href="/api/admin-debug">Open Debug Console</a>
       </div>
-    </div>
-    <div class="row">
-      <label for="planner-project-no">Project No (optional)</label>
-      <input id="planner-project-no" placeholder="P-100" />
-    </div>
-    <div class="row">
-      <label for="planner-debug-task-no">Task No (debug)</label>
-      <input id="planner-debug-task-no" placeholder="1100" />
-    </div>
-    <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
-      <button type="button" id="planner-run-bc">Run BC → Planner</button>
-      <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
-      <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
-      <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
-    </div>
-    <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
-    <pre id="planner-output" class="log-block" style="display:none"></pre>
-    <div class="small muted" style="margin-top:8px">Request log</div>
-    <ul id="planner-log" class="step-list"></ul>
-  </div>
-
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-      <div style="font-weight:600">Planner Projects</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button type="button" id="planner-projects-refresh" style="background:#1f2a44;color:#e6ecff">Refresh list</button>
+      <div class="row">
+        <label for="planner-project-no">Project No (optional)</label>
+        <input id="planner-project-no" placeholder="P-100" />
       </div>
+      <div class="row">
+        <label for="planner-debug-task-no">Task No (debug)</label>
+        <input id="planner-debug-task-no" placeholder="1100" />
+      </div>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" id="planner-run-bc">Run BC → Planner</button>
+        <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run BC → Planner (PR00001)</button>
+        <button type="button" id="planner-run-poll" style="background:#1f2a44;color:#e6ecff">Run polling</button>
+        <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
+      </div>
+      <div id="planner-status" class="small muted" style="margin-top:8px">Ready.</div>
+      <pre id="planner-output" class="log-block" style="display:none"></pre>
+      <div class="small muted" style="margin-top:8px">Request log</div>
+      <ul id="planner-log" class="step-list"></ul>
     </div>
-    <div class="row" style="margin:8px 0 12px 0">
-      <input id="planner-projects-filter" placeholder="Filter by project no, status, or plan..." />
-    </div>
-    <div id="planner-projects-status" class="small muted" style="margin-bottom:8px">Loading planner projects…</div>
-    <table>
-      <thead>
-        <tr>
-          <th>Project</th>
-          <th>Description</th>
-          <th>Planner Plan</th>
-          <th>Sync</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="planner-projects-tbody">
-        <tr><td colspan="5" class="muted">Loading…</td></tr>
-      </tbody>
-    </table>
-    <div id="planner-orphan-plans" class="small muted" style="margin-top:8px"></div>
-    <div class="small muted" style="margin-top:8px">Disable sync to prevent plan recreation after deleting a plan in Planner.</div>
-  </div>
+  </details>
 
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-      <div style="font-weight:600">API Debugging</div>
-      <div style="display:flex;align-items:center;gap:8px">
+  <details class="panel">
+    <summary>Planner Projects</summary>
+    <div class="panel-body">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <button type="button" id="planner-projects-refresh" style="background:#1f2a44;color:#e6ecff">Refresh list</button>
+        <span class="small muted">Sync settings update per project</span>
+      </div>
+      <div class="row" style="margin:8px 0 12px 0">
+        <input id="planner-projects-filter" placeholder="Filter by project no, status, or plan..." />
+      </div>
+      <div id="planner-projects-status" class="small muted" style="margin-bottom:8px">Loading planner projects…</div>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+        <button type="button" id="planner-projects-select-all" style="background:#1f2a44;color:#e6ecff">Select all (filtered)</button>
+        <button type="button" id="planner-projects-clear" style="background:#1f2a44;color:#e6ecff">Clear selection</button>
+        <button type="button" id="planner-projects-bulk-enable" style="background:#2b61d1;color:#fff">Enable sync</button>
+        <button type="button" id="planner-projects-bulk-disable" style="background:#ef4444;color:#fff">Disable sync</button>
+        <button type="button" id="planner-projects-bulk-sync" style="background:#0f8b4c;color:#fff">Run sync</button>
+        <span id="planner-projects-count" class="small muted">No projects selected</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Project</th>
+            <th>Description</th>
+            <th>Planner Plan</th>
+            <th>Sync</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="planner-projects-tbody">
+          <tr><td colspan="6" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div id="planner-orphan-plans" class="small muted" style="margin-top:8px"></div>
+      <div class="small muted" style="margin-top:8px">Disable sync to prevent plan recreation after deleting a plan in Planner.</div>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary>API Debugging</summary>
+    <div class="panel-body">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <button type="button" id="debug-refresh-btn" onclick="if(window.__debugAction){window.__debugAction('refresh');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}">Refresh Debug Info</button>
         <div class="small muted">Test routes and view request details</div>
       </div>
+      <div class="row" style="margin:8px 0 12px 0">
+        <button type="button" id="debug-test-btn" onclick="if(window.__debugAction){window.__debugAction('test');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#2b61d1;color:#fff">Test Debug Endpoint</button>
+        <button type="button" id="debug-clear-btn" onclick="if(window.__debugAction){window.__debugAction('clear');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Clear</button>
+      </div>
+      <div id="debug-status" class="small muted" style="margin-top:8px">Click "Test Debug Endpoint" to fetch debug information.</div>
+      <pre id="debug-output" class="log-block" style="display:none;max-height:400px;overflow:auto"></pre>
+      <div id="debug-routes" style="margin-top:12px;display:none">
+        <div style="font-weight:600;margin-bottom:8px">Available API Routes:</div>
+        <table>
+          <thead><tr><th>Method</th><th>Route</th><th>Description</th><th>Action</th></tr></thead>
+          <tbody id="debug-routes-tbody"></tbody>
+        </table>
+      </div>
     </div>
-    <div class="row" style="margin:8px 0 12px 0">
-      <button type="button" id="debug-test-btn" onclick="if(window.__debugAction){window.__debugAction('test');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#2b61d1;color:#fff">Test Debug Endpoint</button>
-      <button type="button" id="debug-clear-btn" onclick="if(window.__debugAction){window.__debugAction('clear');}else{document.getElementById('debug-status').textContent='Debug JS not loaded';}" style="background:#1f2a44;color:#e6ecff">Clear</button>
-    </div>
-    <div id="debug-status" class="small muted" style="margin-top:8px">Click "Test Debug Endpoint" to fetch debug information.</div>
-    <pre id="debug-output" class="log-block" style="display:none;max-height:400px;overflow:auto"></pre>
-    <div id="debug-routes" style="margin-top:12px;display:none">
-      <div style="font-weight:600;margin-bottom:8px">Available API Routes:</div>
-      <table>
-        <thead><tr><th>Method</th><th>Route</th><th>Description</th><th>Action</th></tr></thead>
-        <tbody id="debug-routes-tbody"></tbody>
-      </table>
-    </div>
-  </div>
+  </details>
 
-  <div class="panel">
-    <div style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap">
-      <div style="font-weight:600">Submissions</div>
-      <div style="display:flex;align-items:center;gap:8px">
+  <details class="panel">
+    <summary>Submissions</summary>
+    <div class="panel-body">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <button type="button" id="refresh-btn">Refresh</button>
         <div class="small muted">Use Refresh to update · Showing latest ${items.length}</div>
       </div>
+      <div class="row" style="margin:8px 0 12px 0">
+        <input id="filter-input" placeholder="Filter by text (type, folder, status, error, trace)..." />
+      </div>
+      <table>
+        <thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Details</th><th>Uploaded</th><th>Files</th></tr></thead>
+        <tbody id="subs-tbody">${itemsRows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>'}</tbody>
+      </table>
+      <div class="small muted" id="last-updated" style="margin-top:6px">Last updated: pending</div>
     </div>
-    <div class="row" style="margin:8px 0 12px 0">
-      <input id="filter-input" placeholder="Filter by text (type, folder, status, error, trace)..." />
-    </div>
-    <table>
-      <thead><tr><th>Time</th><th>Type</th><th>Status</th><th>Details</th><th>Uploaded</th><th>Files</th></tr></thead>
-      <tbody id="subs-tbody">${itemsRows || '<tr><td colspan="6" class="muted">No submissions yet.</td></tr>'}</tbody>
-    </table>
-    <div class="small muted" id="last-updated" style="margin-top:6px">Last updated: pending</div>
-  </div>
+  </details>
 
   <script src="/api/admin-runtime.js" defer></script>`;
 

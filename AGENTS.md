@@ -4,6 +4,7 @@ Quick context
 - This repo hosts an admin dashboard + serverless API for OneDrive + Business Central + Microsoft Planner sync.
 - BC <-> Planner sync lives in `lib/planner-sync/`.
 - Vercel deploys `api/*` serverless functions; `app/api/*` are Next routes used locally/when running the app framework.
+- Always push changes to the remote after making edits.
 
 Key behaviors (Planner sync)
 - `SYNC_MODE=perProjectPlan` creates one plan per project; `singlePlan` uses `PLANNER_DEFAULT_PLAN_ID`.
