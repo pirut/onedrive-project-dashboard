@@ -1,4 +1,5 @@
-import { runPollingSync, syncBcToPlanner } from "../../../../lib/planner-sync";
+import { runPollingSync, runSmartPollingSync, syncBcToPlanner } from "../../../../lib/planner-sync";
+import { getSyncConfig } from "../../../../lib/planner-sync/config";
 import { logger } from "../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +37,39 @@ export async function POST(request: Request) {
         }
         
         const projectNo = body?.projectNo?.trim();
-        logger.info("Processing sync request", { requestId, projectNo: projectNo || "all projects" });
+        const { useSmartPolling } = getSyncConfig();
+        logger.info("Processing sync request", {
+            requestId,
+            projectNo: projectNo || "all projects",
+            mode: useSmartPolling ? "smart" : "standard",
+        });
 
         try {
+            if (useSmartPolling && !projectNo) {
+                const smartResult = await runSmartPollingSync();
+                const result = { smartPolling: smartResult };
+                const duration = Date.now() - startTime;
+                logger.info("POST /api/sync/run-bc-to-planner - Smart polling success", {
+                    requestId,
+                    duration,
+                });
+                return new Response(
+                    JSON.stringify({
+                        ok: true,
+                        result,
+                        requestId,
+                        duration,
+                    }),
+                    {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Request-ID": requestId,
+                        },
+                    }
+                );
+            }
+
             const bcResult = await syncBcToPlanner(projectNo || undefined);
             const pollResult = await runPollingSync();
             const result = { bcToPlanner: bcResult, plannerToBc: pollResult };

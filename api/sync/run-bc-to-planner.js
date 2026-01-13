@@ -1,4 +1,5 @@
-import { runPollingSync, syncBcToPlanner } from "../../lib/planner-sync/index.js";
+import { runPollingSync, runSmartPollingSync, syncBcToPlanner } from "../../lib/planner-sync/index.js";
+import { getSyncConfig } from "../../lib/planner-sync/config.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 async function readJsonBody(req) {
@@ -22,6 +23,12 @@ export default async function handler(req, res) {
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
 
     try {
+        const { useSmartPolling } = getSyncConfig();
+        if (useSmartPolling && !projectNo) {
+            const smartResult = await runSmartPollingSync();
+            res.status(200).json({ ok: true, result: { smartPolling: smartResult } });
+            return;
+        }
         const bcResult = await syncBcToPlanner(projectNo || undefined);
         const pollResult = await runPollingSync();
         res.status(200).json({ ok: true, result: { bcToPlanner: bcResult, plannerToBc: pollResult } });
