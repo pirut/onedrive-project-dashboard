@@ -1,6 +1,7 @@
 import { BusinessCentralClient, BcProjectTask } from "./bc-client";
-import { GraphClient, GraphUser, PlannerTask, PlannerTaskDetails } from "./graph-client";
+import { GraphClient, GraphUser, PlannerTask, PlannerTaskDelta, PlannerTaskDetails } from "./graph-client";
 import { getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
+import { clearPlannerDeltaState, getPlannerDeltaState, savePlannerDeltaState } from "./delta-store";
 import { logger } from "./logger";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "./project-sync-store";
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
@@ -1043,7 +1044,213 @@ async function syncProjectTasks(
     return planId;
 }
 
-export async function runPollingSync() {
+function buildPlannerDeltaScopeKey() {
+    const { tenantId } = getGraphConfig();
+    const { groupId } = getPlannerConfig();
+    return `planner:${tenantId}:${groupId}`;
+}
+
+function isDeltaTokenInvalid(error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    const lowered = msg.toLowerCase();
+    return (
+        msg.includes("-> 410") ||
+        lowered.includes("syncstatenotfound") ||
+        (lowered.includes("syncstate") && lowered.includes("not found")) ||
+        lowered.includes("invalidsynctoken") ||
+        lowered.includes("invaliddeltatoken") ||
+        lowered.includes("resyncrequired")
+    );
+}
+
+function isDeltaUnsupported(error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return msg.includes("-> 404") || msg.includes("-> 501");
+}
+
+async function collectPlannerDeltaChanges(graphClient: GraphClient, deltaLink?: string | null) {
+    const items: PlannerTaskDelta[] = [];
+    let pageCount = 0;
+    let nextLink = deltaLink || null;
+    let newDeltaLink: string | null = null;
+
+    while (true) {
+        const page = await graphClient.listPlannerTasksDelta(nextLink || undefined);
+        pageCount += 1;
+        if (page?.value?.length) items.push(...page.value);
+        if (page?.nextLink) {
+            nextLink = page.nextLink;
+            continue;
+        }
+        newDeltaLink = page?.deltaLink || null;
+        break;
+    }
+
+    if (!newDeltaLink) {
+        throw new Error("Planner delta response missing @odata.deltaLink");
+    }
+    return { items, deltaLink: newDeltaLink, pageCount };
+}
+
+function dedupePlannerDeltaItems(items: PlannerTaskDelta[]) {
+    const map = new Map<string, PlannerTaskDelta>();
+    for (const item of items || []) {
+        if (!item?.id) continue;
+        map.set(item.id, item);
+    }
+    return Array.from(map.values());
+}
+
+function buildPlannerTaskIndex(tasks: BcProjectTask[]) {
+    const map = new Map<string, BcProjectTask>();
+    const counts = new Map<string, number>();
+    for (const task of tasks || []) {
+        const plannerTaskId = (task.plannerTaskId || "").trim();
+        if (!plannerTaskId) continue;
+        const count = (counts.get(plannerTaskId) || 0) + 1;
+        counts.set(plannerTaskId, count);
+        if (count === 1) map.set(plannerTaskId, task);
+    }
+    for (const [plannerTaskId, count] of counts.entries()) {
+        if (count > 1) {
+            logger.warn("Multiple BC tasks found for Planner task", { plannerTaskId, count });
+        }
+    }
+    return map;
+}
+
+async function clearPlannerLink(bcClient: BusinessCentralClient, task: BcProjectTask) {
+    if (!task.systemId) {
+        logger.warn("Planner task removed but systemId missing; skipping", {
+            taskId: task.plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+        });
+        return false;
+    }
+    try {
+        await bcClient.patchProjectTask(task.systemId, {
+            plannerTaskId: "",
+            plannerPlanId: "",
+            plannerBucket: "",
+            lastPlannerEtag: "",
+            syncLock: false,
+        });
+        logger.warn("Cleared stale Planner linkage after delete", {
+            taskId: task.plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+        });
+        return true;
+    } catch (error) {
+        logger.warn("Failed to clear stale Planner linkage", {
+            taskId: task.plannerTaskId,
+            error: (error as Error)?.message,
+        });
+        return false;
+    }
+}
+
+async function runPlannerDeltaSync() {
+    const bcClient = new BusinessCentralClient();
+    const graphClient = new GraphClient();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
+
+    const tasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
+    const plannerTaskIndex = buildPlannerTaskIndex(tasks);
+    const skippedDisabled = tasks.reduce(
+        (count, task) => (isProjectDisabled(disabledProjects, task.projectNo) ? count + 1 : count),
+        0
+    );
+
+    const scopeKey = buildPlannerDeltaScopeKey();
+    const storedDelta = await getPlannerDeltaState(scopeKey);
+    let mode = storedDelta?.deltaLink ? "incremental" : "initial";
+
+    logger.info("Planner delta sync starting", {
+        scope: scopeKey,
+        mode,
+        hasDeltaToken: mode === "incremental",
+    });
+
+    let deltaResult: { items: PlannerTaskDelta[]; deltaLink: string; pageCount: number };
+    try {
+        deltaResult = await collectPlannerDeltaChanges(graphClient, storedDelta?.deltaLink);
+    } catch (error) {
+        if (storedDelta?.deltaLink && isDeltaTokenInvalid(error)) {
+            // Graph signals the token is stale; clear and restart with a fresh delta snapshot.
+            logger.warn("Planner delta token invalid; resetting", {
+                scope: scopeKey,
+                error: (error as Error)?.message,
+            });
+            await clearPlannerDeltaState(scopeKey);
+            mode = "initial";
+            deltaResult = await collectPlannerDeltaChanges(graphClient, null);
+        } else {
+            throw error;
+        }
+    }
+
+    const items = dedupePlannerDeltaItems(deltaResult.items);
+    const stats = {
+        created: 0,
+        updated: 0,
+        removed: 0,
+        processed: 0,
+        skippedDisabled: 0,
+        skippedUnlinked: 0,
+        cleared: 0,
+    };
+
+    // Fetch all delta pages first so updates only apply after a complete delta pass.
+    for (const item of items) {
+        if (!item?.id) continue;
+        const isRemoved = !!item["@removed"];
+        if (isRemoved) stats.removed += 1;
+
+        const bcTask = plannerTaskIndex.get(item.id);
+        if (!bcTask) {
+            if (!isRemoved) stats.created += 1;
+            stats.skippedUnlinked += 1;
+            continue;
+        }
+        if (isProjectDisabled(disabledProjects, bcTask.projectNo)) {
+            stats.skippedDisabled += 1;
+            continue;
+        }
+        if (isRemoved) {
+            const cleared = await clearPlannerLink(bcClient, bcTask);
+            if (cleared) stats.cleared += 1;
+            continue;
+        }
+        stats.updated += 1;
+        if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === item["@odata.etag"]) {
+            continue;
+        }
+        await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, item);
+        stats.processed += 1;
+    }
+
+    // Persist the delta token only after all pages and updates succeed.
+    await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
+
+    logger.info("Planner delta sync complete", {
+        scope: scopeKey,
+        mode,
+        pages: deltaResult.pageCount,
+        changes: items.length,
+        created: stats.created,
+        updated: stats.updated,
+        removed: stats.removed,
+        processed: stats.processed,
+        skippedDisabled: stats.skippedDisabled,
+        skippedUnlinked: stats.skippedUnlinked,
+    });
+
+    return { processed: stats.processed, total: tasks.length, skippedDisabled };
+}
+
+async function runPlannerFullSync() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
@@ -1101,6 +1308,24 @@ export async function runPollingSync() {
     }
 
     return { processed, total: tasks.length, skippedDisabled };
+}
+
+export async function runPollingSync() {
+    const { usePlannerDelta } = getSyncConfig();
+    if (usePlannerDelta) {
+        try {
+            return await runPlannerDeltaSync();
+        } catch (error) {
+            if (isDeltaUnsupported(error)) {
+                logger.warn("Planner delta unavailable; falling back to full polling", {
+                    error: (error as Error)?.message,
+                });
+            } else {
+                throw error;
+            }
+        }
+    }
+    return runPlannerFullSync();
 }
 
 export async function enqueueAndProcessNotifications(items: PlannerNotification[]) {

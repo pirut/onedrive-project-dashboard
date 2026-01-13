@@ -15,6 +15,16 @@ export type PlannerTask = {
     [key: string]: unknown;
 };
 
+export type PlannerTaskDelta = PlannerTask & {
+    "@removed"?: { reason?: string };
+};
+
+type PlannerTaskDeltaPage = {
+    value?: PlannerTaskDelta[];
+    "@odata.nextLink"?: string;
+    "@odata.deltaLink"?: string;
+};
+
 export type PlannerTaskDetails = {
     description?: string;
     "@odata.etag"?: string;
@@ -68,6 +78,7 @@ export class GraphClient {
     private config = getGraphConfig();
     private tokenCache: TokenCache | null = null;
     private baseUrl = "https://graph.microsoft.com/v1.0";
+    private betaBaseUrl = "https://graph.microsoft.com/beta";
 
     private async getAccessToken() {
         const now = Date.now();
@@ -104,7 +115,7 @@ export class GraphClient {
 
     private async request(path: string, options: RequestInit = {}) {
         const token = await this.getAccessToken();
-        const url = `${this.baseUrl}${path}`;
+        const url = path.startsWith("http") ? path : `${this.baseUrl}${path}`;
         const res = await fetchWithRetry(url, {
             method: options.method || "GET",
             headers: {
@@ -137,6 +148,20 @@ export class GraphClient {
         const res = await this.request(`/planner/plans/${planId}/tasks`);
         const data = await readResponseJson<{ value: PlannerTask[] }>(res);
         return data?.value || [];
+    }
+
+    async listPlannerTasksDelta(deltaLink?: string) {
+        const select = "id,planId,bucketId,percentComplete,startDateTime,dueDateTime,lastModifiedDateTime";
+        const url = deltaLink
+            ? deltaLink
+            : `${this.betaBaseUrl}/planner/tasks/delta?$select=${encodeURIComponent(select)}`;
+        const res = await this.request(url);
+        const data = await readResponseJson<PlannerTaskDeltaPage>(res);
+        return {
+            value: data?.value || [],
+            nextLink: data?.["@odata.nextLink"],
+            deltaLink: data?.["@odata.deltaLink"],
+        };
     }
 
     async createPlan(groupId: string, title: string) {

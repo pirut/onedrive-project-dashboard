@@ -56,6 +56,7 @@ export function getSyncConfig() {
     const syncLockTimeoutMinutes = Number(readEnv("SYNC_LOCK_TIMEOUT_MINUTES") || 30);
     const preferBc = readBoolEnv("SYNC_PREFER_BC", false);
     const bcModifiedGraceMs = Number(readEnv("SYNC_BC_MODIFIED_GRACE_MS") || 2000);
+    const usePlannerDelta = readBoolEnv("SYNC_USE_PLANNER_DELTA", true);
     return {
         syncMode,
         pollMinutes: Number.isNaN(pollMinutes) ? 10 : pollMinutes,
@@ -64,6 +65,7 @@ export function getSyncConfig() {
         syncLockTimeoutMinutes: Number.isNaN(syncLockTimeoutMinutes) ? 30 : syncLockTimeoutMinutes,
         preferBc,
         bcModifiedGraceMs: Number.isNaN(bcModifiedGraceMs) ? 2000 : bcModifiedGraceMs,
+        usePlannerDelta,
     };
 }
 
