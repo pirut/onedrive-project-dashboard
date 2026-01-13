@@ -1065,7 +1065,12 @@ function isDeltaTokenInvalid(error: unknown) {
 
 function isDeltaUnsupported(error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
-    return msg.includes("-> 404") || msg.includes("-> 501");
+    const lowered = msg.toLowerCase();
+    return (
+        msg.includes("-> 404") ||
+        msg.includes("-> 501") ||
+        (msg.includes("-> 405") && (lowered.includes("publication") || lowered.includes("certain fields")))
+    );
 }
 
 async function collectPlannerDeltaChanges(graphClient: GraphClient, deltaLink?: string | null) {
@@ -1155,6 +1160,10 @@ async function runPlannerDeltaSync() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
+    const isNotFound = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 404");
+    };
 
     const tasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
     const plannerTaskIndex = buildPlannerTaskIndex(tasks);
@@ -1224,10 +1233,26 @@ async function runPlannerDeltaSync() {
             continue;
         }
         stats.updated += 1;
-        if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === item["@odata.etag"]) {
+        let plannerTask: PlannerTask | null = null;
+        try {
+            plannerTask = await graphClient.getTask(item.id);
+        } catch (error) {
+            if (isNotFound(error)) {
+                const cleared = await clearPlannerLink(bcClient, bcTask);
+                if (cleared) stats.cleared += 1;
+            } else {
+                logger.warn("Planner task lookup failed during delta", {
+                    taskId: item.id,
+                    error: (error as Error)?.message,
+                });
+            }
             continue;
         }
-        await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, item);
+        if (!plannerTask) continue;
+        if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
+            continue;
+        }
+        await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, plannerTask);
         stats.processed += 1;
     }
 
