@@ -37,6 +37,14 @@ export type BcProject = {
     [key: string]: unknown;
 };
 
+export type BcProjectChange = {
+    sequenceNo: number;
+    projectNo?: string;
+    changedAt?: string;
+    changeType?: string;
+    [key: string]: unknown;
+};
+
 type TokenCache = {
     token: string;
     expiresAt: number;
@@ -86,7 +94,7 @@ export class BusinessCentralClient {
 
     private async request(path: string, options: RequestInit = {}) {
         const token = await this.getAccessToken();
-        const url = `${this.baseUrl()}${path}`;
+        const url = path.startsWith("http") ? path : `${this.baseUrl()}${path}`;
         const res = await fetchWithRetry(url, {
             method: options.method || "GET",
             headers: {
@@ -115,6 +123,52 @@ export class BusinessCentralClient {
         const res = await this.request(path);
         const data = await readResponseJson<{ value: BcProject[] }>(res);
         return data?.value || [];
+    }
+
+    async listProjectChangesSince(lastSeq: number | null) {
+        const items: BcProjectChange[] = [];
+        let maxSeq: number | null = null;
+        let pageCount = 0;
+        let nextLink: string | null = null;
+        let cursor: number | null = lastSeq;
+        const top = 5000;
+
+        while (true) {
+            const params = new URLSearchParams();
+            if (cursor != null) params.set("$filter", `sequenceNo gt ${cursor}`);
+            params.set("$orderby", "sequenceNo asc");
+            params.set("$top", String(top));
+            const path = nextLink || `/projectChanges?${params.toString()}`;
+            const res = await this.request(path);
+            const data = await readResponseJson<{ value?: Record<string, unknown>[]; "@odata.nextLink"?: string }>(res);
+            const pageItems = Array.isArray(data?.value) ? data?.value || [] : [];
+            for (const raw of pageItems) {
+                const rawSeq = (raw as Record<string, unknown>)?.sequenceNo;
+                const seq = typeof rawSeq === "number" ? rawSeq : Number(rawSeq);
+                if (!Number.isFinite(seq)) {
+                    logger.warn("BC project change missing sequenceNo", { sequenceNo: rawSeq });
+                    continue;
+                }
+                const change = { ...(raw as Record<string, unknown>), sequenceNo: seq } as BcProjectChange;
+                items.push(change);
+                if (maxSeq == null || seq > maxSeq) maxSeq = seq;
+            }
+            pageCount += 1;
+            const next = data?.["@odata.nextLink"];
+            if (next) {
+                nextLink = next;
+                continue;
+            }
+            const shouldContinue = pageItems.length >= top && maxSeq != null && (cursor == null || maxSeq > cursor);
+            if (shouldContinue) {
+                cursor = maxSeq;
+                nextLink = null;
+                continue;
+            }
+            break;
+        }
+
+        return { items, lastSeq: maxSeq, pageCount };
     }
 
     async patchProjectTask(systemId: string, payload: Record<string, unknown>) {
