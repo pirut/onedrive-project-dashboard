@@ -195,16 +195,7 @@ export class GraphClient {
     }
 
     async listPlannerTasksDelta(deltaLink?: string) {
-        const defaultSelect = [
-            "id",
-            "title",
-            "planId",
-            "bucketId",
-            "createdDateTime",
-            "dueDateTime",
-            "percentComplete",
-            "assignments",
-        ];
+        const defaultSelect = ["id", "planId", "title", "bucketId"];
         const select = (this.config.plannerDeltaSelect || defaultSelect.join(","))
             .split(",")
             .map((value) => value.trim())
