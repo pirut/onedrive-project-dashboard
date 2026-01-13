@@ -79,6 +79,7 @@ type TokenCache = {
 export class GraphClient {
     private config = getGraphConfig();
     private tokenCache: TokenCache | null = null;
+    private plannerDeltaSelectResolved: string | null = null;
     private baseUrl = "https://graph.microsoft.com/v1.0";
     private betaBaseUrl = "https://graph.microsoft.com/beta";
 
@@ -111,6 +112,35 @@ export class GraphClient {
         } catch {
             return null;
         }
+    }
+
+    private normalizePlannerDeltaSelect(raw: string) {
+        return raw
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean)
+            .join(",");
+    }
+
+    private buildPlannerDeltaSelectCandidates() {
+        if (this.plannerDeltaSelectResolved) return [this.plannerDeltaSelectResolved];
+        if (this.config.plannerDeltaSelect) {
+            return [this.normalizePlannerDeltaSelect(this.config.plannerDeltaSelect)];
+        }
+        const candidates = [
+            "id,planId,title,bucketId",
+            "id,planId,title,bucketId,orderHint",
+            "id,planId,title,bucketId,createdDateTime",
+            "id,planId,title,bucketId,percentComplete",
+            "id,planId,title,bucketId,createdDateTime,dueDateTime,percentComplete",
+        ];
+        return candidates.map((value) => this.normalizePlannerDeltaSelect(value));
+    }
+
+    private isPlannerDeltaSelectError(error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const lowered = msg.toLowerCase();
+        return msg.includes("-> 405") && (lowered.includes("certain fields") || lowered.includes("publication"));
     }
 
     private async getAccessToken() {
@@ -195,22 +225,43 @@ export class GraphClient {
     }
 
     async listPlannerTasksDelta(deltaLink?: string) {
-        const defaultSelect = ["id", "planId", "title", "bucketId"];
-        const select = (this.config.plannerDeltaSelect || defaultSelect.join(","))
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean)
-            .join(",");
-        const url = deltaLink
-            ? deltaLink
-            : `${this.betaBaseUrl}/planner/tasks/delta?$select=${select}`;
-        const res = await this.request(url);
-        const data = await readResponseJson<PlannerTaskDeltaPage>(res);
-        return {
-            value: data?.value || [],
-            nextLink: data?.["@odata.nextLink"],
-            deltaLink: data?.["@odata.deltaLink"],
-        };
+        if (deltaLink) {
+            const res = await this.request(deltaLink);
+            const data = await readResponseJson<PlannerTaskDeltaPage>(res);
+            return {
+                value: data?.value || [],
+                nextLink: data?.["@odata.nextLink"],
+                deltaLink: data?.["@odata.deltaLink"],
+            };
+        }
+
+        const candidates = this.buildPlannerDeltaSelectCandidates();
+        let lastError: Error | null = null;
+        for (let i = 0; i < candidates.length; i += 1) {
+            const select = candidates[i];
+            const url = `${this.betaBaseUrl}/planner/tasks/delta?$select=${select}`;
+            try {
+                const res = await this.request(url);
+                this.plannerDeltaSelectResolved = select;
+                if (i > 0) {
+                    logger.warn("Planner delta select fallback succeeded", { select, attempt: i + 1 });
+                }
+                const data = await readResponseJson<PlannerTaskDeltaPage>(res);
+                return {
+                    value: data?.value || [],
+                    nextLink: data?.["@odata.nextLink"],
+                    deltaLink: data?.["@odata.deltaLink"],
+                };
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (this.isPlannerDeltaSelectError(error) && i < candidates.length - 1) {
+                    logger.warn("Planner delta select rejected; trying fallback", { select, attempt: i + 1 });
+                    continue;
+                }
+                throw error;
+            }
+        }
+        throw lastError ?? new Error("Planner delta request failed");
     }
 
     async createPlan(groupId: string, title: string) {

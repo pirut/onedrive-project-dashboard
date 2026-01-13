@@ -153,6 +153,7 @@ SYNC_PREFER_BC=true
 SYNC_BC_MODIFIED_GRACE_MS=2000
 SYNC_USE_PLANNER_DELTA=true
 SYNC_USE_SMART_POLLING=false
+PLANNER_DELTA_SELECT=id,planId,title,bucketId
 
 # Optional persistence overrides
 PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
