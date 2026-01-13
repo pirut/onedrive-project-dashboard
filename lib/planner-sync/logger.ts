@@ -1,3 +1,5 @@
+import { appendPlannerLog } from "./planner-log";
+
 export type LogLevel = "info" | "warn" | "error";
 
 export type LogMeta = Record<string, unknown>;
@@ -14,15 +16,18 @@ function emit(level: LogLevel, message: string, meta?: LogMeta) {
     if (level === "error") {
         // eslint-disable-next-line no-console
         console.error(line);
+        appendPlannerLog(payload).catch(() => {});
         return;
     }
     if (level === "warn") {
         // eslint-disable-next-line no-console
         console.warn(line);
+        appendPlannerLog(payload).catch(() => {});
         return;
     }
     // eslint-disable-next-line no-console
     console.log(line);
+    appendPlannerLog(payload).catch(() => {});
 }
 
 export const logger = {

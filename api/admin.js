@@ -397,6 +397,13 @@ async function dashboardView(req) {
       <pre id="planner-output" class="log-block" style="display:none"></pre>
       <div class="small muted" style="margin-top:8px">Request log</div>
       <ul id="planner-log" class="step-list"></ul>
+      <div class="small muted" style="margin-top:12px">Planner sync logs</div>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" id="planner-sync-log-load" style="background:#1f2a44;color:#e6ecff">Load logs</button>
+        <button type="button" id="planner-sync-log-clear" style="background:#1f2a44;color:#e6ecff">Clear view</button>
+      </div>
+      <div id="planner-sync-log-status" class="small muted" style="margin-top:6px">Idle.</div>
+      <pre id="planner-sync-log-output" class="log-block" style="display:none;max-height:360px;overflow:auto"></pre>
     </div>
   </details>
 
