@@ -151,7 +151,7 @@ export class GraphClient {
     }
 
     async listPlannerTasksDelta(deltaLink?: string) {
-        const select = "id,planId,bucketId,percentComplete,startDateTime,dueDateTime,lastModifiedDateTime";
+        const select = "id,title,planId,bucketId,percentComplete,startDateTime,dueDateTime,createdDateTime,lastModifiedDateTime";
         const url = deltaLink
             ? deltaLink
             : `${this.betaBaseUrl}/planner/tasks/delta?$select=${encodeURIComponent(select)}`;
