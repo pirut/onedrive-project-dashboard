@@ -176,6 +176,7 @@ Notes:
 - `SYNC_USE_SMART_POLLING=true` enables BC project change feed + Planner delta queries so only affected projects run BC → Planner sync.
 - Smart polling expects a BC change feed endpoint at `/projectChanges` returning `sequenceNo` and `projectNo`; a 404 falls back to Planner-only polling.
 - Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
+- Planner delta queries use plan-scoped delta links and store tokens per plan (`planner:{tenantId}:{groupId}:{planId}`).
 
 ### Admin endpoints
 

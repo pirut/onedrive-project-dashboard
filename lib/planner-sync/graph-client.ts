@@ -150,9 +150,12 @@ export class GraphClient {
         return msg.includes("-> 405") && (lowered.includes("certain fields") || lowered.includes("publication"));
     }
 
-    async listPlannerTasksDeltaWithSelect(select: string) {
+    async listPlannerPlanTasksDeltaWithSelect(planId: string, select: string) {
+        if (!planId) {
+            throw new Error("Planner delta requires planId");
+        }
         const normalized = this.normalizePlannerDeltaSelect(select);
-        const url = `${this.betaBaseUrl}/planner/tasks/delta?$select=${normalized}`;
+        const url = `${this.betaBaseUrl}/planner/plans/${planId}/tasks/delta?$select=${normalized}`;
         const res = await this.request(url);
         const data = await readResponseJson<PlannerTaskDeltaPage>(res);
         return {
@@ -243,7 +246,7 @@ export class GraphClient {
         return data?.value || [];
     }
 
-    async listPlannerTasksDelta(deltaLink?: string) {
+    async listPlannerPlanTasksDelta(planId: string, deltaLink?: string) {
         if (deltaLink) {
             const res = await this.request(deltaLink);
             const data = await readResponseJson<PlannerTaskDeltaPage>(res);
@@ -254,16 +257,20 @@ export class GraphClient {
             };
         }
 
+        if (!planId) {
+            throw new Error("Planner delta requires planId");
+        }
+
         const candidates = this.buildPlannerDeltaSelectCandidates();
         let lastError: Error | null = null;
         for (let i = 0; i < candidates.length; i += 1) {
             const select = candidates[i];
-            const url = `${this.betaBaseUrl}/planner/tasks/delta?$select=${select}`;
+            const url = `${this.betaBaseUrl}/planner/plans/${planId}/tasks/delta?$select=${select}`;
             try {
                 const res = await this.request(url);
                 this.plannerDeltaSelectResolved = select;
                 if (i > 0) {
-                    logger.warn("Planner delta select fallback succeeded", { select, attempt: i + 1 });
+                    logger.warn("Planner delta select fallback succeeded", { select, attempt: i + 1, planId });
                 }
                 const data = await readResponseJson<PlannerTaskDeltaPage>(res);
                 return {
@@ -274,7 +281,11 @@ export class GraphClient {
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error(String(error));
                 if (this.isPlannerDeltaSelectError(error) && i < candidates.length - 1) {
-                    logger.warn("Planner delta select rejected; trying fallback", { select, attempt: i + 1 });
+                    logger.warn("Planner delta select rejected; trying fallback", {
+                        select,
+                        attempt: i + 1,
+                        planId,
+                    });
                     continue;
                 }
                 throw error;

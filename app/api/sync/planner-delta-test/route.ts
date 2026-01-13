@@ -1,4 +1,5 @@
 import { GraphClient } from "../../../../../lib/planner-sync/graph-client";
+import { getPlannerConfig } from "../../../../../lib/planner-sync/config";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,27 @@ type DeltaSummary = {
     hasDeltaLink: boolean;
 };
 
-async function collectDeltaSummary(graphClient: GraphClient, selectOverride?: string): Promise<DeltaSummary> {
+async function resolvePlanId(graphClient: GraphClient, planIdParam: string | null) {
+    const trimmed = (planIdParam || "").trim();
+    if (trimmed) return trimmed;
+    const plannerConfig = getPlannerConfig();
+    if (plannerConfig.defaultPlanId) return plannerConfig.defaultPlanId;
+    try {
+        const plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+        return plans[0]?.id || null;
+    } catch (error) {
+        logger.warn("Planner delta test failed to resolve planId", {
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+    }
+}
+
+async function collectDeltaSummary(
+    graphClient: GraphClient,
+    planId: string,
+    selectOverride?: string
+): Promise<DeltaSummary> {
     let nextLink: string | null = null;
     let deltaLink: string | null = null;
     let count = 0;
@@ -20,8 +41,8 @@ async function collectDeltaSummary(graphClient: GraphClient, selectOverride?: st
     while (true) {
         const page =
             pageCount === 0 && selectOverride
-                ? await graphClient.listPlannerTasksDeltaWithSelect(selectOverride)
-                : await graphClient.listPlannerTasksDelta(nextLink || undefined);
+                ? await graphClient.listPlannerPlanTasksDeltaWithSelect(planId, selectOverride)
+                : await graphClient.listPlannerPlanTasksDelta(planId, nextLink || undefined);
         pageCount += 1;
         const values = page?.value || [];
         if (!firstId && values.length) {
@@ -49,6 +70,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
     const selectOverride = (url.searchParams.get("select") || "").trim() || undefined;
+    const planIdParam = url.searchParams.get("planId");
 
     logger.info("GET /api/sync/planner-delta-test - Request received", {
         requestId,
@@ -59,7 +81,22 @@ export async function GET(request: Request) {
 
     try {
         const graphClient = new GraphClient();
-        const summary = await collectDeltaSummary(graphClient, selectOverride);
+        const planId = await resolvePlanId(graphClient, planIdParam);
+        if (!planId) {
+            return new Response(JSON.stringify({
+                ok: false,
+                error: "No planId resolved from query, default plan, or group.",
+                requestId,
+            }, null, 2), {
+                status: 400,
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Request-ID": requestId,
+                },
+            });
+        }
+
+        const summary = await collectDeltaSummary(graphClient, planId, selectOverride);
         const duration = Date.now() - startTime;
 
         logger.info("GET /api/sync/planner-delta-test - Completed", {
@@ -73,6 +110,7 @@ export async function GET(request: Request) {
             ok: true,
             requestId,
             duration,
+            planId,
             select: selectOverride || null,
             ...summary,
         }, null, 2), {

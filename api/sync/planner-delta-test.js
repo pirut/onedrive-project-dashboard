@@ -1,7 +1,24 @@
 import { GraphClient } from "../../lib/planner-sync/graph-client.js";
+import { getPlannerConfig } from "../../lib/planner-sync/config.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
-async function collectDeltaSummary(graphClient, selectOverride) {
+async function resolvePlanId(graphClient, planIdParam) {
+    const trimmed = (planIdParam || "").toString().trim();
+    if (trimmed) return trimmed;
+    const plannerConfig = getPlannerConfig();
+    if (plannerConfig.defaultPlanId) return plannerConfig.defaultPlanId;
+    try {
+        const plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+        return plans[0]?.id || null;
+    } catch (error) {
+        logger.warn("Planner delta test failed to resolve planId", {
+            error: error?.message || String(error),
+        });
+        return null;
+    }
+}
+
+async function collectDeltaSummary(graphClient, planId, selectOverride) {
     let nextLink = null;
     let deltaLink = null;
     let count = 0;
@@ -11,8 +28,8 @@ async function collectDeltaSummary(graphClient, selectOverride) {
     while (true) {
         const page =
             pageCount === 0 && selectOverride
-                ? await graphClient.listPlannerTasksDeltaWithSelect(selectOverride)
-                : await graphClient.listPlannerTasksDelta(nextLink || undefined);
+                ? await graphClient.listPlannerPlanTasksDeltaWithSelect(planId, selectOverride)
+                : await graphClient.listPlannerPlanTasksDelta(planId, nextLink || undefined);
         pageCount += 1;
         const values = page?.value || [];
         if (!firstId && values.length) {
@@ -45,10 +62,20 @@ export default async function handler(req, res) {
     try {
         const graphClient = new GraphClient();
         const selectOverride = (req.query.select || "").toString().trim() || undefined;
-        const summary = await collectDeltaSummary(graphClient, selectOverride);
+        const planId = await resolvePlanId(graphClient, req.query.planId);
+        if (!planId) {
+            res.status(400).json({
+                ok: false,
+                error: "No planId resolved from query, default plan, or group.",
+                durationMs: Date.now() - startTime,
+            });
+            return;
+        }
+        const summary = await collectDeltaSummary(graphClient, planId, selectOverride);
         res.status(200).json({
             ok: true,
             durationMs: Date.now() - startTime,
+            planId,
             select: selectOverride || null,
             ...summary,
         });

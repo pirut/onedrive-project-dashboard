@@ -1056,10 +1056,10 @@ async function syncProjectTasks(
     return planId;
 }
 
-function buildPlannerDeltaScopeKey() {
+function buildPlannerDeltaScopeKey(planId: string) {
     const { tenantId } = getGraphConfig();
     const { groupId } = getPlannerConfig();
-    return `planner:${tenantId}:${groupId}`;
+    return `planner:${tenantId}:${groupId}:${planId}`;
 }
 
 function buildBcProjectChangeScopeKey() {
@@ -1091,14 +1091,14 @@ function isDeltaUnsupported(error: unknown) {
     );
 }
 
-async function collectPlannerDeltaChanges(graphClient: GraphClient, deltaLink?: string | null) {
+async function collectPlannerDeltaChanges(graphClient: GraphClient, planId: string, deltaLink?: string | null) {
     const items: PlannerTaskDelta[] = [];
     let pageCount = 0;
     let nextLink = deltaLink || null;
     let newDeltaLink: string | null = null;
 
     while (true) {
-        const page = await graphClient.listPlannerTasksDelta(nextLink || undefined);
+        const page = await graphClient.listPlannerPlanTasksDelta(planId, nextLink || undefined);
         pageCount += 1;
         if (page?.value?.length) items.push(...page.value);
         if (page?.nextLink) {
@@ -1177,6 +1177,8 @@ async function clearPlannerLink(bcClient: BusinessCentralClient, task: BcProject
 async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
+    const plannerConfig = getPlannerConfig();
+    const { syncMode } = getSyncConfig();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
     const affectedProjectNos = new Set<string>();
     const isNotFound = (error: unknown) => {
@@ -1192,39 +1194,45 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         0
     );
 
-    const scopeKey = buildPlannerDeltaScopeKey();
-    const storedDelta = await getPlannerDeltaState(scopeKey);
-    let mode = storedDelta?.deltaLink ? "incremental" : "initial";
-
-    logger.info("Planner delta sync starting", {
-        scope: scopeKey,
-        mode,
-        hasDeltaToken: mode === "incremental",
-    });
-
-    let deltaResult: { items: PlannerTaskDelta[]; deltaLink: string; pageCount: number };
-    try {
-        deltaResult = await collectPlannerDeltaChanges(graphClient, storedDelta?.deltaLink);
-    } catch (error) {
-        if (storedDelta?.deltaLink && isDeltaTokenInvalid(error)) {
-            // Graph signals the token is stale; clear and restart with a fresh delta snapshot.
-            logger.warn("Planner delta token invalid; resetting", {
-                scope: scopeKey,
+    const planIds = new Set<string>();
+    if (syncMode === "singlePlan" && plannerConfig.defaultPlanId) {
+        planIds.add(plannerConfig.defaultPlanId);
+    } else {
+        try {
+            const plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+            for (const plan of plans || []) {
+                if (plan?.id) planIds.add(plan.id);
+            }
+        } catch (error) {
+            logger.warn("Planner delta plan list failed; falling back to BC task planIds", {
                 error: (error as Error)?.message,
             });
-            if (persist) {
-                await clearPlannerDeltaState(scopeKey);
-            } else {
-                logger.info("Planner delta token invalid; skipping store reset (dry run)", { scope: scopeKey });
-            }
-            mode = "initial";
-            deltaResult = await collectPlannerDeltaChanges(graphClient, null);
-        } else {
-            throw error;
+        }
+        for (const task of tasks) {
+            const planId = (task.plannerPlanId || "").trim();
+            if (planId) planIds.add(planId);
+        }
+        if (plannerConfig.defaultPlanId) {
+            planIds.add(plannerConfig.defaultPlanId);
         }
     }
 
-    const items = dedupePlannerDeltaItems(deltaResult.items);
+    if (!planIds.size) {
+        logger.warn("Planner delta sync skipped; no planIds resolved", {
+            syncMode,
+            groupId: plannerConfig.groupId,
+        });
+        return {
+            processed: 0,
+            total: tasks.length,
+            skippedDisabled,
+            affectedProjects: [],
+            mode: "initial",
+            persisted: persist,
+            plans: 0,
+        };
+    }
+
     const stats = {
         created: 0,
         updated: 0,
@@ -1235,74 +1243,127 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         cleared: 0,
     };
 
-    // Fetch all delta pages first so updates only apply after a complete delta pass.
-    for (const item of items) {
-        if (!item?.id) continue;
-        const isRemoved = !!item["@removed"];
-        if (isRemoved) stats.removed += 1;
+    let totalPages = 0;
+    let mode: "incremental" | "initial" = "initial";
 
-        const bcTask = plannerTaskIndex.get(item.id);
-        if (!bcTask) {
-            if (!isRemoved) stats.created += 1;
-            stats.skippedUnlinked += 1;
-            continue;
-        }
-        const affectedProjectNo = (bcTask.projectNo || "").trim();
-        if (affectedProjectNo) affectedProjectNos.add(affectedProjectNo);
-        if (isProjectDisabled(disabledProjects, bcTask.projectNo)) {
-            stats.skippedDisabled += 1;
-            continue;
-        }
-        if (isRemoved) {
-            const cleared = await clearPlannerLink(bcClient, bcTask);
-            if (cleared) stats.cleared += 1;
-            continue;
-        }
-        stats.updated += 1;
-        let plannerTask: PlannerTask | null = null;
+    for (const planId of planIds) {
+        const scopeKey = buildPlannerDeltaScopeKey(planId);
+        const storedDelta = await getPlannerDeltaState(scopeKey);
+        const planMode = storedDelta?.deltaLink ? "incremental" : "initial";
+        mode = mode === "initial" && planMode === "incremental" ? "incremental" : mode;
+
+        logger.info("Planner delta sync starting", {
+            scope: scopeKey,
+            planId,
+            mode: planMode,
+            hasDeltaToken: planMode === "incremental",
+        });
+
+        let deltaResult: { items: PlannerTaskDelta[]; deltaLink: string; pageCount: number };
         try {
-            plannerTask = await graphClient.getTask(item.id);
+            deltaResult = await collectPlannerDeltaChanges(graphClient, planId, storedDelta?.deltaLink);
         } catch (error) {
-            if (isNotFound(error)) {
-                const cleared = await clearPlannerLink(bcClient, bcTask);
-                if (cleared) stats.cleared += 1;
-            } else {
-                logger.warn("Planner task lookup failed during delta", {
-                    taskId: item.id,
+            if (storedDelta?.deltaLink && isDeltaTokenInvalid(error)) {
+                logger.warn("Planner delta token invalid; resetting", {
+                    scope: scopeKey,
+                    planId,
                     error: (error as Error)?.message,
                 });
+                if (persist) {
+                    await clearPlannerDeltaState(scopeKey);
+                } else {
+                    logger.info("Planner delta token invalid; skipping store reset (dry run)", { scope: scopeKey });
+                }
+                deltaResult = await collectPlannerDeltaChanges(graphClient, planId, null);
+            } else {
+                throw error;
             }
-            continue;
         }
-        if (!plannerTask) continue;
-        if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
-            continue;
+
+        totalPages += deltaResult.pageCount;
+        const items = dedupePlannerDeltaItems(deltaResult.items);
+        const before = { ...stats };
+
+        // Fetch all delta pages first so updates only apply after a complete delta pass.
+        for (const item of items) {
+            if (!item?.id) continue;
+            const isRemoved = !!item["@removed"];
+            if (isRemoved) stats.removed += 1;
+
+            const bcTask = plannerTaskIndex.get(item.id);
+            if (!bcTask) {
+                if (!isRemoved) stats.created += 1;
+                stats.skippedUnlinked += 1;
+                continue;
+            }
+            const affectedProjectNo = (bcTask.projectNo || "").trim();
+            if (affectedProjectNo) affectedProjectNos.add(affectedProjectNo);
+            if (isProjectDisabled(disabledProjects, bcTask.projectNo)) {
+                stats.skippedDisabled += 1;
+                continue;
+            }
+            if (isRemoved) {
+                const cleared = await clearPlannerLink(bcClient, bcTask);
+                if (cleared) stats.cleared += 1;
+                continue;
+            }
+            stats.updated += 1;
+            let plannerTask: PlannerTask | null = null;
+            try {
+                plannerTask = await graphClient.getTask(item.id);
+            } catch (error) {
+                if (isNotFound(error)) {
+                    const cleared = await clearPlannerLink(bcClient, bcTask);
+                    if (cleared) stats.cleared += 1;
+                } else {
+                    logger.warn("Planner task lookup failed during delta", {
+                        taskId: item.id,
+                        error: (error as Error)?.message,
+                    });
+                }
+                continue;
+            }
+            if (!plannerTask) continue;
+            if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
+                continue;
+            }
+            await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, plannerTask);
+            stats.processed += 1;
         }
-        await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, plannerTask);
-        stats.processed += 1;
-    }
 
-    // Persist the delta token only after all pages and updates succeed.
-    if (persist) {
-        await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
-    } else {
-        logger.info("Planner delta sync skipped persisting delta token", { scope: scopeKey });
-    }
+        if (persist) {
+            await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
+        } else {
+            logger.info("Planner delta sync skipped persisting delta token", { scope: scopeKey });
+        }
 
-    logger.info("Planner delta sync complete", {
-        scope: scopeKey,
-        mode,
-        pages: deltaResult.pageCount,
-        changes: items.length,
-        created: stats.created,
-        updated: stats.updated,
-        removed: stats.removed,
-        processed: stats.processed,
-        skippedDisabled: stats.skippedDisabled,
-        skippedUnlinked: stats.skippedUnlinked,
-        affectedProjects: affectedProjectNos.size,
-        persisted: persist,
-    });
+        const planStats = {
+            created: stats.created - before.created,
+            updated: stats.updated - before.updated,
+            removed: stats.removed - before.removed,
+            processed: stats.processed - before.processed,
+            skippedDisabled: stats.skippedDisabled - before.skippedDisabled,
+            skippedUnlinked: stats.skippedUnlinked - before.skippedUnlinked,
+            cleared: stats.cleared - before.cleared,
+        };
+
+        logger.info("Planner delta sync complete", {
+            scope: scopeKey,
+            planId,
+            mode: planMode,
+            pages: deltaResult.pageCount,
+            changes: items.length,
+            created: planStats.created,
+            updated: planStats.updated,
+            removed: planStats.removed,
+            processed: planStats.processed,
+            skippedDisabled: planStats.skippedDisabled,
+            skippedUnlinked: planStats.skippedUnlinked,
+            affectedProjects: affectedProjectNos.size,
+            cleared: planStats.cleared,
+            persisted: persist,
+        });
+    }
 
     return {
         processed: stats.processed,
@@ -1311,6 +1372,8 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         affectedProjects: Array.from(affectedProjectNos),
         mode,
         persisted: persist,
+        plans: planIds.size,
+        pages: totalPages,
     };
 }
 
