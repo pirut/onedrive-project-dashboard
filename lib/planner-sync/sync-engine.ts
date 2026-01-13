@@ -1171,6 +1171,7 @@ async function runPlannerDeltaSync() {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
+    const affectedProjectNos = new Set<string>();
     const isNotFound = (error: unknown) => {
         const msg = error instanceof Error ? error.message : String(error);
         return msg.includes("-> 404");
@@ -1234,6 +1235,8 @@ async function runPlannerDeltaSync() {
             stats.skippedUnlinked += 1;
             continue;
         }
+        const affectedProjectNo = (bcTask.projectNo || "").trim();
+        if (affectedProjectNo) affectedProjectNos.add(affectedProjectNo);
         if (isProjectDisabled(disabledProjects, bcTask.projectNo)) {
             stats.skippedDisabled += 1;
             continue;
@@ -1281,9 +1284,10 @@ async function runPlannerDeltaSync() {
         processed: stats.processed,
         skippedDisabled: stats.skippedDisabled,
         skippedUnlinked: stats.skippedUnlinked,
+        affectedProjects: affectedProjectNos.size,
     });
 
-    return { processed: stats.processed, total: tasks.length, skippedDisabled };
+    return { processed: stats.processed, total: tasks.length, skippedDisabled, affectedProjects: Array.from(affectedProjectNos) };
 }
 
 async function runPlannerFullSync() {
