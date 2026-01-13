@@ -10,7 +10,7 @@ type DeltaSummary = {
     hasDeltaLink: boolean;
 };
 
-async function collectDeltaSummary(graphClient: GraphClient): Promise<DeltaSummary> {
+async function collectDeltaSummary(graphClient: GraphClient, selectOverride?: string): Promise<DeltaSummary> {
     let nextLink: string | null = null;
     let deltaLink: string | null = null;
     let count = 0;
@@ -18,7 +18,10 @@ async function collectDeltaSummary(graphClient: GraphClient): Promise<DeltaSumma
     let pageCount = 0;
 
     while (true) {
-        const page = await graphClient.listPlannerTasksDelta(nextLink || undefined);
+        const page =
+            pageCount === 0 && selectOverride
+                ? await graphClient.listPlannerTasksDeltaWithSelect(selectOverride)
+                : await graphClient.listPlannerTasksDelta(nextLink || undefined);
         pageCount += 1;
         const values = page?.value || [];
         if (!firstId && values.length) {
@@ -45,6 +48,7 @@ export async function GET(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
+    const selectOverride = (url.searchParams.get("select") || "").trim() || undefined;
 
     logger.info("GET /api/sync/planner-delta-test - Request received", {
         requestId,
@@ -55,7 +59,7 @@ export async function GET(request: Request) {
 
     try {
         const graphClient = new GraphClient();
-        const summary = await collectDeltaSummary(graphClient);
+        const summary = await collectDeltaSummary(graphClient, selectOverride);
         const duration = Date.now() - startTime;
 
         logger.info("GET /api/sync/planner-delta-test - Completed", {
@@ -69,6 +73,7 @@ export async function GET(request: Request) {
             ok: true,
             requestId,
             duration,
+            select: selectOverride || null,
             ...summary,
         }, null, 2), {
             status: 200,

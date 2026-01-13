@@ -1,7 +1,7 @@
 import { GraphClient } from "../../lib/planner-sync/graph-client.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
-async function collectDeltaSummary(graphClient) {
+async function collectDeltaSummary(graphClient, selectOverride) {
     let nextLink = null;
     let deltaLink = null;
     let count = 0;
@@ -9,7 +9,10 @@ async function collectDeltaSummary(graphClient) {
     let pageCount = 0;
 
     while (true) {
-        const page = await graphClient.listPlannerTasksDelta(nextLink || undefined);
+        const page =
+            pageCount === 0 && selectOverride
+                ? await graphClient.listPlannerTasksDeltaWithSelect(selectOverride)
+                : await graphClient.listPlannerTasksDelta(nextLink || undefined);
         pageCount += 1;
         const values = page?.value || [];
         if (!firstId && values.length) {
@@ -41,10 +44,12 @@ export default async function handler(req, res) {
     const startTime = Date.now();
     try {
         const graphClient = new GraphClient();
-        const summary = await collectDeltaSummary(graphClient);
+        const selectOverride = (req.query.select || "").toString().trim() || undefined;
+        const summary = await collectDeltaSummary(graphClient, selectOverride);
         res.status(200).json({
             ok: true,
             durationMs: Date.now() - startTime,
+            select: selectOverride || null,
             ...summary,
         });
     } catch (error) {

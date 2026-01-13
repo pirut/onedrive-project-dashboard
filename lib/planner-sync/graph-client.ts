@@ -124,9 +124,6 @@ export class GraphClient {
 
     private buildPlannerDeltaSelectCandidates() {
         if (this.plannerDeltaSelectResolved) return [this.plannerDeltaSelectResolved];
-        if (this.config.plannerDeltaSelect) {
-            return [this.normalizePlannerDeltaSelect(this.config.plannerDeltaSelect)];
-        }
         const candidates = [
             "id,planId,title,bucketId",
             "id,planId,title,bucketId,creationSource,createdBy,lastModifiedBy",
@@ -134,13 +131,35 @@ export class GraphClient {
             "id,planId,title,bucketId,createdDateTime,dueDateTime,percentComplete",
             "id,planId,title,bucketId,orderHint",
         ];
-        return candidates.map((value) => this.normalizePlannerDeltaSelect(value));
+        const normalizedCandidates = candidates.map((value) => this.normalizePlannerDeltaSelect(value));
+        if (!this.config.plannerDeltaSelect) return normalizedCandidates;
+        const preferred = this.normalizePlannerDeltaSelect(this.config.plannerDeltaSelect);
+        const seen = new Set<string>();
+        const ordered: string[] = [];
+        for (const value of [preferred, ...normalizedCandidates]) {
+            if (!value || seen.has(value)) continue;
+            seen.add(value);
+            ordered.push(value);
+        }
+        return ordered;
     }
 
     private isPlannerDeltaSelectError(error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
         const lowered = msg.toLowerCase();
         return msg.includes("-> 405") && (lowered.includes("certain fields") || lowered.includes("publication"));
+    }
+
+    async listPlannerTasksDeltaWithSelect(select: string) {
+        const normalized = this.normalizePlannerDeltaSelect(select);
+        const url = `${this.betaBaseUrl}/planner/tasks/delta?$select=${normalized}`;
+        const res = await this.request(url);
+        const data = await readResponseJson<PlannerTaskDeltaPage>(res);
+        return {
+            value: data?.value || [],
+            nextLink: data?.["@odata.nextLink"],
+            deltaLink: data?.["@odata.deltaLink"],
+        };
     }
 
     private async getAccessToken() {
