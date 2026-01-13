@@ -37,6 +37,7 @@ export function getGraphConfig() {
         clientId: readEnv("GRAPH_CLIENT_ID", true) as string,
         clientSecret: readEnv("GRAPH_CLIENT_SECRET", true) as string,
         clientState: readEnv("GRAPH_SUBSCRIPTION_CLIENT_STATE", true) as string,
+        plannerDeltaSelect: readEnv("PLANNER_DELTA_SELECT") || undefined,
     };
 }
 
