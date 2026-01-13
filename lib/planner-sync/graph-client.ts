@@ -129,10 +129,10 @@ export class GraphClient {
         }
         const candidates = [
             "id,planId,title,bucketId",
-            "id,planId,title,bucketId,orderHint",
-            "id,planId,title,bucketId,createdDateTime",
-            "id,planId,title,bucketId,percentComplete",
+            "id,planId,title,bucketId,creationSource,createdBy,lastModifiedBy",
+            "id,planId,title,bucketId,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime",
             "id,planId,title,bucketId,createdDateTime,dueDateTime,percentComplete",
+            "id,planId,title,bucketId,orderHint",
         ];
         return candidates.map((value) => this.normalizePlannerDeltaSelect(value));
     }
