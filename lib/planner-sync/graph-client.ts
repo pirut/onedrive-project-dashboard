@@ -7,10 +7,12 @@ export type PlannerTask = {
     title?: string;
     planId?: string;
     bucketId?: string;
+    createdDateTime?: string | null;
     startDateTime?: string | null;
     dueDateTime?: string | null;
     lastModifiedDateTime?: string | null;
     percentComplete?: number;
+    assignments?: Record<string, unknown>;
     "@odata.etag"?: string;
     [key: string]: unknown;
 };
@@ -80,6 +82,37 @@ export class GraphClient {
     private baseUrl = "https://graph.microsoft.com/v1.0";
     private betaBaseUrl = "https://graph.microsoft.com/beta";
 
+    private sanitizeUrl(rawUrl: string) {
+        try {
+            const url = new URL(rawUrl);
+            const redactKeys = new Set([
+                "$deltatoken",
+                "$skiptoken",
+                "deltatoken",
+                "skiptoken",
+                "token",
+                "access_token",
+                "client_secret",
+            ]);
+            for (const key of redactKeys) {
+                if (url.searchParams.has(key)) {
+                    url.searchParams.set(key, "<redacted>");
+                }
+            }
+            return url.toString();
+        } catch {
+            return rawUrl;
+        }
+    }
+
+    private safeParseJson(text: string) {
+        try {
+            return JSON.parse(text) as unknown;
+        } catch {
+            return null;
+        }
+    }
+
     private async getAccessToken() {
         const now = Date.now();
         if (this.tokenCache && now < this.tokenCache.expiresAt - 60_000) {
@@ -116,18 +149,29 @@ export class GraphClient {
     private async request(path: string, options: RequestInit = {}) {
         const token = await this.getAccessToken();
         const url = path.startsWith("http") ? path : `${this.baseUrl}${path}`;
-        const res = await fetchWithRetry(url, {
-            method: options.method || "GET",
-            headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-                ...(options.headers || {}),
-            },
-            body: options.body,
-        });
+        const method = options.method || "GET";
+        const headers = {
+            Authorization: `Bearer ${token}`,
+            ...(options.headers || {}),
+        } as Record<string, string>;
+        const hasBody = options.body !== undefined && options.body !== null;
+        if (hasBody && !("Content-Type" in headers)) {
+            headers["Content-Type"] = "application/json";
+        }
+        const requestInit: RequestInit = { method, headers };
+        if (hasBody) requestInit.body = options.body;
+        const res = await fetchWithRetry(url, requestInit);
         if (!res.ok) {
             const text = await readResponseText(res);
-            throw new Error(`Graph ${options.method || "GET"} ${path} -> ${res.status}: ${text}`);
+            const errorJson = text ? this.safeParseJson(text) : null;
+            logger.error("Graph request failed", {
+                method,
+                url: this.sanitizeUrl(url),
+                status: res.status,
+                errorText: text || null,
+                errorJson: errorJson || undefined,
+            });
+            throw new Error(`Graph ${method} ${this.sanitizeUrl(url)} -> ${res.status}: ${text}`);
         }
         return res;
     }
@@ -151,7 +195,16 @@ export class GraphClient {
     }
 
     async listPlannerTasksDelta(deltaLink?: string) {
-        const select = ["id", "planId", "title"].join(",");
+        const select = [
+            "id",
+            "title",
+            "planId",
+            "bucketId",
+            "createdDateTime",
+            "dueDateTime",
+            "percentComplete",
+            "assignments",
+        ].join(",");
         const url = deltaLink
             ? deltaLink
             : `${this.betaBaseUrl}/planner/tasks/delta?$select=${encodeURIComponent(select)}`;
