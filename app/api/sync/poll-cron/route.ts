@@ -1,4 +1,5 @@
-import { runPollingSync, syncBcToPlanner } from "../../../../../lib/planner-sync";
+import { runPollingSync, runSmartPollingSync, syncBcToPlanner } from "../../../../../lib/planner-sync";
+import { getSyncConfig } from "../../../../../lib/planner-sync/config";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +17,28 @@ export async function GET(request: Request) {
     });
 
     try {
+        const { useSmartPolling } = getSyncConfig();
+        if (useSmartPolling) {
+            const smartResult = await runSmartPollingSync();
+            const duration = Date.now() - startTime;
+
+            logger.info("GET /api/sync/poll-cron - Smart polling success", {
+                requestId,
+                duration,
+            });
+
+            return new Response(
+                JSON.stringify({ ok: true, result: { smartPolling: smartResult }, requestId, duration }, null, 2),
+                {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Request-ID": requestId,
+                    },
+                }
+            );
+        }
+
         const bcResult = await syncBcToPlanner();
         const pollResult = await runPollingSync();
         const duration = Date.now() - startTime;

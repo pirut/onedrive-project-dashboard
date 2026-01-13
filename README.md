@@ -151,10 +151,14 @@ SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=true
 SYNC_LOCK_TIMEOUT_MINUTES=30
 SYNC_PREFER_BC=true
 SYNC_BC_MODIFIED_GRACE_MS=2000
+SYNC_USE_PLANNER_DELTA=true
+SYNC_USE_SMART_POLLING=false
 
 # Optional persistence overrides
 PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
 PLANNER_PROJECT_SYNC_FILE=.planner-project-sync.json
+PLANNER_DELTA_FILE=.planner-delta.json
+BC_PROJECT_CHANGES_FILE=.bc-project-changes.json
 KV_REST_API_URL=
 KV_REST_API_TOKEN=
 ```
@@ -166,8 +170,10 @@ Notes:
 - Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
 - Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
-- If BC changed since `lastSyncAt`, BC wins; otherwise Planner is treated as the source of truth.
+- If both BC and Planner changed since `lastSyncAt`, Planner wins; otherwise BC changes take precedence when they exist.
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms) to avoid treating sync metadata updates as user changes.
+- `SYNC_USE_SMART_POLLING=true` enables BC project change feed + Planner delta queries so only affected projects run BC → Planner sync.
+- Smart polling expects a BC change feed endpoint at `/projectChanges` returning `sequenceNo` and `projectNo`; a 404 falls back to Planner-only polling.
 - Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
 
 ### Admin endpoints

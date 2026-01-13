@@ -1,4 +1,5 @@
-import { runPollingSync } from "../../../../lib/planner-sync";
+import { runPollingSync, runSmartPollingSync } from "../../../../lib/planner-sync";
+import { getSyncConfig } from "../../../../lib/planner-sync/config";
 import { logger } from "../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +19,9 @@ export async function POST(request: Request) {
     });
 
     try {
-        logger.info("Starting polling sync", { requestId });
-        const result = await runPollingSync();
+        const { useSmartPolling } = getSyncConfig();
+        logger.info("Starting polling sync", { requestId, mode: useSmartPolling ? "smart" : "standard" });
+        const result = useSmartPolling ? await runSmartPollingSync() : await runPollingSync();
         const duration = Date.now() - startTime;
         
         logger.info("POST /api/sync/run-poll - Success", {

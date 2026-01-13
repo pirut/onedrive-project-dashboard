@@ -57,6 +57,7 @@ export function getSyncConfig() {
     const preferBc = readBoolEnv("SYNC_PREFER_BC", false);
     const bcModifiedGraceMs = Number(readEnv("SYNC_BC_MODIFIED_GRACE_MS") || 2000);
     const usePlannerDelta = readBoolEnv("SYNC_USE_PLANNER_DELTA", true);
+    const useSmartPolling = readBoolEnv("SYNC_USE_SMART_POLLING", false);
     return {
         syncMode,
         pollMinutes: Number.isNaN(pollMinutes) ? 10 : pollMinutes,
@@ -66,6 +67,7 @@ export function getSyncConfig() {
         preferBc,
         bcModifiedGraceMs: Number.isNaN(bcModifiedGraceMs) ? 2000 : bcModifiedGraceMs,
         usePlannerDelta,
+        useSmartPolling,
     };
 }
 
