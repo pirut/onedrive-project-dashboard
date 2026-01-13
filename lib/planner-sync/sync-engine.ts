@@ -1,6 +1,7 @@
 import { BusinessCentralClient, BcProjectTask } from "./bc-client";
 import { GraphClient, GraphUser, PlannerTask, PlannerTaskDelta, PlannerTaskDetails } from "./graph-client";
-import { getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
+import { getBcConfig, getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
+import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "./bc-change-store";
 import { clearPlannerDeltaState, getPlannerDeltaState, savePlannerDeltaState } from "./delta-store";
 import { logger } from "./logger";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "./project-sync-store";
@@ -1061,6 +1062,12 @@ function buildPlannerDeltaScopeKey() {
     return `planner:${tenantId}:${groupId}`;
 }
 
+function buildBcProjectChangeScopeKey() {
+    const { tenantId, environment, companyId, apiBase, publisher, group, version } = getBcConfig();
+    const trimmedBase = (apiBase || "").replace(/\/+$/, "");
+    return `bc:${tenantId}:${environment}:${companyId}:${trimmedBase}:${publisher}:${group}:${version}`;
+}
+
 function isDeltaTokenInvalid(error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     const lowered = msg.toLowerCase();
@@ -1167,7 +1174,7 @@ async function clearPlannerLink(bcClient: BusinessCentralClient, task: BcProject
     }
 }
 
-async function runPlannerDeltaSync() {
+async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
     const bcClient = new BusinessCentralClient();
     const graphClient = new GraphClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
@@ -1176,6 +1183,7 @@ async function runPlannerDeltaSync() {
         const msg = error instanceof Error ? error.message : String(error);
         return msg.includes("-> 404");
     };
+    const { persist = true } = options;
 
     const tasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
     const plannerTaskIndex = buildPlannerTaskIndex(tasks);
@@ -1204,7 +1212,11 @@ async function runPlannerDeltaSync() {
                 scope: scopeKey,
                 error: (error as Error)?.message,
             });
-            await clearPlannerDeltaState(scopeKey);
+            if (persist) {
+                await clearPlannerDeltaState(scopeKey);
+            } else {
+                logger.info("Planner delta token invalid; skipping store reset (dry run)", { scope: scopeKey });
+            }
             mode = "initial";
             deltaResult = await collectPlannerDeltaChanges(graphClient, null);
         } else {
@@ -1271,7 +1283,11 @@ async function runPlannerDeltaSync() {
     }
 
     // Persist the delta token only after all pages and updates succeed.
-    await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
+    if (persist) {
+        await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
+    } else {
+        logger.info("Planner delta sync skipped persisting delta token", { scope: scopeKey });
+    }
 
     logger.info("Planner delta sync complete", {
         scope: scopeKey,
@@ -1285,9 +1301,17 @@ async function runPlannerDeltaSync() {
         skippedDisabled: stats.skippedDisabled,
         skippedUnlinked: stats.skippedUnlinked,
         affectedProjects: affectedProjectNos.size,
+        persisted: persist,
     });
 
-    return { processed: stats.processed, total: tasks.length, skippedDisabled, affectedProjects: Array.from(affectedProjectNos) };
+    return {
+        processed: stats.processed,
+        total: tasks.length,
+        skippedDisabled,
+        affectedProjects: Array.from(affectedProjectNos),
+        mode,
+        persisted: persist,
+    };
 }
 
 async function runPlannerFullSync() {
@@ -1348,6 +1372,128 @@ async function runPlannerFullSync() {
     }
 
     return { processed, total: tasks.length, skippedDisabled };
+}
+
+export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
+    const { dryRun = false } = options;
+    const bcClient = new BusinessCentralClient();
+    const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
+    const bcScopeKey = buildBcProjectChangeScopeKey();
+    const lastSeq = await getBcProjectChangeCursor(bcScopeKey);
+    const bcChangedProjectNos = new Set<string>();
+    let bcLastSeq: number | null = null;
+
+    const isNotFound = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 404");
+    };
+
+    try {
+        const bcChanges = await bcClient.listProjectChangesSince(lastSeq);
+        bcLastSeq = bcChanges.lastSeq ?? null;
+        for (const change of bcChanges.items || []) {
+            const projectNo = (change.projectNo || "").trim();
+            if (projectNo) bcChangedProjectNos.add(projectNo);
+        }
+        logger.info("BC project change feed read", {
+            scope: bcScopeKey,
+            lastSeq,
+            pages: bcChanges.pageCount,
+            changes: bcChanges.items.length,
+            projects: bcChangedProjectNos.size,
+        });
+    } catch (error) {
+        if (isNotFound(error)) {
+            logger.warn("BC project change feed unavailable; skipping BC change lookup", {
+                scope: bcScopeKey,
+                error: (error as Error)?.message,
+            });
+        } else {
+            throw error;
+        }
+    }
+
+    const { usePlannerDelta } = getSyncConfig();
+    const plannerAffectedProjectNos = new Set<string>();
+    let plannerProcessed = 0;
+    let plannerMode: "incremental" | "initial" = "initial";
+
+    if (usePlannerDelta) {
+        try {
+            const deltaResult = await runPlannerDeltaSync({ persist: !dryRun });
+            plannerProcessed = deltaResult.processed;
+            plannerMode = deltaResult.mode === "incremental" ? "incremental" : "initial";
+            for (const projectNo of deltaResult.affectedProjects || []) {
+                const trimmed = (projectNo || "").trim();
+                if (trimmed) plannerAffectedProjectNos.add(trimmed);
+            }
+        } catch (error) {
+            if (isDeltaUnsupported(error)) {
+                logger.warn("Planner delta unavailable; falling back to full polling", {
+                    error: (error as Error)?.message,
+                });
+                const fullResult = await runPlannerFullSync();
+                plannerProcessed = fullResult.processed;
+                plannerMode = "initial";
+            } else {
+                throw error;
+            }
+        }
+    } else {
+        logger.info("Planner delta disabled; running full polling sync");
+        const fullResult = await runPlannerFullSync();
+        plannerProcessed = fullResult.processed;
+        plannerMode = "initial";
+    }
+
+    const projectNoByNormalized = new Map<string, string>();
+    const addProjectNo = (projectNo: string) => {
+        const trimmed = (projectNo || "").trim();
+        if (!trimmed) return;
+        const normalized = normalizeProjectNo(trimmed);
+        if (!normalized) return;
+        if (!projectNoByNormalized.has(normalized)) {
+            projectNoByNormalized.set(normalized, trimmed);
+        }
+    };
+    for (const projectNo of bcChangedProjectNos) addProjectNo(projectNo);
+    for (const projectNo of plannerAffectedProjectNos) addProjectNo(projectNo);
+
+    const projectsToSync: string[] = [];
+    for (const [normalized, projectNo] of projectNoByNormalized.entries()) {
+        if (disabledProjects.has(normalized)) continue;
+        projectsToSync.push(projectNo);
+    }
+
+    logger.info("Smart polling project selection", {
+        bcChangedProjects: bcChangedProjectNos.size,
+        plannerAffectedProjects: plannerAffectedProjectNos.size,
+        projectsToSync: projectsToSync.length,
+        dryRun,
+    });
+
+    if (!dryRun) {
+        for (const projectNo of projectsToSync) {
+            await syncBcToPlanner(projectNo);
+        }
+    } else if (projectsToSync.length) {
+        logger.info("Smart polling dry run; skipping BC → Planner sync", { projects: projectsToSync });
+    }
+
+    let lastSeqSaved: number | null = null;
+    if (!dryRun && bcLastSeq != null) {
+        await saveBcProjectChangeCursor(bcScopeKey, bcLastSeq);
+        lastSeqSaved = bcLastSeq;
+        logger.info("Saved BC project change cursor", { scope: bcScopeKey, lastSeq: bcLastSeq });
+    } else if (dryRun && bcLastSeq != null) {
+        logger.info("Smart polling dry run; skipping BC cursor save", { scope: bcScopeKey, lastSeq: bcLastSeq });
+    }
+
+    return {
+        bc: { changedProjects: bcChangedProjectNos.size, lastSeqSaved },
+        planner: { processed: plannerProcessed, affectedProjects: plannerAffectedProjectNos.size, mode: plannerMode },
+        syncedProjects: projectsToSync,
+    };
 }
 
 export async function runPollingSync() {
