@@ -831,6 +831,9 @@ async function applyPlannerUpdateToBc(
         : toBcPercent(plannerPercent);
     const startDate = toBcDate(plannerTask.startDateTime || null);
     const dueDate = toBcDate(plannerTask.dueDateTime || null);
+    const plannerHasAssignments = hasPlannerAssignments(plannerTask);
+    const bcAssignee = resolveAssigneeIdentity(bcTask);
+    const shouldClearAssignee = !plannerHasAssignments && !!bcAssignee;
 
     const updates: Record<string, unknown> = {
         percentComplete: bcPercent,
@@ -851,6 +854,9 @@ async function applyPlannerUpdateToBc(
         updates.manualEndDate = dueDate;
     } else {
         updates.endDate = dueDate;
+    }
+    if (shouldClearAssignee && hasField(bcTask, "assignedPersonCode")) {
+        updates.assignedPersonCode = "";
     }
 
     const hasChanges = Object.entries(updates).some(([key, value]) => {
