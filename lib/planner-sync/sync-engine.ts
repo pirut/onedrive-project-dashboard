@@ -284,6 +284,17 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     if (lastSyncAt != null) {
         const bcChanged = bcChangedSinceSync === true;
         const plannerChanged = plannerChangedSinceSync === true;
+        if (bcChanged && plannerChanged) {
+            return {
+                decision: "planner",
+                lastSyncAt,
+                bcModified,
+                plannerModified,
+                bcChangedSinceSync,
+                plannerChangedSinceSync,
+                plannerEtagChanged,
+            };
+        }
         if (bcChanged) {
             return {
                 decision: "bc",
