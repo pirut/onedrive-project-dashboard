@@ -53,10 +53,16 @@ type TokenCache = {
 export class BusinessCentralClient {
     private config = getBcConfig();
     private tokenCache: TokenCache | null = null;
+    private projectChangesEntitySet: string | null = null;
 
     private baseUrl() {
         const { apiBase, tenantId, environment, publisher, group, version, companyId } = this.config;
         return `${apiBase}/${tenantId}/${environment}/api/${publisher}/${group}/${version}/companies(${companyId})`;
+    }
+
+    private apiRootUrl() {
+        const { apiBase, tenantId, environment, publisher, group, version } = this.config;
+        return `${apiBase}/${tenantId}/${environment}/api/${publisher}/${group}/${version}`;
     }
 
     private async getAccessToken() {
@@ -111,6 +117,60 @@ export class BusinessCentralClient {
         return res;
     }
 
+    private parseEntitySets(metadataText: string) {
+        if (!metadataText) return [];
+        const entitySets: string[] = [];
+        const regex = /<EntitySet\s+Name="([^"]+)"/g;
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(metadataText))) {
+            entitySets.push(match[1]);
+        }
+        return entitySets;
+    }
+
+    private resolveChangeEntitySetName(entitySets: string[]) {
+        let best: { name: string; score: number } | null = null;
+        for (const name of entitySets) {
+            const lower = name.toLowerCase();
+            let score = Number.POSITIVE_INFINITY;
+            if (lower === "projectchanges") score = 0;
+            else if (lower.includes("projectchanges")) score = 1;
+            else if (lower.includes("projectchange")) score = 2;
+            else if (lower.includes("project") && lower.includes("change")) score = 3;
+            if (Number.isFinite(score) && (!best || score < best.score)) {
+                best = { name, score };
+            }
+        }
+        return best?.name || null;
+    }
+
+    private async resolveProjectChangesEntitySet() {
+        if (this.projectChangesEntitySet) return this.projectChangesEntitySet;
+        const explicit = (this.config.projectChangesEntitySet || "").trim();
+        if (explicit) {
+            this.projectChangesEntitySet = explicit;
+            return explicit;
+        }
+        try {
+            const metadataUrl = `${this.apiRootUrl()}/$metadata`;
+            const res = await this.request(metadataUrl);
+            const text = await readResponseText(res);
+            const entitySets = this.parseEntitySets(text);
+            const resolved = this.resolveChangeEntitySetName(entitySets);
+            if (resolved) {
+                this.projectChangesEntitySet = resolved;
+                logger.info("Resolved BC project change feed entity set", { entitySet: resolved });
+                return resolved;
+            }
+        } catch (error) {
+            logger.warn("BC project change feed metadata lookup failed", {
+                error: (error as Error)?.message,
+            });
+        }
+        this.projectChangesEntitySet = "projectChanges";
+        return this.projectChangesEntitySet;
+    }
+
     async listProjectTasks(filter?: string) {
         const path = filter ? `/projectTasks?$filter=${encodeURIComponent(filter)}` : "/projectTasks";
         const res = await this.request(path);
@@ -132,13 +192,14 @@ export class BusinessCentralClient {
         let nextLink: string | null = null;
         let cursor: number | null = lastSeq;
         const top = 5000;
+        const entitySet = await this.resolveProjectChangesEntitySet();
 
         while (true) {
             const params = new URLSearchParams();
             if (cursor != null) params.set("$filter", `sequenceNo gt ${cursor}`);
             params.set("$orderby", "sequenceNo asc");
             params.set("$top", String(top));
-            const path = nextLink || `/projectChanges?${params.toString()}`;
+            const path = nextLink || `/${entitySet}?${params.toString()}`;
             const res = await this.request(path);
             const data = await readResponseJson<{ value?: Record<string, unknown>[]; "@odata.nextLink"?: string }>(res);
             const pageItems = Array.isArray(data?.value) ? data?.value || [] : [];

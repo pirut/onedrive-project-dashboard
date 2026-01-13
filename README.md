@@ -129,6 +129,7 @@ BC_API_BASE=https://api.businesscentral.dynamics.com/v2.0
 BC_API_PUBLISHER=cornerstone
 BC_API_GROUP=plannerSync
 BC_API_VERSION=v1.0
+BC_PROJECT_CHANGES_ENTITY_SET=projectChanges
 
 # Microsoft Graph
 GRAPH_TENANT_ID=
