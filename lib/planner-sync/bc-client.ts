@@ -2,6 +2,89 @@ import { fetchWithRetry, readResponseJson, readResponseText } from "./http";
 import { logger } from "./logger";
 import { getBcConfig } from "./config";
 
+function parseDateMs(value: string | null | undefined) {
+    if (!value) return null;
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function buildPlannerTaskScore(task: BcProjectTask) {
+    const hasPlanId = !!(task.plannerPlanId || "").trim();
+    const lastSyncMs = parseDateMs(task.lastSyncAt);
+    const modifiedMs = parseDateMs(task.systemModifiedAt) ?? parseDateMs(task.lastModifiedDateTime) ?? parseDateMs(task.modifiedAt);
+    return {
+        hasPlanId: hasPlanId ? 1 : 0,
+        lastSyncMs: lastSyncMs ?? -1,
+        modifiedMs: modifiedMs ?? -1,
+    };
+}
+
+function isBetterPlannerTask(candidate: BcProjectTask, current: BcProjectTask) {
+    const candidateScore = buildPlannerTaskScore(candidate);
+    const currentScore = buildPlannerTaskScore(current);
+    if (candidateScore.hasPlanId !== currentScore.hasPlanId) {
+        return candidateScore.hasPlanId > currentScore.hasPlanId;
+    }
+    if (candidateScore.lastSyncMs !== currentScore.lastSyncMs) {
+        return candidateScore.lastSyncMs > currentScore.lastSyncMs;
+    }
+    if (candidateScore.modifiedMs !== currentScore.modifiedMs) {
+        return candidateScore.modifiedMs > currentScore.modifiedMs;
+    }
+    return false;
+}
+
+function selectPrimaryPlannerTask(tasks: BcProjectTask[]) {
+    let best = tasks[0];
+    for (const task of tasks.slice(1)) {
+        if (isBetterPlannerTask(task, best)) {
+            best = task;
+        }
+    }
+    return best;
+}
+
+async function clearDuplicatePlannerLink(
+    bcClient: BusinessCentralClient,
+    task: BcProjectTask,
+    plannerTaskId: string,
+    primaryTask: BcProjectTask
+) {
+    if (!task.systemId) {
+        logger.warn("Duplicate Planner linkage missing systemId; skipping", {
+            plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+        });
+        return false;
+    }
+    try {
+        await bcClient.patchProjectTask(task.systemId, {
+            plannerTaskId: "",
+            plannerPlanId: "",
+            plannerBucket: "",
+            lastPlannerEtag: "",
+            syncLock: false,
+        });
+        logger.warn("Cleared duplicate Planner linkage", {
+            plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+            keptProjectNo: primaryTask?.projectNo,
+            keptTaskNo: primaryTask?.taskNo,
+        });
+        return true;
+    } catch (error) {
+        logger.warn("Failed to clear duplicate Planner linkage", {
+            plannerTaskId,
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+            error: (error as Error)?.message,
+        });
+        return false;
+    }
+}
+
 export type BcProjectTask = {
     systemId?: string;
     projectNo?: string;
@@ -251,9 +334,18 @@ export class BusinessCentralClient {
         const filter = `plannerTaskId eq '${escaped}'`;
         const tasks = await this.listProjectTasks(filter);
         if (!tasks.length) return null;
-        if (tasks.length > 1) {
-            logger.warn("Multiple BC tasks found for Planner task", { plannerTaskId, count: tasks.length });
+        if (tasks.length === 1) return tasks[0];
+        const primary = selectPrimaryPlannerTask(tasks);
+        logger.warn("Duplicate Planner linkage detected; clearing extras", {
+            plannerTaskId,
+            count: tasks.length,
+            keepProjectNo: primary?.projectNo,
+            keepTaskNo: primary?.taskNo,
+        });
+        for (const task of tasks) {
+            if (task === primary) continue;
+            await clearDuplicatePlannerLink(this, task, plannerTaskId, primary);
         }
-        return tasks[0];
+        return primary;
     }
 }
