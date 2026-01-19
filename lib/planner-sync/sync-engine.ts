@@ -1447,6 +1447,8 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
     const { dryRun = false } = options;
     const bcClient = new BusinessCentralClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
+    const syncConfig = getSyncConfig();
+    const { usePlannerDelta, syncMode, allowDefaultPlanFallback } = syncConfig;
     const bcScopeKey = buildBcProjectChangeScopeKey();
     const lastSeq = await getBcProjectChangeCursor(bcScopeKey);
     const bcChangedProjectNos = new Set<string>();
@@ -1482,7 +1484,91 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
         }
     }
 
-    const { usePlannerDelta } = getSyncConfig();
+    const missingProjects: Array<{ projectNo: string; planTitle: string }> = [];
+    if (syncMode === "perProjectPlan") {
+        const graphClient = new GraphClient();
+        const plannerConfig = getPlannerConfig();
+        let projects: Awaited<ReturnType<BusinessCentralClient["listProjects"]>> | null = null;
+        try {
+            projects = await bcClient.listProjects();
+        } catch (error) {
+            logger.warn("BC projects lookup failed; skipping new project check", {
+                error: (error as Error)?.message,
+            });
+        }
+        if (projects?.length) {
+            let plans: Awaited<ReturnType<GraphClient["listPlansForGroup"]>> | null = null;
+            try {
+                plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+            } catch (error) {
+                logger.warn("Planner plan list failed; skipping new project check", {
+                    error: (error as Error)?.message,
+                });
+            }
+            if (plans) {
+                const planTitleIndex = new Map<string, string>();
+                for (const plan of plans || []) {
+                    const title = (plan?.title || "").trim();
+                    if (title) planTitleIndex.set(title.toLowerCase(), plan.id);
+                }
+                for (const project of projects) {
+                    const projectNo = (project.projectNo || "").trim();
+                    if (!projectNo) continue;
+                    if (isProjectDisabled(disabledProjects, projectNo)) continue;
+                    const planTitle = buildPlanTitle(projectNo, project.description);
+                    const normalizedTitle = planTitle.trim().toLowerCase();
+                    const normalizedProjectNo = projectNo.toLowerCase();
+                    if (planTitleIndex.has(normalizedTitle) || planTitleIndex.has(normalizedProjectNo)) continue;
+                    missingProjects.push({ projectNo, planTitle });
+                }
+                if (missingProjects.length) {
+                    logger.info("BC projects missing Planner plans detected", {
+                        count: missingProjects.length,
+                        dryRun,
+                    });
+                    if (!dryRun) {
+                        for (const project of missingProjects) {
+                            try {
+                                const createdPlan = await graphClient.createPlan(plannerConfig.groupId, project.planTitle);
+                                planTitleIndex.set(project.planTitle.trim().toLowerCase(), createdPlan.id);
+                                planTitleIndex.set(project.projectNo.trim().toLowerCase(), createdPlan.id);
+                                logger.info("Planner plan created for BC project", {
+                                    projectNo: project.projectNo,
+                                    planId: createdPlan.id,
+                                });
+                            } catch (error) {
+                                const planCreateError = (error as Error)?.message || String(error);
+                                logger.warn("Plan creation failed for BC project", {
+                                    projectNo: project.projectNo,
+                                    error: planCreateError,
+                                });
+                                if (!allowDefaultPlanFallback) {
+                                    throw new Error(`Plan creation failed: ${planCreateError || "unknown error"}`);
+                                }
+                                if (!plannerConfig.defaultPlanId) {
+                                    throw new Error(`Plan creation failed and PLANNER_DEFAULT_PLAN_ID is not set: ${planCreateError || "unknown error"}`);
+                                }
+                                logger.warn("Plan creation failed; falling back to default plan", {
+                                    projectNo: project.projectNo,
+                                    defaultPlanId: plannerConfig.defaultPlanId,
+                                });
+                            }
+                        }
+                    } else {
+                        logger.info("Smart polling dry run; skipping Planner plan creation", {
+                            projects: missingProjects.map((project) => project.projectNo),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if (missingProjects.length) {
+        for (const project of missingProjects) {
+            bcChangedProjectNos.add(project.projectNo);
+        }
+    }
+
     const plannerAffectedProjectNos = new Set<string>();
     let plannerProcessed = 0;
     let plannerMode: "incremental" | "initial" = "initial";
