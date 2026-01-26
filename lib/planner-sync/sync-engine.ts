@@ -1420,7 +1420,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
             deltaResult = await collectPlannerDeltaChanges(graphClient, planId, storedDelta?.deltaLink);
         } catch (error) {
             if (storedDelta?.deltaLink && isDeltaTokenInvalid(error)) {
-                logger.warn("Planner delta token invalid; resetting", {
+                logger.info("Planner delta token invalid; resetting", {
                     scope: scopeKey,
                     planId,
                     error: (error as Error)?.message,
