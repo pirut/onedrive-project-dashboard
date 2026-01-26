@@ -1388,6 +1388,10 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         const msg = error instanceof Error ? error.message : String(error);
         return msg.includes("-> 404");
     };
+    const isRateLimited = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 429");
+    };
     const { persist = true } = options;
 
     const rawTasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
@@ -1463,7 +1467,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
             hasDeltaToken: planMode === "incremental",
         });
 
-        let deltaResult: { items: PlannerTaskDelta[]; deltaLink: string; pageCount: number };
+        let deltaResult: { items: PlannerTaskDelta[]; deltaLink: string; pageCount: number } | null = null;
         try {
             deltaResult = await collectPlannerDeltaChanges(graphClient, planId, storedDelta?.deltaLink);
         } catch (error) {
@@ -1478,10 +1482,33 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
                 } else {
                     logger.info("Planner delta token invalid; skipping store reset (dry run)", { scope: scopeKey });
                 }
-                deltaResult = await collectPlannerDeltaChanges(graphClient, planId, null);
+                try {
+                    deltaResult = await collectPlannerDeltaChanges(graphClient, planId, null);
+                } catch (resetError) {
+                    if (isRateLimited(resetError)) {
+                        logger.warn("Planner delta rate limited after reset; skipping plan", {
+                            scope: scopeKey,
+                            planId,
+                            error: (resetError as Error)?.message,
+                        });
+                        continue;
+                    }
+                    throw resetError;
+                }
+            } else if (isRateLimited(error)) {
+                logger.warn("Planner delta rate limited; skipping plan", {
+                    scope: scopeKey,
+                    planId,
+                    error: (error as Error)?.message,
+                });
+                continue;
             } else {
                 throw error;
             }
+        }
+
+        if (!deltaResult) {
+            continue;
         }
 
         totalPages += deltaResult.pageCount;
