@@ -9,6 +9,8 @@ const DEFAULT_MAX_LOG_ARRAY = 20;
 const DEFAULT_MAX_LOG_KEYS = 40;
 const DEFAULT_MAX_LOG_DEPTH = 4;
 const DEFAULT_MAX_LOG_BYTES = 8000;
+const DEFAULT_THROTTLE_WINDOW_MS = 10000;
+const DEFAULT_THROTTLE_BURST = 5;
 
 function readLimit(name: string, fallback: number) {
     const raw = Number(process.env[name]);
@@ -20,6 +22,17 @@ const MAX_LOG_ARRAY = readLimit("PLANNER_LOG_MAX_ARRAY", DEFAULT_MAX_LOG_ARRAY);
 const MAX_LOG_KEYS = readLimit("PLANNER_LOG_MAX_KEYS", DEFAULT_MAX_LOG_KEYS);
 const MAX_LOG_DEPTH = readLimit("PLANNER_LOG_MAX_DEPTH", DEFAULT_MAX_LOG_DEPTH);
 const MAX_LOG_BYTES = readLimit("PLANNER_LOG_MAX_BYTES", DEFAULT_MAX_LOG_BYTES);
+const THROTTLE_WINDOW_MS = readLimit("PLANNER_LOG_THROTTLE_WINDOW_MS", DEFAULT_THROTTLE_WINDOW_MS);
+const THROTTLE_BURST = readLimit("PLANNER_LOG_THROTTLE_BURST", DEFAULT_THROTTLE_BURST);
+
+type ThrottleState = {
+    windowStart: number;
+    emitted: number;
+    suppressed: number;
+    lastMeta?: LogMeta;
+};
+
+const throttleState = new Map<string, ThrottleState>();
 
 function truncateString(value: string) {
     if (value.length <= MAX_LOG_STRING) return value;
@@ -118,7 +131,7 @@ function normalizeMeta(meta?: LogMeta) {
     return sanitizeValue(meta, 0, new WeakSet<object>()) as LogMeta;
 }
 
-function emit(level: LogLevel, message: string, meta?: LogMeta) {
+function emitPayload(level: LogLevel, message: string, meta?: LogMeta) {
     const safeMeta = normalizeMeta(meta);
     const payload = {
         level,
@@ -155,6 +168,42 @@ function emit(level: LogLevel, message: string, meta?: LogMeta) {
     // eslint-disable-next-line no-console
     console.log(line);
     appendPlannerLog(finalPayload).catch(() => {});
+}
+
+function emit(level: LogLevel, message: string, meta?: LogMeta) {
+    if (THROTTLE_WINDOW_MS > 0 && THROTTLE_BURST > 0) {
+        const key = `${level}:${message}`;
+        const now = Date.now();
+        let state = throttleState.get(key);
+        if (!state) {
+            state = { windowStart: now, emitted: 0, suppressed: 0 };
+            throttleState.set(key, state);
+        }
+
+        if (now - state.windowStart > THROTTLE_WINDOW_MS) {
+            if (state.suppressed > 0) {
+                emitPayload(level, "Log burst suppressed", {
+                    message,
+                    suppressed: state.suppressed,
+                    windowMs: THROTTLE_WINDOW_MS,
+                    lastMeta: state.lastMeta,
+                });
+            }
+            state.windowStart = now;
+            state.emitted = 0;
+            state.suppressed = 0;
+            state.lastMeta = undefined;
+        }
+
+        if (state.emitted >= THROTTLE_BURST) {
+            state.suppressed += 1;
+            state.lastMeta = meta;
+            return;
+        }
+        state.emitted += 1;
+    }
+
+    emitPayload(level, message, meta);
 }
 
 export const logger = {
