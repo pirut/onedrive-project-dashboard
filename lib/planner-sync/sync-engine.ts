@@ -1130,12 +1130,6 @@ function dedupePlannerDeltaItems(items: PlannerTaskDelta[]) {
     return Array.from(map.values());
 }
 
-function parseDateMs(value: string | null | undefined) {
-    if (!value) return null;
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-}
-
 function buildPlannerTaskScore(task: BcProjectTask) {
     const hasPlanId = !!(task.plannerPlanId || "").trim();
     const lastSyncMs = parseDateMs(task.lastSyncAt);
