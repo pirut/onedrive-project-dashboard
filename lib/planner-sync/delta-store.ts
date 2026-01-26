@@ -13,6 +13,8 @@ const FILE_PATH = process.env.PLANNER_DELTA_FILE || path.join(DEFAULT_DIR, ".pla
 const KV_KEY = "planner:delta:tasks";
 let fileStoreWritable = true;
 let fileStoreWarned = false;
+const DEFAULT_MAX_AGE_DAYS = 7;
+const MAX_AGE_DAYS = Number(process.env.PLANNER_DELTA_MAX_AGE_DAYS || DEFAULT_MAX_AGE_DAYS);
 
 function normalizeScopes(raw: unknown): Record<string, DeltaEntry> {
     if (!raw || typeof raw !== "object") return {};
@@ -98,6 +100,17 @@ export async function getPlannerDeltaState(scopeKey: string): Promise<DeltaEntry
     const scopes = normalizeScopes(store);
     const entry = scopes[scopeKey];
     if (!entry?.deltaLink) return null;
+    if (entry.updatedAt && Number.isFinite(MAX_AGE_DAYS) && MAX_AGE_DAYS > 0) {
+        const updatedMs = Date.parse(entry.updatedAt);
+        if (Number.isFinite(updatedMs)) {
+            const ageMs = Date.now() - updatedMs;
+            const maxAgeMs = MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+            if (ageMs > maxAgeMs) {
+                await clearPlannerDeltaState(scopeKey);
+                return null;
+            }
+        }
+    }
     return entry;
 }
 
