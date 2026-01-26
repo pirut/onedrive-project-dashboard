@@ -42,7 +42,7 @@ export async function fetchWithRetry(
             }
             const retryAfter = parseRetryAfter(res.headers.get("retry-after"));
             const delay = retryAfter ?? baseDelayMs * Math.pow(2, attempt);
-            logger.warn("Fetch retry scheduled", { url, status: res.status, attempt, delayMs: delay });
+            logger.info("Fetch retry scheduled", { url, status: res.status, attempt, delayMs: delay });
             await sleep(delay);
         } catch (error) {
             lastError = error instanceof Error ? error : new Error(String(error));
@@ -50,7 +50,7 @@ export async function fetchWithRetry(
                 break;
             }
             const delay = baseDelayMs * Math.pow(2, attempt);
-            logger.warn("Fetch retry after error", { url, attempt, delayMs: delay, error: lastError.message });
+            logger.info("Fetch retry after error", { url, attempt, delayMs: delay, error: lastError.message });
             await sleep(delay);
         }
     }

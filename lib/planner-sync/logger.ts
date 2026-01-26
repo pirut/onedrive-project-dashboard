@@ -1,6 +1,6 @@
 import { appendPlannerLog } from "./planner-log";
 
-export type LogLevel = "info" | "warn" | "error";
+export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogMeta = Record<string, unknown>;
 
@@ -11,6 +11,7 @@ const DEFAULT_MAX_LOG_DEPTH = 4;
 const DEFAULT_MAX_LOG_BYTES = 8000;
 const DEFAULT_THROTTLE_WINDOW_MS = 10000;
 const DEFAULT_THROTTLE_BURST = 5;
+const DEFAULT_LOG_LEVEL: LogLevel = "info";
 
 function readLimit(name: string, fallback: number) {
     const raw = Number(process.env[name]);
@@ -24,6 +25,17 @@ const MAX_LOG_DEPTH = readLimit("PLANNER_LOG_MAX_DEPTH", DEFAULT_MAX_LOG_DEPTH);
 const MAX_LOG_BYTES = readLimit("PLANNER_LOG_MAX_BYTES", DEFAULT_MAX_LOG_BYTES);
 const THROTTLE_WINDOW_MS = readLimit("PLANNER_LOG_THROTTLE_WINDOW_MS", DEFAULT_THROTTLE_WINDOW_MS);
 const THROTTLE_BURST = readLimit("PLANNER_LOG_THROTTLE_BURST", DEFAULT_THROTTLE_BURST);
+
+const LEVELS: Record<LogLevel, number> = {
+    debug: 10,
+    info: 20,
+    warn: 30,
+    error: 40,
+};
+const MIN_LOG_LEVEL = ((process.env.PLANNER_LOG_LEVEL || DEFAULT_LOG_LEVEL) as LogLevel) in LEVELS
+    ? ((process.env.PLANNER_LOG_LEVEL || DEFAULT_LOG_LEVEL) as LogLevel)
+    : DEFAULT_LOG_LEVEL;
+const MIN_LOG_LEVEL_VALUE = LEVELS[MIN_LOG_LEVEL];
 
 type ThrottleState = {
     windowStart: number;
@@ -171,6 +183,8 @@ function emitPayload(level: LogLevel, message: string, meta?: LogMeta) {
 }
 
 function emit(level: LogLevel, message: string, meta?: LogMeta) {
+    if (LEVELS[level] < MIN_LOG_LEVEL_VALUE) return;
+
     if (THROTTLE_WINDOW_MS > 0 && THROTTLE_BURST > 0) {
         const key = `${level}:${message}`;
         const now = Date.now();
@@ -207,6 +221,9 @@ function emit(level: LogLevel, message: string, meta?: LogMeta) {
 }
 
 export const logger = {
+    debug(message: string, meta?: LogMeta) {
+        emit("debug", message, meta);
+    },
     info(message: string, meta?: LogMeta) {
         emit("info", message, meta);
     },

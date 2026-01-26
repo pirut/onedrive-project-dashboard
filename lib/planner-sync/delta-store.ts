@@ -5,8 +5,14 @@ import { logger } from "./logger";
 
 type DeltaEntry = { deltaLink: string; updatedAt?: string };
 
-const FILE_PATH = process.env.PLANNER_DELTA_FILE || path.join(process.cwd(), ".planner-delta.json");
+const DEFAULT_DIR =
+    process.env.NODE_ENV === "production"
+        ? process.env.TMPDIR || "/tmp"
+        : process.cwd();
+const FILE_PATH = process.env.PLANNER_DELTA_FILE || path.join(DEFAULT_DIR, ".planner-delta.json");
 const KV_KEY = "planner:delta:tasks";
+let fileStoreWritable = true;
+let fileStoreWarned = false;
 
 function normalizeScopes(raw: unknown): Record<string, DeltaEntry> {
     if (!raw || typeof raw !== "object") return {};
@@ -38,10 +44,24 @@ async function readFileStore() {
 }
 
 async function writeFileStore(payload: unknown) {
+    if (!fileStoreWritable) return;
     try {
         await fs.writeFile(FILE_PATH, JSON.stringify(payload, null, 2), "utf8");
     } catch (error) {
-        logger.warn("Failed to write planner delta store", { error: (error as Error)?.message });
+        const err = error as NodeJS.ErrnoException;
+        const code = err?.code;
+        if (code === "EROFS" || code === "EACCES" || code === "EPERM") {
+            fileStoreWritable = false;
+            if (!fileStoreWarned) {
+                fileStoreWarned = true;
+                logger.warn("Planner delta file store disabled", {
+                    filePath: FILE_PATH,
+                    error: err?.message,
+                });
+            }
+            return;
+        }
+        logger.warn("Failed to write planner delta store", { error: err?.message });
     }
 }
 

@@ -16,6 +16,7 @@ const HEADING_TASK_BUCKETS = new Map<number, string | null>([
 ]);
 const assignmentCache = new Map<string, string | null>();
 let groupMembersCache: GraphUser[] | null = null;
+const missingAssigneeCache = new Set<string>();
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -46,6 +47,17 @@ function buildPlannerAssignments(userId: string) {
             orderHint: " !",
         },
     };
+}
+
+function logMissingAssignee(identity: string, meta: { projectNo?: string; taskNo?: string }) {
+    const key = identity.trim().toLowerCase();
+    if (!key) return;
+    if (!missingAssigneeCache.has(key)) {
+        missingAssigneeCache.add(key);
+        logger.warn("Planner assignee not found for BC task", { ...meta, assignee: identity });
+        return;
+    }
+    logger.debug("Planner assignee not found for BC task", { ...meta, assignee: identity });
 }
 
 async function resolveAssigneeUserId(graphClient: GraphClient, identity: string) {
@@ -598,11 +610,7 @@ async function upsertPlannerTask(
             if (assigneeId) {
                 desiredAssignments = buildPlannerAssignments(assigneeId);
             } else {
-                logger.warn("Planner assignee not found for BC task", {
-                    projectNo: task.projectNo,
-                    taskNo: task.taskNo,
-                    assignee: assigneeIdentity,
-                });
+                logMissingAssignee(assigneeIdentity, { projectNo: task.projectNo, taskNo: task.taskNo });
             }
         }
         const payload: Record<string, unknown> = {
@@ -653,11 +661,7 @@ async function upsertPlannerTask(
         if (assigneeId) {
             desiredAssignments = buildPlannerAssignments(assigneeId);
         } else {
-            logger.warn("Planner assignee not found for BC task", {
-                projectNo: task.projectNo,
-                taskNo: task.taskNo,
-                assignee: assigneeIdentity,
-            });
+            logMissingAssignee(assigneeIdentity, { projectNo: task.projectNo, taskNo: task.taskNo });
         }
     }
 
@@ -1008,13 +1012,24 @@ async function syncProjectTasks(
     });
     let currentBucket: string | null = DEFAULT_BUCKET_NAME;
     let skipSection = false;
+    let headingCount = 0;
+    let postingCount = 0;
+    let skippedCount = 0;
+    const unknownTaskTypes = new Map<string, number>();
 
     const { bcModifiedGraceMs } = getSyncConfig();
     const bcGraceMs = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
 
     for (const task of orderedTasks) {
-        const taskType = (task.taskType || "").toLowerCase();
+        const rawTaskType = (task.taskType || "").trim();
+        let taskType = rawTaskType.toLowerCase();
+        if (!taskType || (taskType !== "heading" && taskType !== "posting")) {
+            const key = taskType || "<empty>";
+            unknownTaskTypes.set(key, (unknownTaskTypes.get(key) || 0) + 1);
+            taskType = "posting";
+        }
         if (taskType === "heading") {
+            headingCount += 1;
             const resolved = resolveBucketFromHeading(task.taskNo, task.description);
             if (resolved.skip) {
                 currentBucket = null;
@@ -1026,8 +1041,15 @@ async function syncProjectTasks(
             await ensureBucket(graphClient, planId, currentBucket, bucketCache);
             continue;
         }
-        if (taskType !== "posting") continue;
-        if (skipSection || !currentBucket) continue;
+        if (taskType !== "posting") {
+            skippedCount += 1;
+            continue;
+        }
+        if (skipSection || !currentBucket) {
+            skippedCount += 1;
+            continue;
+        }
+        postingCount += 1;
         const bucketId = await ensureBucket(graphClient, planId, currentBucket, bucketCache);
         const planMismatch =
             syncMode === "perProjectPlan" &&
@@ -1057,6 +1079,21 @@ async function syncProjectTasks(
         }
         const syncTask = planMismatch ? { ...task, plannerTaskId: undefined, plannerPlanId: undefined } : task;
         await upsertPlannerTask(bcClient, graphClient, syncTask, planId, bucketId, currentBucket, titlePrefix);
+    }
+
+    if (unknownTaskTypes.size) {
+        logger.info("Unknown BC taskType values treated as posting", {
+            projectNo,
+            taskTypeCounts: Object.fromEntries(unknownTaskTypes),
+        });
+    }
+    if (postingCount === 0) {
+        logger.info("No posting tasks synced for project", {
+            projectNo,
+            totalTasks: orderedTasks.length,
+            headingCount,
+            skippedCount,
+        });
     }
 
     return planId;
@@ -1371,7 +1408,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         const planMode = storedDelta?.deltaLink ? "incremental" : "initial";
         mode = mode === "initial" && planMode === "incremental" ? "incremental" : mode;
 
-        logger.info("Planner delta sync starting", {
+        logger.debug("Planner delta sync starting", {
             scope: scopeKey,
             planId,
             mode: planMode,
@@ -1453,7 +1490,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         if (persist) {
             await savePlannerDeltaState(scopeKey, deltaResult.deltaLink);
         } else {
-            logger.info("Planner delta sync skipped persisting delta token", { scope: scopeKey });
+            logger.debug("Planner delta sync skipped persisting delta token", { scope: scopeKey });
         }
 
         const planStats = {
@@ -1466,7 +1503,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
             cleared: stats.cleared - before.cleared,
         };
 
-        logger.info("Planner delta sync complete", {
+        logger.debug("Planner delta sync complete", {
             scope: scopeKey,
             planId,
             mode: planMode,
@@ -1483,6 +1520,22 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
             persisted: persist,
         });
     }
+
+    logger.info("Planner delta sync summary", {
+        mode,
+        plans: planIds.size,
+        pages: totalPages,
+        changes: stats.created + stats.updated + stats.removed,
+        created: stats.created,
+        updated: stats.updated,
+        removed: stats.removed,
+        processed: stats.processed,
+        skippedDisabled: stats.skippedDisabled,
+        skippedUnlinked: stats.skippedUnlinked,
+        affectedProjects: affectedProjectNos.size,
+        cleared: stats.cleared,
+        persisted: persist,
+    });
 
     return {
         processed: stats.processed,
