@@ -45,6 +45,7 @@ export type PlannerPlan = {
     id: string;
     title?: string;
     createdDateTime?: string;
+    "@odata.etag"?: string;
     [key: string]: unknown;
 };
 
@@ -314,8 +315,14 @@ export class GraphClient {
     }
 
     async deletePlan(planId: string) {
+        const plan = await this.getPlan(planId);
+        const etag = plan?.["@odata.etag"] as string | undefined;
+        if (!etag) {
+            throw new Error("Planner plan delete missing @odata.etag");
+        }
         const res = await this.request(`/planner/plans/${planId}`, {
             method: "DELETE",
+            headers: { "If-Match": etag },
         });
         return res.status === 204 || res.status === 202 || res.status === 200;
     }
