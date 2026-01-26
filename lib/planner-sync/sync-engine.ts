@@ -1,5 +1,5 @@
 import { BusinessCentralClient, BcProjectTask } from "./bc-client";
-import { GraphClient, GraphUser, PlannerTask, PlannerTaskDelta, PlannerTaskDetails } from "./graph-client";
+import { GraphClient, GraphUser, PlannerPlan, PlannerTask, PlannerTaskDelta, PlannerTaskDetails } from "./graph-client";
 import { getBcConfig, getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
 import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "./bc-change-store";
 import { clearPlannerDeltaState, getPlannerDeltaState, savePlannerDeltaState } from "./delta-store";
@@ -397,6 +397,24 @@ function buildPlanTitle(projectNo: string, projectDescription?: string | null) {
     return cleaned ? `${projectNo} - ${cleaned}` : projectNo;
 }
 
+function normalizeProjectPlanKey(projectNo: string) {
+    return (projectNo || "").trim().toLowerCase();
+}
+
+function matchesProjectPlanTitle(title: string, projectNo: string) {
+    const normalizedTitle = (title || "").trim().toLowerCase();
+    const key = normalizeProjectPlanKey(projectNo);
+    if (!normalizedTitle || !key) return false;
+    return normalizedTitle === key || normalizedTitle.startsWith(`${key} -`);
+}
+
+function extractProjectNoFromPlanTitle(title: string) {
+    const trimmed = (title || "").trim();
+    if (!trimmed) return null;
+    const prefix = trimmed.split(" - ")[0]?.trim();
+    return normalizeProjectPlanKey(prefix);
+}
+
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
     const description = (task.description || "").trim();
     const taskNo = (task.taskNo || "").trim();
@@ -471,14 +489,14 @@ async function resolvePlanForProject(
     }
 
     const existingPlanId = tasks.find((task) => task.plannerPlanId)?.plannerPlanId;
+    let existingPlan: PlannerPlan | null = null;
     if (existingPlanId) {
         try {
             const plan = await graphClient.getPlan(existingPlanId);
             const planTitle = (plan?.title || "").trim();
-            if (planTitle && (planTitle === projectTitle || planTitle === projectNo)) {
-                return { planId: existingPlanId, titlePrefix: "" };
-            }
-            if (planTitle) {
+            if (planTitle && matchesProjectPlanTitle(planTitle, projectNo)) {
+                existingPlan = plan;
+            } else if (planTitle) {
                 logger.warn("Ignoring existing planner plan; title mismatch", {
                     projectNo,
                     planId: existingPlanId,
@@ -500,12 +518,41 @@ async function resolvePlanForProject(
     } catch (error) {
         logger.warn("Failed to list plans for group", { error: (error as Error)?.message });
     }
-    const matchingPlan = plans.find((plan) => {
-        const title = (plan.title || "").trim();
-        return title === projectTitle || title === projectNo;
-    });
-    if (matchingPlan?.id) {
-        return { planId: matchingPlan.id, titlePrefix: "" };
+    const matchingPlans = plans.filter((plan) => matchesProjectPlanTitle(plan.title || "", projectNo));
+    if (existingPlan && !matchingPlans.some((plan) => plan.id === existingPlan?.id)) {
+        matchingPlans.push(existingPlan);
+    }
+    if (matchingPlans.length) {
+        const sorted = [...matchingPlans].sort((a, b) => {
+            const aCreated = Date.parse(String(a.createdDateTime || ""));
+            const bCreated = Date.parse(String(b.createdDateTime || ""));
+            if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
+                return bCreated - aCreated;
+            }
+            const aTitle = (a.title || "").trim().toLowerCase();
+            const bTitle = (b.title || "").trim().toLowerCase();
+            return aTitle.localeCompare(bTitle);
+        });
+        const keep = sorted[0];
+        for (const plan of sorted.slice(1)) {
+            try {
+                const deleted = await graphClient.deletePlan(plan.id);
+                logger.warn("Removed duplicate Planner plan for project", {
+                    projectNo,
+                    planId: plan.id,
+                    planTitle: plan.title,
+                    deleted,
+                });
+            } catch (error) {
+                logger.warn("Failed to remove duplicate Planner plan", {
+                    projectNo,
+                    planId: plan.id,
+                    planTitle: plan.title,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+        return { planId: keep.id, titlePrefix: "" };
     }
 
     let planCreateError: string | undefined;
@@ -1675,9 +1722,14 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
             }
             if (plans) {
                 const planTitleIndex = new Map<string, string>();
+                const planProjectNoIndex = new Set<string>();
                 for (const plan of plans || []) {
                     const title = (plan?.title || "").trim();
-                    if (title) planTitleIndex.set(title.toLowerCase(), plan.id);
+                    if (title) {
+                        planTitleIndex.set(title.toLowerCase(), plan.id);
+                        const key = extractProjectNoFromPlanTitle(title);
+                        if (key) planProjectNoIndex.add(key);
+                    }
                 }
                 for (const project of projects) {
                     const projectNo = (project.projectNo || "").trim();
@@ -1685,8 +1737,8 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
                     if (isProjectDisabled(disabledProjects, projectNo)) continue;
                     const planTitle = buildPlanTitle(projectNo, project.description);
                     const normalizedTitle = planTitle.trim().toLowerCase();
-                    const normalizedProjectNo = projectNo.toLowerCase();
-                    if (planTitleIndex.has(normalizedTitle) || planTitleIndex.has(normalizedProjectNo)) continue;
+                    const normalizedProjectNo = normalizeProjectPlanKey(projectNo);
+                    if (planTitleIndex.has(normalizedTitle) || planProjectNoIndex.has(normalizedProjectNo)) continue;
                     missingProjects.push({ projectNo, planTitle });
                 }
                 if (missingProjects.length) {

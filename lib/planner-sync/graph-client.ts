@@ -44,6 +44,7 @@ export type PlannerBucket = {
 export type PlannerPlan = {
     id: string;
     title?: string;
+    createdDateTime?: string;
     [key: string]: unknown;
 };
 
