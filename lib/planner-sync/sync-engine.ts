@@ -5,6 +5,7 @@ import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "./bc-change
 import { clearPlannerDeltaState, getPlannerDeltaState, savePlannerDeltaState } from "./delta-store";
 import { logger } from "./logger";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "./project-sync-store";
+import { clearSmartPollingQueue, getSmartPollingQueue, saveSmartPollingQueue } from "./smart-polling-store";
 import { PlannerNotification, enqueueNotifications, processQueue } from "./queue";
 
 const DEFAULT_BUCKET_NAME = "General";
@@ -1615,7 +1616,7 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
     const bcClient = new BusinessCentralClient();
     const disabledProjects = buildDisabledProjectSet(await listProjectSyncSettings());
     const syncConfig = getSyncConfig();
-    const { usePlannerDelta, syncMode, allowDefaultPlanFallback } = syncConfig;
+    const { usePlannerDelta, syncMode, allowDefaultPlanFallback, maxProjectsPerRun } = syncConfig;
     const bcScopeKey = buildBcProjectChangeScopeKey();
     const lastSeq = await getBcProjectChangeCursor(bcScopeKey);
     const bcChangedProjectNos = new Set<string>();
@@ -1781,10 +1782,41 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
     for (const projectNo of bcChangedProjectNos) addProjectNo(projectNo);
     for (const projectNo of plannerAffectedProjectNos) addProjectNo(projectNo);
 
-    const projectsToSync: string[] = [];
+    let projectsToSync: string[] = [];
     for (const [normalized, projectNo] of projectNoByNormalized.entries()) {
         if (disabledProjects.has(normalized)) continue;
         projectsToSync.push(projectNo);
+    }
+    projectsToSync.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+
+    let shouldSaveCursor = true;
+    if (!dryRun && maxProjectsPerRun > 0 && projectsToSync.length > maxProjectsPerRun) {
+        const existingQueue = await getSmartPollingQueue();
+        const currentSeq = bcLastSeq ?? existingQueue?.lastSeq ?? null;
+        let queuedProjects: string[] = [];
+        if (existingQueue && existingQueue.projects?.length && existingQueue.lastSeq === currentSeq) {
+            const combined = new Set(existingQueue.projects);
+            for (const projectNo of projectsToSync) combined.add(projectNo);
+            queuedProjects = Array.from(combined);
+        } else {
+            queuedProjects = projectsToSync;
+        }
+        queuedProjects.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+        projectsToSync = queuedProjects.slice(0, maxProjectsPerRun);
+        const remaining = queuedProjects.slice(projectsToSync.length);
+        if (remaining.length) {
+            await saveSmartPollingQueue({ lastSeq: currentSeq, projects: remaining });
+            shouldSaveCursor = false;
+        } else {
+            await clearSmartPollingQueue();
+        }
+        logger.info("Smart polling queue chunk", {
+            totalQueued: queuedProjects.length,
+            batchSize: projectsToSync.length,
+            remaining: remaining.length,
+        });
+    } else if (!dryRun && maxProjectsPerRun > 0 && projectsToSync.length === 0) {
+        await clearSmartPollingQueue();
     }
 
     logger.info("Smart polling project selection", {
@@ -1803,10 +1835,12 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
     }
 
     let lastSeqSaved: number | null = null;
-    if (!dryRun && bcLastSeq != null) {
+    if (!dryRun && bcLastSeq != null && shouldSaveCursor) {
         await saveBcProjectChangeCursor(bcScopeKey, bcLastSeq);
         lastSeqSaved = bcLastSeq;
         logger.info("Saved BC project change cursor", { scope: bcScopeKey, lastSeq: bcLastSeq });
+    } else if (!dryRun && bcLastSeq != null && !shouldSaveCursor) {
+        logger.info("Smart polling deferred BC cursor save; pending project queue", { scope: bcScopeKey, lastSeq: bcLastSeq });
     } else if (dryRun && bcLastSeq != null) {
         logger.info("Smart polling dry run; skipping BC cursor save", { scope: bcScopeKey, lastSeq: bcLastSeq });
     }
