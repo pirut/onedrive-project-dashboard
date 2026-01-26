@@ -37,7 +37,8 @@ function resolveAssigneeIdentity(task: BcProjectTask) {
 
 function hasPlannerAssignments(task: PlannerTask | null) {
     const assignments = (task as PlannerTask & { assignments?: Record<string, unknown> })?.assignments;
-    if (!assignments || typeof assignments !== "object") return false;
+    if (assignments == null) return null;
+    if (typeof assignments !== "object") return false;
     return Object.keys(assignments).length > 0;
 }
 
@@ -704,7 +705,7 @@ async function upsertPlannerTask(
 
     const plannerHasAssignments = hasPlannerAssignments(plannerTask);
     let desiredAssignments: Record<string, unknown> | null = null;
-    if (!plannerHasAssignments && assigneeIdentity) {
+    if (plannerHasAssignments === false && assigneeIdentity) {
         const assigneeId = await resolveAssigneeUserId(graphClient, assigneeIdentity);
         if (assigneeId) {
             desiredAssignments = buildPlannerAssignments(assigneeId);
@@ -885,7 +886,7 @@ async function applyPlannerUpdateToBc(
     const dueDate = toBcDate(plannerTask.dueDateTime || null);
     const plannerHasAssignments = hasPlannerAssignments(plannerTask);
     const bcAssignee = resolveAssigneeIdentity(bcTask);
-    const shouldClearAssignee = !plannerHasAssignments && !!bcAssignee;
+    const shouldClearAssignee = plannerHasAssignments === false && !!bcAssignee;
 
     const updates: Record<string, unknown> = {
         percentComplete: bcPercent,
@@ -1539,23 +1540,8 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
                 continue;
             }
             stats.updated += 1;
-            let plannerTask: PlannerTask | null = null;
-            try {
-                plannerTask = await graphClient.getTask(item.id);
-            } catch (error) {
-                if (isNotFound(error)) {
-                    const cleared = await clearPlannerLink(bcClient, bcTask);
-                    if (cleared) stats.cleared += 1;
-                } else {
-                    logger.warn("Planner task lookup failed during delta", {
-                        taskId: item.id,
-                        error: (error as Error)?.message,
-                    });
-                }
-                continue;
-            }
-            if (!plannerTask) continue;
-            if (bcTask.lastPlannerEtag && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
+            const plannerTask = item as PlannerTask;
+            if (bcTask.lastPlannerEtag && plannerTask["@odata.etag"] && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
                 continue;
             }
             await applyPlannerUpdateToBc(bcClient, graphClient, bcTask, plannerTask);

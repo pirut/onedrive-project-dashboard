@@ -127,11 +127,13 @@ export class GraphClient {
     private buildPlannerDeltaSelectCandidates() {
         if (this.plannerDeltaSelectResolved) return [this.plannerDeltaSelectResolved];
         const candidates = [
-            "id,planId,title,bucketId",
-            "id,planId,title,bucketId,creationSource,createdBy,lastModifiedBy",
+            "id,planId,title,bucketId,percentComplete,startDateTime,dueDateTime,lastModifiedDateTime,assignments",
+            "id,planId,title,bucketId,percentComplete,startDateTime,dueDateTime,lastModifiedDateTime",
             "id,planId,title,bucketId,createdBy,lastModifiedBy,createdDateTime,lastModifiedDateTime",
             "id,planId,title,bucketId,createdDateTime,dueDateTime,percentComplete",
+            "id,planId,title,bucketId,creationSource,createdBy,lastModifiedBy",
             "id,planId,title,bucketId,orderHint",
+            "id,planId,title,bucketId",
         ];
         const normalizedCandidates = candidates.map((value) => this.normalizePlannerDeltaSelect(value));
         if (!this.config.plannerDeltaSelect) return normalizedCandidates;
