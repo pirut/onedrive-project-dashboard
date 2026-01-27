@@ -154,6 +154,7 @@ SYNC_PREFER_BC=true
 SYNC_BC_MODIFIED_GRACE_MS=2000
 SYNC_USE_PLANNER_DELTA=true
 SYNC_USE_SMART_POLLING=false
+SYNC_ENABLE_POLLING_FALLBACK=true
 PLANNER_DELTA_SELECT=id,planId,title,bucketId
 
 # Optional persistence overrides
@@ -161,8 +162,14 @@ PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
 PLANNER_PROJECT_SYNC_FILE=.planner-project-sync.json
 PLANNER_DELTA_FILE=.planner-delta.json
 BC_PROJECT_CHANGES_FILE=.bc-project-changes.json
+BC_WEBHOOK_STORE_FILE=.bc-webhook-store.json
 KV_REST_API_URL=
 KV_REST_API_TOKEN=
+
+# Webhooks + Cron
+BC_WEBHOOK_NOTIFICATION_URL=
+BC_WEBHOOK_SHARED_SECRET=
+CRON_SECRET=
 ```
 
 Notes:
@@ -171,13 +178,14 @@ Notes:
 - Set `PLANNER_TENANT_DOMAIN` or `PLANNER_WEB_BASE` to generate clickable plan URLs in sync responses (defaults to the new Planner web UI).
 - Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
 - Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
-- Webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev.
+- Planner webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev. BC webhook jobs persist to KV/Upstash (or the file fallback).
 - If both BC and Planner changed since `lastSyncAt`, Planner wins; otherwise BC changes take precedence when they exist.
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms) to avoid treating sync metadata updates as user changes.
 - `SYNC_USE_SMART_POLLING=true` enables BC project change feed + Planner delta queries so only affected projects run BC → Planner sync.
 - Smart polling expects a BC change feed endpoint at `/projectChanges` returning `sequenceNo` and `projectNo`; a 404 falls back to Planner-only polling.
 - Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
 - Planner delta queries use plan-scoped delta links and store tokens per plan (`planner:{tenantId}:{groupId}:{planId}`).
+- `SYNC_ENABLE_POLLING_FALLBACK=false` disables the poll-cron fallback once BC webhooks are in place.
 
 ### Admin endpoints
 
@@ -187,6 +195,11 @@ Notes:
 - `POST /api/sync/subscriptions/create`
 - `POST /api/sync/subscriptions/renew`
 - `POST /api/webhooks/graph/planner` (Graph notification receiver)
+- `POST /api/webhooks/bc` (Business Central notification receiver)
+- `POST /api/sync/bc-subscriptions/create`
+- `POST /api/sync/bc-subscriptions/renew`
+- `POST /api/sync/bc-subscriptions/delete`
+- `POST /api/sync/bc-jobs/process`
 
 ### Example curl commands
 
@@ -203,6 +216,47 @@ curl -X POST https://your-domain.com/api/sync/subscriptions/create
 curl -i -X POST \"http://localhost:3000/api/webhooks/graph/planner?validationToken=test123\"
 
 ```
+
+### Business Central Webhooks (Vercel)
+
+BC webhooks let Business Central changes enqueue targeted BC → Planner sync jobs instead of relying on polling.
+
+1) Set env vars:
+- `BC_WEBHOOK_NOTIFICATION_URL` (optional) to force the webhook URL (defaults to your deployment URL + `/api/webhooks/bc`).
+- `BC_WEBHOOK_SHARED_SECRET` (optional) is sent as `clientState` and validated on receipt.
+- `CRON_SECRET` (required) for scheduled renewals + job processing.
+- Ensure KV/Upstash (`KV_REST_API_URL`/`KV_REST_API_TOKEN`) is configured for durable queues.
+
+2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.
+
+3) Create the subscription:
+
+```bash
+curl -X POST https://your-domain.com/api/sync/bc-subscriptions/create \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"entitySets\":[\"projectTasks\"]}'
+```
+
+4) Validate handshake:
+
+```bash
+curl -i -X POST \"http://localhost:3000/api/webhooks/bc?validationToken=test123\"
+```
+
+5) Process queued jobs (cron or manual):
+
+```bash
+curl -X POST https://your-domain.com/api/sync/bc-jobs/process?cronSecret=YOUR_SECRET
+```
+
+6) Renew subscriptions (cron or manual):
+
+```bash
+curl -X POST https://your-domain.com/api/sync/bc-subscriptions/renew?cronSecret=YOUR_SECRET
+```
+
+Vercel Cron will call `/api/sync/bc-subscriptions/renew` daily and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
+Cron auth now protects `/api/sync/poll-cron` and `/api/sync-folders-cron` as well, so include the same secret there.
 
 ## Notes
 

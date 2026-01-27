@@ -2,6 +2,7 @@ import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 import { processStagingJobWalks } from "../lib/process-staging.js";
+import { getCronSecret, isCronAuthorized } from "../lib/planner-sync/cron-auth.js";
 
 // Force dynamic rendering to prevent caching issues with cron jobs
 export const dynamic = "force-dynamic";
@@ -537,8 +538,13 @@ async function syncToFastField(folders) {
 }
 
 export default async function handler(req, res) {
-    // This function can be called manually via HTTP or by Vercel Cron
-    const isCronRequest = req.headers["x-vercel-cron"] === "1";
+    const requestId = Math.random().toString(36).slice(2, 12);
+    const cronSecret = getCronSecret();
+    const provided = req.headers["x-cron-secret"] || req.query?.cronSecret || req.query?.cron_secret;
+    if (!cronSecret || !isCronAuthorized(provided || "")) {
+        res.status(401).json({ ok: false, error: "Unauthorized", requestId });
+        return;
+    }
 
     try {
         console.log(`[${new Date().toISOString()}] Starting folder sync to FastField...`);

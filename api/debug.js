@@ -392,6 +392,7 @@ export default async function handler(req, res) {
         "GRAPH_SUBSCRIPTION_CLIENT_STATE",
         "PLANNER_GROUP_ID",
         "SYNC_MODE",
+        "CRON_SECRET",
     ];
     const plannerEnvMissing = plannerEnvRequired.filter((name) => !envPresence(name));
 
@@ -410,6 +411,11 @@ export default async function handler(req, res) {
         "POST /api/sync/subscriptions/delete": "Delete Graph subscriptions",
         "POST /api/sync/subscriptions/renew": "Renew Graph subscriptions",
         "POST /api/webhooks/graph/planner?validationToken=debug": "Webhook validation",
+        "POST /api/webhooks/bc": "Business Central webhook endpoint",
+        "POST /api/sync/bc-subscriptions/create": "Create BC webhook subscriptions",
+        "POST /api/sync/bc-subscriptions/renew": "Renew BC webhook subscriptions",
+        "POST /api/sync/bc-subscriptions/delete": "Delete BC webhook subscriptions",
+        "POST /api/sync/bc-jobs/process": "Process queued BC webhook jobs",
     };
 
     let bcDiagnostics;

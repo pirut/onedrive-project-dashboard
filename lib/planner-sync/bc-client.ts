@@ -128,6 +128,15 @@ export type BcProjectChange = {
     [key: string]: unknown;
 };
 
+export type BcWebhookSubscription = {
+    id?: string;
+    notificationUrl?: string;
+    resource?: string;
+    clientState?: string;
+    expirationDateTime?: string;
+    [key: string]: unknown;
+};
+
 type TokenCache = {
     token: string;
     expiresAt: number;
@@ -146,6 +155,16 @@ export class BusinessCentralClient {
     private apiRootUrl() {
         const { apiBase, tenantId, environment, publisher, group, version } = this.config;
         return `${apiBase}/${tenantId}/${environment}/api/${publisher}/${group}/${version}`;
+    }
+
+    private buildWebhookResource(entitySet: string) {
+        const { publisher, group, version, companyId } = this.config;
+        const trimmed = (entitySet || "").trim().replace(/^\/+/, "");
+        if (!trimmed) return "";
+        if (trimmed.includes("companies(")) {
+            return trimmed.startsWith("api/") ? `/${trimmed}` : `/${trimmed}`;
+        }
+        return `/api/${publisher}/${group}/${version}/companies(${companyId})/${trimmed}`;
     }
 
     private async getAccessToken() {
@@ -261,11 +280,64 @@ export class BusinessCentralClient {
         return data?.value || [];
     }
 
+    async getProjectTask(systemId: string) {
+        const trimmed = (systemId || "").trim();
+        if (!trimmed) return null;
+        const res = await this.request(`/projectTasks(${trimmed})`);
+        return readResponseJson<BcProjectTask>(res);
+    }
+
     async listProjects(filter?: string) {
         const path = filter ? `/projects?$filter=${encodeURIComponent(filter)}` : "/projects";
         const res = await this.request(path);
         const data = await readResponseJson<{ value: BcProject[] }>(res);
         return data?.value || [];
+    }
+
+    async getProject(systemId: string) {
+        const trimmed = (systemId || "").trim();
+        if (!trimmed) return null;
+        const res = await this.request(`/projects(${trimmed})`);
+        return readResponseJson<BcProject>(res);
+    }
+
+    async createWebhookSubscription(options: {
+        entitySet: string;
+        notificationUrl: string;
+        clientState?: string;
+        expirationDateTime?: string;
+    }) {
+        const resource = this.buildWebhookResource(options.entitySet);
+        if (!resource) throw new Error("BC webhook resource could not be resolved");
+        const url = `${this.apiRootUrl()}/subscriptions`;
+        const res = await this.request(url, {
+            method: "POST",
+            body: JSON.stringify({
+                notificationUrl: options.notificationUrl,
+                resource,
+                clientState: options.clientState,
+                expirationDateTime: options.expirationDateTime,
+            }),
+        });
+        return readResponseJson<BcWebhookSubscription>(res);
+    }
+
+    async renewWebhookSubscription(subscriptionId: string, expirationDateTime: string) {
+        const trimmed = (subscriptionId || "").trim();
+        if (!trimmed) throw new Error("BC webhook subscription id is required");
+        const url = `${this.apiRootUrl()}/subscriptions(${trimmed})`;
+        const res = await this.request(url, {
+            method: "PATCH",
+            body: JSON.stringify({ expirationDateTime }),
+        });
+        return readResponseJson<BcWebhookSubscription>(res);
+    }
+
+    async deleteWebhookSubscription(subscriptionId: string) {
+        const trimmed = (subscriptionId || "").trim();
+        if (!trimmed) return;
+        const url = `${this.apiRootUrl()}/subscriptions(${trimmed})`;
+        await this.request(url, { method: "DELETE" });
     }
 
     async listProjectChangesSince(lastSeq: number | null) {

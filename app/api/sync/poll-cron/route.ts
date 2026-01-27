@@ -1,5 +1,6 @@
 import { runPollingSync, runSmartPollingSync, syncBcToPlanner } from "../../../../../lib/planner-sync";
 import { getSyncConfig } from "../../../../../lib/planner-sync/config";
+import { getCronSecret, isCronAuthorized } from "../../../../../lib/planner-sync/cron-auth";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,16 @@ export async function GET(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
+    const cronSecret = getCronSecret();
+    const provided = request.headers.get("x-cron-secret") || url.searchParams.get("cronSecret") || url.searchParams.get("cron_secret");
+
+    if (!cronSecret || !isCronAuthorized(provided || "")) {
+        logger.warn("GET /api/sync/poll-cron - Unauthorized", { requestId });
+        return new Response(JSON.stringify({ ok: false, error: "Unauthorized", requestId }, null, 2), {
+            status: 401,
+            headers: { "Content-Type": "application/json", "X-Request-ID": requestId },
+        });
+    }
 
     logger.info("GET /api/sync/poll-cron - Request received", {
         requestId,
@@ -17,7 +28,21 @@ export async function GET(request: Request) {
     });
 
     try {
-        const { useSmartPolling } = getSyncConfig();
+        const { useSmartPolling, enablePollingFallback } = getSyncConfig();
+        if (!enablePollingFallback) {
+            const duration = Date.now() - startTime;
+            logger.info("GET /api/sync/poll-cron - Skipped (polling disabled)", { requestId, duration });
+            return new Response(
+                JSON.stringify({ ok: true, skipped: true, reason: "Polling fallback disabled", requestId, duration }, null, 2),
+                {
+                    status: 200,
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Request-ID": requestId,
+                    },
+                }
+            );
+        }
         if (useSmartPolling) {
             const smartResult = await runSmartPollingSync();
             const duration = Date.now() - startTime;

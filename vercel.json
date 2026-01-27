@@ -10,6 +10,14 @@
             "schedule": "0 9 * * *"
         },
         {
+            "path": "/api/sync/bc-subscriptions/renew",
+            "schedule": "0 7 * * *"
+        },
+        {
+            "path": "/api/sync/bc-jobs/process",
+            "schedule": "*/2 * * * *"
+        },
+        {
             "path": "/api/sync/poll-cron",
             "schedule": "*/15 * * * *"
         }

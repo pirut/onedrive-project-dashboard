@@ -60,6 +60,7 @@ export function getSyncConfig() {
     const bcModifiedGraceMs = Number(readEnv("SYNC_BC_MODIFIED_GRACE_MS") || 2000);
     const usePlannerDelta = readBoolEnv("SYNC_USE_PLANNER_DELTA", true);
     const useSmartPolling = readBoolEnv("SYNC_USE_SMART_POLLING", false);
+    const enablePollingFallback = readBoolEnv("SYNC_ENABLE_POLLING_FALLBACK", true);
     const maxProjectsPerRunRaw = readEnv("SYNC_MAX_PROJECTS_PER_RUN") || (process.env.VERCEL ? "50" : "0");
     const maxProjectsPerRun = Number(maxProjectsPerRunRaw);
     return {
@@ -72,6 +73,7 @@ export function getSyncConfig() {
         bcModifiedGraceMs: Number.isNaN(bcModifiedGraceMs) ? 2000 : bcModifiedGraceMs,
         usePlannerDelta,
         useSmartPolling,
+        enablePollingFallback,
         maxProjectsPerRun: Number.isNaN(maxProjectsPerRun) ? 0 : Math.max(0, Math.floor(maxProjectsPerRun)),
     };
 }
