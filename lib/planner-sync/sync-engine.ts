@@ -532,7 +532,7 @@ async function resolvePlanForProject(
             const aCreated = Date.parse(String(a.createdDateTime || ""));
             const bCreated = Date.parse(String(b.createdDateTime || ""));
             if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
-                return bCreated - aCreated;
+                return aCreated - bCreated;
             }
             const aTitle = (a.title || "").trim().toLowerCase();
             const bTitle = (b.title || "").trim().toLowerCase();
