@@ -1,4 +1,5 @@
 import { enqueueBcJobs } from "../../lib/planner-sync/bc-webhook-store.js";
+import { appendBcWebhookLog } from "../../lib/planner-sync/bc-webhook-log.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 function normalizeSystemId(value) {
@@ -56,6 +57,23 @@ function resolveClientState(notification) {
     return typeof notification?.clientState === "string" ? notification.clientState : "";
 }
 
+const LOG_SAMPLE_LIMIT = 10;
+
+function buildLogItems(notifications) {
+    if (!notifications?.length) return [];
+    return notifications.slice(0, LOG_SAMPLE_LIMIT).map((notification) => {
+        const resourceInfo = parseResource(notification.resource);
+        const systemId = resourceInfo.systemId || normalizeSystemId(notification.resourceData?.id || notification.id);
+        return {
+            entitySet: resourceInfo.entitySet,
+            systemId,
+            changeType: notification.changeType,
+            resource: notification.resource,
+            subscriptionId: notification.subscriptionId,
+        };
+    });
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -75,6 +93,12 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
         if (validationToken) {
             logger.info("GET /api/webhooks/bc - Validation token received", { requestId });
+            await appendBcWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "validation",
+                location: "query",
+            });
             res.setHeader("Content-Type", "text/plain");
             res.setHeader("X-Request-ID", requestId);
             res.status(200).send(validationToken);
@@ -91,6 +115,12 @@ export default async function handler(req, res) {
 
     if (validationToken) {
         logger.info("POST /api/webhooks/bc - Validation token received", { requestId });
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "validation",
+            location: "query",
+        });
         res.setHeader("Content-Type", "text/plain");
         res.setHeader("X-Request-ID", requestId);
         res.status(200).send(validationToken);
@@ -99,6 +129,12 @@ export default async function handler(req, res) {
 
     const { payload } = await readJsonBody(req);
     if (!payload) {
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "invalid_json",
+            error: "Invalid JSON",
+        });
         res.status(400).json({ ok: false, error: "Invalid JSON" });
         return;
     }
@@ -106,6 +142,12 @@ export default async function handler(req, res) {
     const bodyToken = readValidationToken(payload);
     if (bodyToken) {
         logger.info("POST /api/webhooks/bc - Validation token received in body", { requestId });
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "validation",
+            location: "body",
+        });
         res.setHeader("Content-Type", "text/plain");
         res.setHeader("X-Request-ID", requestId);
         res.status(200).send(bodyToken);
@@ -114,6 +156,12 @@ export default async function handler(req, res) {
 
     const notifications = payload?.value || [];
     if (!notifications.length) {
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "notification",
+            count: 0,
+        });
         res.status(202).json({ ok: true, received: 0 });
         return;
     }
@@ -154,6 +202,18 @@ export default async function handler(req, res) {
     }
 
     const enqueueResult = await enqueueBcJobs(jobs);
+    await appendBcWebhookLog({
+        ts: new Date().toISOString(),
+        requestId,
+        type: "notification",
+        count: notifications.length,
+        enqueued: enqueueResult.enqueued,
+        deduped: enqueueResult.deduped,
+        skipped: enqueueResult.skipped,
+        secretMismatch,
+        missingResource,
+        items: buildLogItems(notifications),
+    });
 
     res.status(202).json({
         ok: true,

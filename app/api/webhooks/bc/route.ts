@@ -1,4 +1,5 @@
 import { enqueueBcJobs, BcWebhookJob } from "../../../../../lib/planner-sync/bc-webhook-store";
+import { appendBcWebhookLog } from "../../../../../lib/planner-sync/bc-webhook-log";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,8 @@ type BcNotification = {
     resourceData?: { id?: string };
     id?: string;
 };
+
+const LOG_SAMPLE_LIMIT = 10;
 
 function normalizeSystemId(value: string | null | undefined) {
     let output = (value || "").trim();
@@ -68,6 +71,21 @@ function resolveClientState(notification: BcNotification) {
     return typeof notification?.clientState === "string" ? notification.clientState : "";
 }
 
+function buildLogItems(notifications: BcNotification[]) {
+    if (!notifications?.length) return [];
+    return notifications.slice(0, LOG_SAMPLE_LIMIT).map((notification) => {
+        const resourceInfo = parseResource(notification.resource);
+        const systemId = resourceInfo.systemId || normalizeSystemId(notification.resourceData?.id || notification.id);
+        return {
+            entitySet: resourceInfo.entitySet,
+            systemId,
+            changeType: notification.changeType,
+            resource: notification.resource,
+            subscriptionId: notification.subscriptionId,
+        };
+    });
+}
+
 export async function POST(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
@@ -86,6 +104,12 @@ export async function POST(request: Request) {
         const queryToken = url.searchParams.get("validationToken");
         if (queryToken) {
             logger.info("Validation token received - responding to BC subscription validation", { requestId });
+            await appendBcWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "validation",
+                location: "query",
+            });
             return new Response(queryToken, {
                 status: 200,
                 headers: {
@@ -107,6 +131,12 @@ export async function POST(request: Request) {
                 requestId,
                 error: error instanceof Error ? error.message : String(error),
             });
+            await appendBcWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "invalid_json",
+                error: error instanceof Error ? error.message : String(error),
+            });
             return new Response(JSON.stringify({ ok: false, error: "Invalid JSON", requestId }), {
                 status: 400,
                 headers: {
@@ -119,6 +149,12 @@ export async function POST(request: Request) {
         const bodyToken = readValidationToken(payload);
         if (bodyToken) {
             logger.info("Validation token received in body - responding", { requestId });
+            await appendBcWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "validation",
+                location: "body",
+            });
             return new Response(bodyToken, {
                 status: 200,
                 headers: {
@@ -130,6 +166,12 @@ export async function POST(request: Request) {
 
         const notifications = payload?.value || [];
         if (!notifications.length) {
+            await appendBcWebhookLog({
+                ts: new Date().toISOString(),
+                requestId,
+                type: "notification",
+                count: 0,
+            });
             return new Response(JSON.stringify({ ok: true, received: 0, requestId }), {
                 status: 202,
                 headers: {
@@ -175,6 +217,18 @@ export async function POST(request: Request) {
         }
 
         const enqueueResult = await enqueueBcJobs(jobs);
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "notification",
+            count: notifications.length,
+            enqueued: enqueueResult.enqueued,
+            deduped: enqueueResult.deduped,
+            skipped: enqueueResult.skipped,
+            secretMismatch,
+            missingResource,
+            items: buildLogItems(notifications),
+        });
         const duration = Date.now() - startTime;
 
         logger.info("POST /api/webhooks/bc - Success", {
@@ -212,6 +266,12 @@ export async function POST(request: Request) {
         const duration = Date.now() - startTime;
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error("POST /api/webhooks/bc - Unexpected error", { requestId, duration, error: errorMessage });
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "error",
+            error: errorMessage,
+        });
         return new Response(JSON.stringify({ ok: false, error: errorMessage, requestId, duration }), {
             status: 500,
             headers: {
@@ -228,6 +288,12 @@ export async function GET(request: Request) {
     const validationToken = url.searchParams.get("validationToken");
     if (validationToken) {
         logger.info("GET /api/webhooks/bc - Validation token received", { requestId });
+        await appendBcWebhookLog({
+            ts: new Date().toISOString(),
+            requestId,
+            type: "validation",
+            location: "query",
+        });
         return new Response(validationToken, {
             status: 200,
             headers: {

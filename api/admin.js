@@ -475,9 +475,15 @@ async function dashboardView(req) {
             <button type="button" id="bc-webhook-validate" style="background:#0f8b4c;color:#fff">Validate webhook</button>
             <button type="button" id="bc-webhook-test" style="background:#2b61d1;color:#fff">Send test webhook</button>
             <button type="button" id="bc-jobs-process" style="background:#1f2a44;color:#e6ecff">Process BC jobs</button>
+            <button type="button" id="bc-webhook-log" style="background:#1f2a44;color:#e6ecff">Load webhook log</button>
+            <button type="button" id="bc-webhook-stream" style="background:#0f8b4c;color:#fff">Start live feed</button>
+            <button type="button" id="bc-webhook-stop" style="background:#1f2a44;color:#e6ecff">Stop feed</button>
+            <button type="button" id="bc-webhook-clear" style="background:#1f2a44;color:#e6ecff">Clear feed</button>
           </div>
+          <div class="small muted">Webhook log shows recent BC notifications (if any).</div>
           <div id="bc-webhook-status" class="small muted">Idle.</div>
           <pre id="bc-webhook-output" class="log-block" style="display:none;max-height:220px;overflow:auto"></pre>
+          <pre id="bc-webhook-feed" class="log-block" style="display:none;max-height:220px;overflow:auto;margin-top:8px"></pre>
         </div>
       </div>
     </div>

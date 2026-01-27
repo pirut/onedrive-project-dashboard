@@ -416,6 +416,8 @@ export default async function handler(req, res) {
         "POST /api/sync/bc-subscriptions/renew": "Renew BC webhook subscriptions",
         "POST /api/sync/bc-subscriptions/delete": "Delete BC webhook subscriptions",
         "POST /api/sync/bc-jobs/process": "Process queued BC webhook jobs",
+        "GET /api/sync/bc-webhook-log": "List recent BC webhook deliveries",
+        "GET /api/sync/bc-webhook-log-stream?include=1": "Stream BC webhook deliveries (SSE)",
     };
 
     let bcDiagnostics;
