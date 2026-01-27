@@ -17,7 +17,10 @@ export async function GET(request: Request) {
 
     try {
         const graphClient = new GraphClient();
-        const plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+        const plans = await graphClient.listPlansForGroupDetailed(plannerConfig.groupId, {
+            useBeta: true,
+            select: "id,title,createdDateTime,isArchived",
+        });
         const archived = [];
         for (const plan of plans) {
             const flag = plan?.isArchived === true || plan?.archived === true;

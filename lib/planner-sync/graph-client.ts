@@ -45,6 +45,8 @@ export type PlannerPlan = {
     id: string;
     title?: string;
     createdDateTime?: string;
+    isArchived?: boolean;
+    archived?: boolean;
     "@odata.etag"?: string;
     [key: string]: unknown;
 };
@@ -248,6 +250,22 @@ export class GraphClient {
         const res = await this.request(`/groups/${groupId}/planner/plans`);
         const data = await readResponseJson<{ value: PlannerPlan[] }>(res);
         return data?.value || [];
+    }
+
+    async listPlansForGroupDetailed(
+        groupId: string,
+        options: { useBeta?: boolean; select?: string } = {}
+    ) {
+        const { useBeta = false, select } = options;
+        if (!groupId) return [];
+        if (useBeta || select) {
+            const query = select ? `?$select=${encodeURIComponent(select)}` : "";
+            const url = `${this.betaBaseUrl}/groups/${groupId}/planner/plans${query}`;
+            const res = await this.request(url);
+            const data = await readResponseJson<{ value: PlannerPlan[] }>(res);
+            return data?.value || [];
+        }
+        return this.listPlansForGroup(groupId);
     }
 
     async getPlan(planId: string) {
