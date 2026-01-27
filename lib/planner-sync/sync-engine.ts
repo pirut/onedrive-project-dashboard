@@ -1845,7 +1845,6 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
         }
     };
     for (const projectNo of bcChangedProjectNos) addProjectNo(projectNo);
-    for (const projectNo of plannerAffectedProjectNos) addProjectNo(projectNo);
 
     let projectsToSync: string[] = [];
     for (const [normalized, projectNo] of projectNoByNormalized.entries()) {
