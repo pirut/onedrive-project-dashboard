@@ -390,6 +390,7 @@ async function dashboardView(req) {
         <button type="button" id="planner-run-bc">Run Sync</button>
         <button type="button" id="planner-run-bc-pr00001" style="background:#2b61d1;color:#fff">Run Sync (PR00001)</button>
         <button type="button" id="planner-plan-maintenance" style="background:#f59e0b;color:#111827">Plan maintenance (titles + dedupe)</button>
+        <button type="button" id="planner-archived-plans" style="background:#1f2a44;color:#e6ecff">List archived plans</button>
         <button type="button" id="planner-debug-task" style="background:#0f8b4c;color:#fff">Inspect BC Task</button>
         <button type="button" id="planner-debug-bc-timestamps" style="background:#1f2a44;color:#e6ecff">Inspect BC timestamps</button>
         <button type="button" id="planner-debug-decision" style="background:#1f2a44;color:#e6ecff">Inspect sync decision</button>
