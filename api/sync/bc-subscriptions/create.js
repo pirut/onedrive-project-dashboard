@@ -101,11 +101,14 @@ export default async function handler(req, res) {
 
                 const expectedResource = normalizeValue(buildExpectedResource(normalized));
                 const expectedNotification = normalizeValue(notificationUrl);
-                const existing = (await bcClient.listWebhookSubscriptions()).find((item) => {
+                const list = await bcClient.listWebhookSubscriptions();
+                const existing = list.find((item) => {
                     const resource = normalizeValue(item?.resource);
                     const notify = normalizeValue(item?.notificationUrl);
-                    return resource === expectedResource && notify === expectedNotification;
-                });
+                    if (resource !== expectedResource) return false;
+                    if (!notify) return true;
+                    return notify === expectedNotification;
+                }) || (stored?.id ? stored : null);
 
                 if (!existing?.id) {
                     throw error;

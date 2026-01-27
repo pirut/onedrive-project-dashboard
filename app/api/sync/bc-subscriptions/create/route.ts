@@ -104,11 +104,14 @@ export async function POST(request: Request) {
 
                 const expectedResource = normalizeValue(buildExpectedResource(normalized));
                 const expectedNotification = normalizeValue(notificationUrl);
-                const existing = (await bcClient.listWebhookSubscriptions()).find((item) => {
+                const list = await bcClient.listWebhookSubscriptions();
+                const existing = list.find((item) => {
                     const resource = normalizeValue(item?.resource as string | undefined);
                     const notify = normalizeValue(item?.notificationUrl as string | undefined);
-                    return resource === expectedResource && notify === expectedNotification;
-                });
+                    if (resource !== expectedResource) return false;
+                    if (!notify) return true;
+                    return notify === expectedNotification;
+                }) || (stored?.id ? stored : null);
 
                 if (!existing?.id) {
                     throw error;
