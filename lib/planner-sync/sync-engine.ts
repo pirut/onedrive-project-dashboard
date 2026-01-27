@@ -1389,6 +1389,10 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
         const msg = error instanceof Error ? error.message : String(error);
         return msg.includes("-> 429");
     };
+    const isTransientGraphError = (error: unknown) => {
+        const msg = error instanceof Error ? error.message : String(error);
+        return msg.includes("-> 500") || msg.includes("-> 502") || msg.includes("-> 503") || msg.includes("-> 504");
+    };
     const { persist = true } = options;
 
     const rawTasks = await bcClient.listProjectTasks("plannerTaskId ne ''");
@@ -1482,7 +1486,7 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
                 try {
                     deltaResult = await collectPlannerDeltaChanges(graphClient, planId, null);
                 } catch (resetError) {
-                    if (isRateLimited(resetError)) {
+                    if (isRateLimited(resetError) || isTransientGraphError(resetError)) {
                         logger.warn("Planner delta rate limited after reset; skipping plan", {
                             scope: scopeKey,
                             planId,
@@ -1492,8 +1496,8 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
                     }
                     throw resetError;
                 }
-            } else if (isRateLimited(error)) {
-                logger.warn("Planner delta rate limited; skipping plan", {
+            } else if (isRateLimited(error) || isTransientGraphError(error)) {
+                logger.warn("Planner delta request failed; skipping plan", {
                     scope: scopeKey,
                     planId,
                     error: (error as Error)?.message,
