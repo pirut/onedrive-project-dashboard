@@ -1064,7 +1064,6 @@ async function syncProjectTasks(
     let headingCount = 0;
     let postingCount = 0;
     let skippedCount = 0;
-    const unknownTaskTypes = new Map<string, number>();
 
     const { bcModifiedGraceMs } = getSyncConfig();
     const bcGraceMs = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
@@ -1073,8 +1072,6 @@ async function syncProjectTasks(
         const rawTaskType = (task.taskType || "").trim();
         let taskType = rawTaskType.toLowerCase();
         if (!taskType || (taskType !== "heading" && taskType !== "posting")) {
-            const key = taskType || "<empty>";
-            unknownTaskTypes.set(key, (unknownTaskTypes.get(key) || 0) + 1);
             taskType = "posting";
         }
         if (taskType === "heading") {
@@ -1130,12 +1127,6 @@ async function syncProjectTasks(
         await upsertPlannerTask(bcClient, graphClient, syncTask, planId, bucketId, currentBucket, titlePrefix);
     }
 
-    if (unknownTaskTypes.size) {
-        logger.info("Unknown BC taskType values treated as posting", {
-            projectNo,
-            taskTypeCounts: Object.fromEntries(unknownTaskTypes),
-        });
-    }
     if (postingCount === 0) {
         logger.info("No posting tasks synced for project", {
             projectNo,
