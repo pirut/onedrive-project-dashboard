@@ -420,6 +420,12 @@ function extractProjectNoFromPlanTitle(title: string) {
     return normalizeProjectPlanKey(match[1]);
 }
 
+function isPlanArchived(plan: PlannerPlan | null | undefined) {
+    if (!plan) return false;
+    const raw = plan as PlannerPlan & { isArchived?: boolean; archived?: boolean };
+    return raw.isArchived === true || raw.archived === true;
+}
+
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
     const description = (task.description || "").trim();
     const taskNo = (task.taskNo || "").trim();
@@ -2003,6 +2009,7 @@ export async function syncPlannerPlanTitlesAndDedupe(options: { projectNo?: stri
         skippedNoProject: 0,
         skippedNoPlan: 0,
         skippedDefaultPlan: 0,
+        skippedArchived: 0,
         failedDeletes: 0,
         failedUpdates: 0,
     };
@@ -2044,6 +2051,16 @@ export async function syncPlannerPlanTitlesAndDedupe(options: { projectNo?: stri
                 summary.skippedDefaultPlan += 1;
                 continue;
             }
+            if (isPlanArchived(plan)) {
+                summary.skippedArchived += 1;
+                logger.info("Skipping archived duplicate Planner plan", {
+                    projectNo: project.projectNo,
+                    planId: plan.id,
+                    planTitle: plan.title,
+                    dryRun,
+                });
+                continue;
+            }
             try {
                 if (!dryRun) {
                     await graphClient.deletePlan(plan.id);
@@ -2071,6 +2088,30 @@ export async function syncPlannerPlanTitlesAndDedupe(options: { projectNo?: stri
             if (plannerConfig.defaultPlanId && keep.id === plannerConfig.defaultPlanId) {
                 summary.skippedDefaultPlan += 1;
             } else {
+                let archived = isPlanArchived(keep);
+                if (!archived && !("isArchived" in keep) && !("archived" in keep)) {
+                    try {
+                        const planDetails = await graphClient.getPlan(keep.id);
+                        archived = isPlanArchived(planDetails);
+                    } catch (error) {
+                        logger.warn("Failed to confirm Planner plan archive state", {
+                            projectNo: project.projectNo,
+                            planId: keep.id,
+                            error: (error as Error)?.message,
+                        });
+                    }
+                }
+                if (archived) {
+                    summary.skippedArchived += 1;
+                    logger.info("Skipping archived Planner plan title update", {
+                        projectNo: project.projectNo,
+                        planId: keep.id,
+                        fromTitle: keep.title,
+                        toTitle: desiredTitle,
+                        dryRun,
+                    });
+                    continue;
+                }
                 try {
                     if (!dryRun) {
                         await graphClient.updatePlan(keep.id, { title: desiredTitle });
