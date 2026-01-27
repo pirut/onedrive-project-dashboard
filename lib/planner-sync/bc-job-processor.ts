@@ -1,6 +1,6 @@
 import { BusinessCentralClient } from "./bc-client";
 import { logger } from "./logger";
-import { syncBcToPlanner } from "./sync-engine";
+import { syncBcToPremium } from "../premium-sync";
 import { popBcJobs, BcWebhookJob } from "./bc-webhook-store";
 
 export type BcJobProcessSummary = {
@@ -93,7 +93,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     let processed = 0;
     for (const projectNo of projectNos) {
         try {
-            await syncBcToPlanner(projectNo);
+            await syncBcToPremium(projectNo, { requestId });
             processed += 1;
         } catch (error) {
             errors += 1;

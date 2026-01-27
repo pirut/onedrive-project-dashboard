@@ -45,7 +45,7 @@ export default async function handler(req, res) {
         return;
     }
 
-    const includePlanner = req.url?.includes("includePlanner=1");
+    const includePremium = req.url?.includes("includePremium=1");
 
     const body = await readJsonBody(req);
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
@@ -131,14 +131,16 @@ export default async function handler(req, res) {
         }
 
         const reasons = targetInfo.reasons || [];
-        let plannerTask = null;
-        if (includePlanner && targetInfo.task.plannerTaskId) {
+        let premiumTask = null;
+        if (includePremium && targetInfo.task.plannerTaskId) {
             try {
-                const { GraphClient } = await import("../../lib/planner-sync/graph-client.js");
-                const graphClient = new GraphClient();
-                plannerTask = await graphClient.getTask(targetInfo.task.plannerTaskId);
+                const { DataverseClient } = await import("../../lib/dataverse-client.js");
+                const { getDataverseMappingConfig } = await import("../../lib/premium-sync/config.js");
+                const mapping = getDataverseMappingConfig();
+                const dataverse = new DataverseClient();
+                premiumTask = await dataverse.getById(mapping.taskEntitySet, targetInfo.task.plannerTaskId);
             } catch (error) {
-                logger.warn("Planner task lookup failed in debug", {
+                logger.warn("Premium task lookup failed in debug", {
                     taskId: targetInfo.task.plannerTaskId,
                     error: error?.message || String(error),
                 });
@@ -154,20 +156,20 @@ export default async function handler(req, res) {
             targetInfo.task.systemModifiedOn ||
             null;
         const lastSyncAt = targetInfo.task.lastSyncAt || null;
-        const plannerModifiedAt = plannerTask?.lastModifiedDateTime || null;
+        const premiumModifiedAt = premiumTask?.modifiedon || premiumTask?.modifiedOn || premiumTask?.lastModifiedDateTime || null;
         const lastPlannerEtag = targetInfo.task.lastPlannerEtag || null;
-        const plannerEtag = plannerTask?.["@odata.etag"] || null;
+        const premiumEtag = premiumTask?.["@odata.etag"] || null;
         const bcModifiedMs = bcModified ? Date.parse(String(bcModified)) : NaN;
         const lastSyncMs = lastSyncAt ? Date.parse(String(lastSyncAt)) : NaN;
-        const plannerModifiedMs = plannerModifiedAt ? Date.parse(String(plannerModifiedAt)) : NaN;
+        const premiumModifiedMs = premiumModifiedAt ? Date.parse(String(premiumModifiedAt)) : NaN;
         const bcChangedSinceSync =
             Number.isNaN(bcModifiedMs) || Number.isNaN(lastSyncMs) ? null : bcModifiedMs > lastSyncMs;
-        const plannerEtagChanged = plannerEtag && lastPlannerEtag ? plannerEtag !== lastPlannerEtag : null;
-        const plannerChangedSinceSync = Number.isNaN(lastSyncMs)
-            ? plannerEtagChanged
-            : Number.isNaN(plannerModifiedMs)
-                ? plannerEtagChanged
-                : plannerModifiedMs > lastSyncMs;
+        const premiumEtagChanged = premiumEtag && lastPlannerEtag ? premiumEtag !== lastPlannerEtag : null;
+        const premiumChangedSinceSync = Number.isNaN(lastSyncMs)
+            ? premiumEtagChanged
+            : Number.isNaN(premiumModifiedMs)
+                ? premiumEtagChanged
+                : premiumModifiedMs > lastSyncMs;
 
         res.status(200).json({
             ok: true,
@@ -204,20 +206,19 @@ export default async function handler(req, res) {
                 bcModifiedAt: bcModified,
                 lastSyncAt,
                 bcChangedSinceSync,
-                plannerModifiedAt,
-                plannerChangedSinceSync,
-                plannerEtagChanged,
+                premiumModifiedAt,
+                premiumChangedSinceSync,
+                premiumEtagChanged,
             },
-            planner: plannerTask
+            premium: premiumTask
                 ? {
-                      id: plannerTask.id,
-                      title: plannerTask.title,
-                      bucketId: plannerTask.bucketId,
-                      percentComplete: plannerTask.percentComplete,
-                      startDateTime: plannerTask.startDateTime,
-                      dueDateTime: plannerTask.dueDateTime,
-                      lastModifiedDateTime: plannerTask.lastModifiedDateTime,
-                      etag: plannerTask["@odata.etag"],
+                      id: premiumTask.msdyn_projecttaskid || premiumTask.id,
+                      title: premiumTask.msdyn_subject || premiumTask.subject || premiumTask.title,
+                      percentComplete: premiumTask.msdyn_percentcomplete ?? premiumTask.percentComplete,
+                      startDate: premiumTask.msdyn_start || premiumTask.startDateTime || premiumTask.startDate,
+                      endDate: premiumTask.msdyn_finish || premiumTask.dueDateTime || premiumTask.endDate,
+                      modifiedOn: premiumTask.modifiedon || premiumTask.modifiedOn || premiumTask.lastModifiedDateTime,
+                      etag: premiumTask["@odata.etag"],
                       lastPlannerEtag: targetInfo.task.lastPlannerEtag,
                   }
                 : null,

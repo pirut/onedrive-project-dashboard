@@ -112,9 +112,9 @@ Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**,
 - Set envs in Vercel: `TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`, `MS_GRAPH_SCOPE`, `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`, `CORS_ORIGIN`.
 - Test: `GET /api/health`, `POST /api/upload`.
 
-## Planner Sync
+## Planner Premium Sync
 
-Production-ready two-way sync between Business Central Project Tasks and Microsoft Planner.
+Bi-directional sync between Business Central Project Tasks and Planner Premium (Dataverse / Project for the Web).
 
 ### Environment variables
 
@@ -131,36 +131,49 @@ BC_API_GROUP=plannerSync
 BC_API_VERSION=v1.0
 BC_PROJECT_CHANGES_ENTITY_SET=projectChanges
 
-# Microsoft Graph
-GRAPH_TENANT_ID=
-GRAPH_CLIENT_ID=
-GRAPH_CLIENT_SECRET=
-GRAPH_SUBSCRIPTION_CLIENT_STATE=
-GRAPH_NOTIFICATION_URL=
+# Dataverse (Planner Premium)
+DATAVERSE_BASE_URL=https://yourorg.api.crm.dynamics.com
+DATAVERSE_API_VERSION=v9.2
+DATAVERSE_TENANT_ID=
+DATAVERSE_CLIENT_ID=
+DATAVERSE_CLIENT_SECRET=
+DATAVERSE_RESOURCE_SCOPE=https://yourorg.api.crm.dynamics.com/.default
+DATAVERSE_NOTIFICATION_URL=
+DATAVERSE_WEBHOOK_SECRET=
 
-# Planner
-PLANNER_GROUP_ID=
-PLANNER_DEFAULT_PLAN_ID=
-PLANNER_TENANT_DOMAIN=
-PLANNER_WEB_BASE=
+# Dataverse mapping (override to match your schema)
+DATAVERSE_PROJECT_ENTITY_SET=msdyn_projects
+DATAVERSE_TASK_ENTITY_SET=msdyn_projecttasks
+DATAVERSE_PROJECT_ID_FIELD=msdyn_projectid
+DATAVERSE_TASK_ID_FIELD=msdyn_projecttaskid
+DATAVERSE_PROJECT_TITLE_FIELD=msdyn_subject
+DATAVERSE_TASK_TITLE_FIELD=msdyn_subject
+DATAVERSE_TASK_PROJECT_LOOKUP_FIELD=msdyn_project
+DATAVERSE_TASK_PROJECT_ID_FIELD=_msdyn_project_value
+DATAVERSE_BC_PROJECT_NO_FIELD=
+DATAVERSE_BC_TASK_NO_FIELD=
+DATAVERSE_TASK_START_FIELD=msdyn_start
+DATAVERSE_TASK_FINISH_FIELD=msdyn_finish
+DATAVERSE_TASK_PERCENT_FIELD=msdyn_percentcomplete
+DATAVERSE_TASK_DESCRIPTION_FIELD=
+DATAVERSE_TASK_MODIFIED_FIELD=modifiedon
+DATAVERSE_ALLOW_PROJECT_CREATE=false
+DATAVERSE_ALLOW_TASK_CREATE=true
+DATAVERSE_ALLOW_TASK_DELETE=false
+DATAVERSE_PERCENT_SCALE=1
 
 # Sync settings
-SYNC_MODE=perProjectPlan
-SYNC_POLL_MINUTES=10
-SYNC_TIMEZONE=America/New_York
-SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=true
-SYNC_LOCK_TIMEOUT_MINUTES=30
 SYNC_PREFER_BC=true
 SYNC_BC_MODIFIED_GRACE_MS=2000
-SYNC_USE_PLANNER_DELTA=true
-SYNC_USE_SMART_POLLING=false
-SYNC_ENABLE_POLLING_FALLBACK=true
-PLANNER_DELTA_SELECT=id,planId,title,bucketId
+SYNC_LOCK_TIMEOUT_MINUTES=30
+SYNC_MAX_PROJECTS_PER_RUN=0
+PREMIUM_DELETE_BEHAVIOR=clearLink
+PREMIUM_POLL_PAGE_SIZE=200
+PREMIUM_POLL_MAX_PAGES=10
 
 # Optional persistence overrides
-PLANNER_SUBSCRIPTIONS_FILE=.planner-subscriptions.json
-PLANNER_PROJECT_SYNC_FILE=.planner-project-sync.json
-PLANNER_DELTA_FILE=.planner-delta.json
+PREMIUM_PROJECT_SYNC_FILE=.premium-project-sync.json
+DATAVERSE_DELTA_FILE=.dataverse-delta.json
 BC_PROJECT_CHANGES_FILE=.bc-project-changes.json
 BC_WEBHOOK_STORE_FILE=.bc-webhook-store.json
 KV_REST_API_URL=
@@ -173,28 +186,27 @@ CRON_SECRET=
 ```
 
 Notes:
-- `PLANNER_DEFAULT_PLAN_ID` is required when `SYNC_MODE=singlePlan`.
-- For `SYNC_MODE=perProjectPlan`, plan creation failures fall back to `PLANNER_DEFAULT_PLAN_ID` (task titles are prefixed with `projectNo`).
-- Set `PLANNER_TENANT_DOMAIN` or `PLANNER_WEB_BASE` to generate clickable plan URLs in sync responses (defaults to the new Planner web UI).
-- Set `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) to force the subscription webhook endpoint.
-- Graph change notifications must use HTTPS in production. Point the subscription to `/api/webhooks/graph/planner`.
-- Planner webhook notifications are queued in Vercel KV/Upstash if configured; otherwise they use an in-memory queue for local dev. BC webhook jobs persist to KV/Upstash (or the file fallback).
-- If both BC and Planner changed since `lastSyncAt`, Planner wins; otherwise BC changes take precedence when they exist.
-- `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms) to avoid treating sync metadata updates as user changes.
-- `SYNC_USE_SMART_POLLING=true` enables BC project change feed + Planner delta queries so only affected projects run BC → Planner sync.
-- Smart polling expects a BC change feed endpoint at `/projectChanges` returning `sequenceNo` and `projectNo`; a 404 falls back to Planner-only polling.
-- Use `POST /api/sync/projects` to disable sync for specific projects or delete plans (prevents re-creation after deletion).
-- Planner delta queries use plan-scoped delta links and store tokens per plan (`planner:{tenantId}:{groupId}:{planId}`).
-- `SYNC_ENABLE_POLLING_FALLBACK=false` disables the poll-cron fallback once BC webhooks are in place.
+- Dataverse change tracking uses `Prefer: odata.track-changes` and stores delta links in `DATAVERSE_DELTA_FILE` (or KV).
+- Configure `DATAVERSE_BC_PROJECT_NO_FIELD` and `DATAVERSE_BC_TASK_NO_FIELD` to match your custom columns for stable ID mapping.
+- `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms).
+- If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
+- Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
+
+### Dataverse change tracking + webhooks
+
+Preferred path is Dataverse change tracking (delta links). Optionally register Dataverse webhooks on the task entity for real-time triggers.
+
+- Delta polling endpoint: `POST /api/sync/premium-change/poll`
+- Webhook receiver: `POST /api/webhooks/dataverse` (set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
+- If using webhooks, configure your Dataverse service endpoint to send notifications to the webhook URL and include the shared secret header (`x-dataverse-secret`) matching `DATAVERSE_WEBHOOK_SECRET`.
 
 ### Admin endpoints
 
-- `POST /api/sync/run-bc-to-planner` (optional JSON: `{ "projectNo": "P-100" }`) - runs BC <-> Planner sync
-- `GET /api/sync/projects` (list Planner projects + sync state)
-- `POST /api/sync/projects` (toggle per-project sync or delete plan)
-- `POST /api/sync/subscriptions/create`
-- `POST /api/sync/subscriptions/renew`
-- `POST /api/webhooks/graph/planner` (Graph notification receiver)
+- `POST /api/sync/bc-to-premium` (optional JSON: `{ \"projectNo\": \"P-100\", \"includePremiumChanges\": true }`)
+- `POST /api/sync/premium-change/poll`
+- `GET /api/sync/projects` (list Premium projects + sync state)
+- `POST /api/sync/projects` (toggle per-project sync or clear links)
+- `POST /api/webhooks/dataverse` (Dataverse notification receiver)
 - `POST /api/webhooks/bc` (Business Central notification receiver)
 - `POST /api/sync/bc-subscriptions/create`
 - `POST /api/sync/bc-subscriptions/renew`
@@ -204,22 +216,21 @@ Notes:
 ### Example curl commands
 
 ```bash
-# Run full sync (BC <-> Planner) for a single project
-curl -X POST http://localhost:3000/api/sync/run-bc-to-planner \\
+# Run full sync (BC ↔ Premium) for a single project
+curl -X POST http://localhost:3000/api/sync/bc-to-premium \\
   -H 'Content-Type: application/json' \\
   -d '{\"projectNo\":\"P-100\"}'
 
-# Create Graph subscriptions
-curl -X POST https://your-domain.com/api/sync/subscriptions/create
+# Poll Premium changes (Dataverse delta)
+curl -X POST https://your-domain.com/api/sync/premium-change/poll?cronSecret=YOUR_SECRET
 
-# Test webhook validation locally
-curl -i -X POST \"http://localhost:3000/api/webhooks/graph/planner?validationToken=test123\"
-
+# Ping webhook locally
+curl -i http://localhost:3000/api/webhooks/dataverse
 ```
 
 ### Business Central Webhooks (Vercel)
 
-BC webhooks let Business Central changes enqueue targeted BC → Planner sync jobs instead of relying on polling.
+BC webhooks let Business Central changes enqueue targeted BC → Premium sync jobs instead of relying on polling.
 
 1) Set env vars:
 - `BC_WEBHOOK_NOTIFICATION_URL` (optional) to force the webhook URL (defaults to your deployment URL + `/api/webhooks/bc`).
@@ -256,7 +267,7 @@ curl -X POST https://your-domain.com/api/sync/bc-subscriptions/renew?cronSecret=
 ```
 
 Vercel Cron will call `/api/sync/bc-subscriptions/renew` daily and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
-Cron auth now protects `/api/sync/poll-cron` and `/api/sync-folders-cron` as well, so include the same secret there.
+Cron auth now protects `/api/sync/premium-change/poll`, `/api/sync/bc-to-premium`, and `/api/sync-folders-cron` as well, so include the same secret there.
 
 ## Notes
 

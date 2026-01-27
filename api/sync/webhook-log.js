@@ -1,4 +1,4 @@
-import { listWebhookLog } from "../../lib/planner-sync/webhook-log.js";
+import { listPremiumWebhookLog } from "../../lib/premium-sync/index.js";
 
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
@@ -15,6 +15,6 @@ export default async function handler(req, res) {
     }
 
     const limit = Number(req.query?.limit || 50);
-    const items = await listWebhookLog(Number.isNaN(limit) ? 50 : limit);
+    const items = await listPremiumWebhookLog(Number.isNaN(limit) ? 50 : limit);
     res.status(200).json({ ok: true, items });
 }

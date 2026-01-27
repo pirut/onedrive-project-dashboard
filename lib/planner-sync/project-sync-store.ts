@@ -10,8 +10,12 @@ export type ProjectSyncSetting = {
     note?: string;
 };
 
-const FILE_PATH = process.env.PLANNER_PROJECT_SYNC_FILE || path.join(process.cwd(), ".planner-project-sync.json");
-const KV_KEY = "planner:project-sync";
+const FILE_PATH =
+    process.env.PREMIUM_PROJECT_SYNC_FILE ||
+    process.env.PLANNER_PROJECT_SYNC_FILE ||
+    path.join(process.cwd(), ".planner-project-sync.json");
+const KV_KEY = "premium:project-sync";
+const LEGACY_KV_KEY = "planner:project-sync";
 
 export function normalizeProjectNo(value: string | undefined | null) {
     return String(value || "").trim().toLowerCase();
@@ -50,7 +54,10 @@ export async function listProjectSyncSettings(): Promise<ProjectSyncSetting[]> {
     const redis = getRedis({ requireWrite: false });
     if (redis) {
         try {
-            const raw = await redis.get(KV_KEY);
+            let raw = await redis.get(KV_KEY);
+            if (!raw) {
+                raw = await redis.get(LEGACY_KV_KEY);
+            }
             if (!raw) return [];
             if (typeof raw === "string") {
                 const data = JSON.parse(raw);

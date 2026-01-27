@@ -1,4 +1,4 @@
-import { getWebhookEmitter, listWebhookLog } from "../../lib/planner-sync/webhook-log.js";
+import { getPremiumWebhookEmitter, listPremiumWebhookLog } from "../../lib/premium-sync/index.js";
 
 export default async function handler(req, res) {
     const origin = process.env.CORS_ORIGIN || "*";
@@ -19,10 +19,10 @@ export default async function handler(req, res) {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    const emitter = getWebhookEmitter();
+    const emitter = getPremiumWebhookEmitter();
     const include = String(req.query?.include || "").trim() === "1";
     if (include) {
-        const items = await listWebhookLog(20);
+        const items = await listPremiumWebhookLog(20);
         for (const entry of items.reverse()) {
             res.write(`data: ${JSON.stringify(entry)}\n\n`);
         }

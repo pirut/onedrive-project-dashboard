@@ -1,16 +1,15 @@
 # Onedrive Project Dashboard - Agent Notes
 
 Quick context
-- This repo hosts an admin dashboard + serverless API for OneDrive + Business Central + Microsoft Planner sync.
-- BC <-> Planner sync lives in `lib/planner-sync/`.
+- This repo hosts an admin dashboard + serverless API for OneDrive + Business Central + Planner Premium (Dataverse) sync.
+- Planner Premium sync lives in `lib/premium-sync/` and `lib/dataverse-client.*`.
+- BC utilities remain in `lib/planner-sync/`.
 - Vercel deploys `api/*` serverless functions; `app/api/*` are Next routes used locally/when running the app framework.
 - Always push changes to the remote after making edits.
 
-Key behaviors (Planner sync)
-- `SYNC_MODE=perProjectPlan` creates one plan per project; `singlePlan` uses `PLANNER_DEFAULT_PLAN_ID`.
-- Plan names: `ProjectNo - Description` (fallback: `ProjectNo`).
+Key behaviors (Premium sync)
 - Task titles use description only (task number removed).
-- Bucket mapping from BC heading rows:
+- Heading mapping from BC task numbers still used to segment work:
   - `JOB NAME` -> `Pre-Construction`
   - `INSTALLATION` -> `Installation`
   - `CHANGE ORDER(S)` -> `Change Orders`
@@ -19,14 +18,10 @@ Key behaviors (Planner sync)
   - `SYNC_LOCK_TIMEOUT_MINUTES` (default 30) clears stale locks.
 
 Important endpoints
-- Sync: `POST /api/sync/run-bc-to-planner` (optional `{ "projectNo": "PR00001" }`, runs BC <-> Planner)
+- Sync: `POST /api/sync/bc-to-premium` (optional `{ "projectNo": "PR00001" }`, runs BC → Premium and optionally Premium → BC)
+- Premium change poll: `POST /api/sync/premium-change/poll`
 - Debug: `GET /api/debug`
-- Webhook (Graph): `POST /api/webhooks/graph/planner`
-- Webhook validation (GET): `.../api/webhooks/graph/planner?validationToken=ping`
-- Subscriptions:
-  - Create: `POST /api/sync/subscriptions/create`
-  - Renew: `POST /api/sync/subscriptions/renew`
-  - List: `GET /api/sync/subscriptions/list`
+- Webhook (Dataverse): `POST /api/webhooks/dataverse`
 - Admin helpers:
   - Inspect BC task: `POST /api/sync/debug-bc-task` (body: `{ projectNo, taskNo }`)
   - Webhook snapshot: `GET /api/sync/webhook-log`
@@ -34,17 +29,18 @@ Important endpoints
 
 Admin dashboard (UI)
 - `api/admin.js` renders the dashboard.
-- Planner panel includes:
+- Premium panel includes:
   - Run Sync
   - Run Sync (PR00001) quick test
+  - Poll Premium changes
   - Inspect BC Task (enter Project No + Task No)
-  - Webhook debug: Start/Stop feed, Clear, Snapshot, List subscriptions
- - Planner Projects panel includes per-project sync toggles and plan deletion.
+  - Webhook debug: Start/Stop feed, Clear, Snapshot
+- Premium Projects panel includes per-project sync toggles and clear-links action.
 
-Graph / Planner notes
-- Plan creation must use `POST /planner/plans` with `{ title, owner: groupId }`.
-- Graph subscriptions created for each plan: resource `/planner/plans/{planId}/tasks`.
-- `GRAPH_NOTIFICATION_URL` (or `PLANNER_NOTIFICATION_URL`) overrides webhook notification URL.
+Dataverse notes
+- Planner Premium data is stored in Dataverse (`msdyn_projects`, `msdyn_projecttasks` by default).
+- Change tracking uses `Prefer: odata.track-changes` and delta links stored in KV or `DATAVERSE_DELTA_FILE`.
+- Optional Dataverse webhooks should target `/api/webhooks/dataverse` and include `x-dataverse-secret` if configured.
 
 BC notes
 - Custom API is `cornerstone/plannerSync/v1.0` with entity sets `projects` and `projectTasks`.
@@ -53,23 +49,18 @@ BC notes
   - TableData for custom tables (e.g., 50326 "SIT Project Task Sync Setup")
 
 Common pitfalls
-- Webhook validation returns "Method not allowed" if GET isn’t routed; now handled in:
-  - `app/api/webhooks/graph/planner/route.ts`
-  - `api/webhooks/graph/planner.js`
 - Webhook live feed on Vercel is best-effort; SSE can land on a different instance than the webhook.
-- If plan creation fails, `SYNC_ALLOW_DEFAULT_PLAN_FALLBACK=false` surfaces the Graph error.
+- Missing Dataverse mapping fields (`DATAVERSE_BC_PROJECT_NO_FIELD`, `DATAVERSE_BC_TASK_NO_FIELD`) can lead to duplicate tasks.
 
-Environment variables (Planner/BC/Graph)
+Environment variables (Premium/BC)
 - BC: `BC_TENANT_ID`, `BC_ENVIRONMENT`, `BC_COMPANY_ID`, `BC_CLIENT_ID`, `BC_CLIENT_SECRET`,
   `BC_API_BASE`, `BC_API_PUBLISHER`, `BC_API_GROUP`, `BC_API_VERSION`
-- Graph: `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, `GRAPH_SUBSCRIPTION_CLIENT_STATE`
-- Planner: `PLANNER_GROUP_ID`, `PLANNER_DEFAULT_PLAN_ID`
-- Sync: `SYNC_MODE`, `SYNC_POLL_MINUTES`, `SYNC_TIMEZONE`, `SYNC_ALLOW_DEFAULT_PLAN_FALLBACK`, `SYNC_LOCK_TIMEOUT_MINUTES`
-- URLs: `GRAPH_NOTIFICATION_URL` (preferred), `PLANNER_NOTIFICATION_URL` (fallback),
-  `PLANNER_TENANT_DOMAIN` or `PLANNER_WEB_BASE` for plan links
+- Dataverse: `DATAVERSE_BASE_URL`, `DATAVERSE_TENANT_ID`, `DATAVERSE_CLIENT_ID`, `DATAVERSE_CLIENT_SECRET`,
+  `DATAVERSE_RESOURCE_SCOPE`
+- Sync: `SYNC_PREFER_BC`, `SYNC_BC_MODIFIED_GRACE_MS`, `SYNC_LOCK_TIMEOUT_MINUTES`, `SYNC_MAX_PROJECTS_PER_RUN`
+- Webhooks: `DATAVERSE_NOTIFICATION_URL`, `DATAVERSE_WEBHOOK_SECRET`, `BC_WEBHOOK_NOTIFICATION_URL`, `BC_WEBHOOK_SHARED_SECRET`, `CRON_SECRET`
 
 Recent changes to remember
-- Added debug endpoint for BC task inspection: `api/sync/debug-bc-task.js`
-- Added webhook feed + snapshot + subscriptions list in admin UI
-- Plan URL responses now use Planner web UI format by default
-- Added Graph diagnostics in `/api/debug`
+- Added Dataverse client + premium sync layer in `lib/premium-sync/`.
+- Added `/api/webhooks/dataverse` and `/api/sync/premium-change/poll` routes.
+- Admin UI now targets Planner Premium endpoints and logs.

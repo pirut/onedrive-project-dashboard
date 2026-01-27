@@ -427,4 +427,14 @@ export class BusinessCentralClient {
         }
         return primary;
     }
+
+    async findProjectTaskByProjectAndTaskNo(projectNo: string, taskNo: string) {
+        const escapedProject = projectNo.replace(/'/g, "''");
+        const escapedTask = taskNo.replace(/'/g, "''");
+        const filter = `projectNo eq '${escapedProject}' and taskNo eq '${escapedTask}'`;
+        const tasks = await this.listProjectTasks(filter);
+        if (!tasks.length) return null;
+        if (tasks.length === 1) return tasks[0];
+        return selectPrimaryPlannerTask(tasks);
+    }
 }

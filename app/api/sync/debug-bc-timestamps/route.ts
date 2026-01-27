@@ -1,5 +1,5 @@
-import { BusinessCentralClient } from "../../../../../lib/planner-sync/bc-client";
-import { logger } from "../../../../../lib/planner-sync/logger";
+import { BusinessCentralClient } from "../../../../lib/planner-sync/bc-client";
+import { logger } from "../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
 

@@ -71,7 +71,6 @@ function layout(title, bodyHtml) {
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
   .muted{color:var(--muted)}
   .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
-  .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#16213a;color:#9fb1d9;border:1px solid #1f2a44}
   input,button{font:inherit}
   input{background:#0b1220;border:1px solid #1f2a44;border-radius:8px;color:var(--fg);padding:8px;width:100%}
   button{background:#2b61d1;color:#fff;border:0;border-radius:8px;padding:8px 12px;cursor:pointer}
@@ -86,13 +85,13 @@ function layout(title, bodyHtml) {
 
 async function debugView(req) {
     const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
-    const notificationUrlDefault = process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL || `${origin}/api/webhooks/graph/planner`;
+    const notificationUrlDefault = process.env.DATAVERSE_NOTIFICATION_URL || `${origin}/api/webhooks/dataverse`;
 
     const inner = `
   <div class="panel" style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
     <div>
       <h1>Webhook Debug Console</h1>
-      <div class="small muted">All Planner + webhook diagnostics in one place.</div>
+      <div class="small muted">Planner Premium + webhook diagnostics.</div>
     </div>
     <div class="row">
       <a class="button" href="/api/admin">Back to Admin</a>
@@ -104,45 +103,31 @@ async function debugView(req) {
     <div style="font-weight:600">Notification URL</div>
     <div class="row">
       <input id="notification-url" value="${htmlEscape(notificationUrlDefault)}" readonly />
-      <button type="button" id="validate-webhook">Validate</button>
+      <button type="button" id="ping-webhook">Ping</button>
     </div>
-    <div id="validation-status" class="small muted">Validation hits <span class="mono">/api/webhooks/graph/planner?validationToken=...</span></div>
+    <div id="validation-status" class="small muted">Ping hits <span class="mono">/api/webhooks/dataverse</span></div>
     <pre id="validation-output" class="log" style="display:none"></pre>
   </div>
 
-    <div class="panel">
-      <div style="font-weight:600">Quick Actions</div>
-      <div class="row">
-        <button type="button" id="planner-test-btn">Test Planner API</button>
-        <button type="button" id="subs-list-btn" style="background:#1f2a44;color:#e6ecff">List Subscriptions</button>
-        <button type="button" id="subs-delete-btn" style="background:#ef4444;color:#fff">Delete Planner Subscriptions</button>
-        <button type="button" id="webhook-snapshot-btn" style="background:#1f2a44;color:#e6ecff">Load Webhook Snapshot</button>
-        <button type="button" id="webhook-feed-start" style="background:#0f8b4c;color:#fff">Start Live Feed</button>
-        <button type="button" id="webhook-feed-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
-        <button type="button" id="webhook-feed-clear" style="background:#1f2a44;color:#e6ecff">Clear Feed</button>
-      </div>
-      <div class="small muted">Planner webhooks only fire on task create/update/delete for subscribed plan IDs.</div>
+  <div class="panel">
+    <div style="font-weight:600">Quick Actions</div>
+    <div class="row">
+      <button type="button" id="premium-test-btn">Test Premium API</button>
+      <button type="button" id="webhook-snapshot-btn" style="background:#1f2a44;color:#e6ecff">Load Webhook Snapshot</button>
+      <button type="button" id="webhook-feed-start" style="background:#0f8b4c;color:#fff">Start Live Feed</button>
+      <button type="button" id="webhook-feed-stop" style="background:#1f2a44;color:#e6ecff">Stop Feed</button>
+      <button type="button" id="webhook-feed-clear" style="background:#1f2a44;color:#e6ecff">Clear Feed</button>
+    </div>
+    <div class="small muted">Dataverse webhooks fire on task create/update/delete once registered.</div>
   </div>
 
   <div class="grid">
     <div class="panel">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-weight:600">Planner API Test</div>
-        <span id="planner-test-status" class="small muted">Idle</span>
+        <div style="font-weight:600">Premium API Test</div>
+        <span id="premium-test-status" class="small muted">Idle</span>
       </div>
-      <div id="planner-test-hint" class="small muted" style="margin-top:6px"></div>
-      <div class="row" style="margin-top:6px">
-        <a id="planner-plan-link" class="button" href="#" target="_blank" rel="noopener" style="display:none">Open Plan</a>
-      </div>
-      <pre id="planner-test-output" class="log"></pre>
-    </div>
-
-    <div class="panel">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="font-weight:600">Graph Subscriptions</div>
-        <span id="subs-status" class="small muted">Idle</span>
-      </div>
-      <pre id="subs-output" class="log"></pre>
+      <pre id="premium-test-output" class="log"></pre>
     </div>
 
     <div class="panel">
@@ -175,10 +160,7 @@ async function debugView(req) {
       function byId(id){ return document.getElementById(id); }
       function renderJson(el, payload){
         if(!el) return;
-        if(payload == null){
-          el.textContent = '';
-          return;
-        }
+        if(payload == null){ el.textContent = ''; return; }
         try { el.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2); }
         catch(e){ el.textContent = String(payload); }
       }
@@ -193,179 +175,92 @@ async function debugView(req) {
         var payload = ct.indexOf('application/json') !== -1 ? await res.json() : await res.text();
         return { ok: res.ok, status: res.status, payload: payload };
       }
-      function extractPlanHint(payload){
-        try {
-          var groupId = payload && payload.groupId ? String(payload.groupId) : '';
-          var owner = payload && payload.checks && payload.checks.plan && payload.checks.plan.owner ? String(payload.checks.plan.owner) : '';
-          if(groupId && owner && groupId !== owner){
-            return 'Plan owner does not match PLANNER_GROUP_ID. Check groupId or default plan.';
-          }
-        } catch(e){}
-        return '';
-      }
 
       var debugOutput = byId('debug-output');
       var debugStatus = byId('debug-status');
-      var plannerOutput = byId('planner-test-output');
-      var plannerStatus = byId('planner-test-status');
-      var plannerHint = byId('planner-test-hint');
-      var plannerPlanLink = byId('planner-plan-link');
-      var subsOutput = byId('subs-output');
-      var subsStatus = byId('subs-status');
+      var premiumOutput = byId('premium-test-output');
+      var premiumStatus = byId('premium-test-status');
       var webhookOutput = byId('webhook-output');
       var webhookStatus = byId('webhook-status');
       var feedOutput = byId('webhook-feed');
       var feedStatus = byId('feed-status');
       var validationStatus = byId('validation-status');
       var validationOutput = byId('validation-output');
+      var feedSource = null;
 
       async function loadDebug(){
-        setStatus(debugStatus, 'Loading…', 'muted');
-        try {
-          var res = await fetchJson('/api/debug', { headers: { 'cache-control': 'no-cache' }});
-          renderJson(debugOutput, res.payload);
-          setStatus(debugStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
-        } catch(e){
-          renderJson(debugOutput, e && e.message ? e.message : String(e));
-          setStatus(debugStatus, 'Error', 'bad');
-        }
+        setStatus(debugStatus, 'Loading...', 'muted');
+        var res = await fetchJson('/api/debug', { headers: { 'cache-control': 'no-cache' }});
+        renderJson(debugOutput, res.payload);
+        setStatus(debugStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
       }
 
-      async function loadPlannerTest(){
-        setStatus(plannerStatus, 'Loading…', 'muted');
-        plannerHint.textContent = '';
-        if(plannerPlanLink){ plannerPlanLink.style.display = 'none'; plannerPlanLink.href = '#'; }
-        try {
-          var res = await fetchJson('/api/sync/planner-test', { headers: { 'cache-control': 'no-cache' }});
-          renderJson(plannerOutput, res.payload);
-          setStatus(plannerStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
-          var hint = extractPlanHint(res.payload);
-          if(hint){ plannerHint.textContent = hint; plannerHint.className = 'small warn'; }
-          if(res.payload && res.payload.planUrl && plannerPlanLink){
-            plannerPlanLink.href = res.payload.planUrl;
-            plannerPlanLink.style.display = 'inline-block';
-          }
-        } catch(e){
-          renderJson(plannerOutput, e && e.message ? e.message : String(e));
-          setStatus(plannerStatus, 'Error', 'bad');
-        }
-      }
-
-      async function loadSubscriptions(){
-        setStatus(subsStatus, 'Loading…', 'muted');
-        try {
-          var res = await fetchJson('/api/sync/subscriptions/list', { headers: { 'cache-control': 'no-cache' }});
-          renderJson(subsOutput, res.payload);
-          setStatus(subsStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
-        } catch(e){
-          renderJson(subsOutput, e && e.message ? e.message : String(e));
-          setStatus(subsStatus, 'Error', 'bad');
-        }
-      }
-
-      async function deleteSubscriptions(){
-        var ok = window.confirm('Delete all Planner subscriptions? This cannot be undone.');
-        if(!ok) return;
-        setStatus(subsStatus, 'Deleting…', 'warn');
-        try {
-          var res = await fetchJson('/api/sync/subscriptions/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ all: true })
-          });
-          renderJson(subsOutput, res.payload);
-          setStatus(subsStatus, res.ok ? 'Deleted' : 'Error', res.ok ? 'ok' : 'bad');
-        } catch(e){
-          renderJson(subsOutput, e && e.message ? e.message : String(e));
-          setStatus(subsStatus, 'Error', 'bad');
-        }
+      async function loadPremiumTest(){
+        setStatus(premiumStatus, 'Loading...', 'muted');
+        var res = await fetchJson('/api/sync/premium-test', { headers: { 'cache-control': 'no-cache' }});
+        renderJson(premiumOutput, res.payload);
+        setStatus(premiumStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
       }
 
       async function loadWebhookSnapshot(){
-        setStatus(webhookStatus, 'Loading…', 'muted');
-        try {
-          var res = await fetchJson('/api/sync/webhook-log?limit=50', { headers: { 'cache-control': 'no-cache' }});
-          renderJson(webhookOutput, res.payload);
-          setStatus(webhookStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
-        } catch(e){
-          renderJson(webhookOutput, e && e.message ? e.message : String(e));
-          setStatus(webhookStatus, 'Error', 'bad');
-        }
+        setStatus(webhookStatus, 'Loading...', 'muted');
+        var res = await fetchJson('/api/sync/webhook-log?limit=50', { headers: { 'cache-control': 'no-cache' }});
+        renderJson(webhookOutput, res.payload);
+        setStatus(webhookStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
       }
 
-      async function validateWebhook(){
-        var token = 'debug_' + Math.random().toString(36).slice(2, 10);
-        setStatus(validationStatus, 'Validating…', 'muted');
-        validationOutput.style.display = 'none';
-        try {
-          var res = await fetch('/api/webhooks/graph/planner?validationToken=' + encodeURIComponent(token), {
-            headers: { 'cache-control': 'no-cache' }
-          });
-          var text = await res.text();
-          validationOutput.style.display = 'block';
-          validationOutput.textContent = text;
-          var ok = res.ok && text.trim() === token;
-          setStatus(validationStatus, ok ? 'Validated' : ('Validation failed: ' + res.status), ok ? 'ok' : 'bad');
-        } catch(e){
-          validationOutput.style.display = 'block';
-          validationOutput.textContent = e && e.message ? e.message : String(e);
-          setStatus(validationStatus, 'Validation error', 'bad');
-        }
-      }
-
-      var feedSource = null;
       function startFeed(){
-        if(feedSource) return;
+        if(feedSource) feedSource.close();
         feedOutput.textContent = '';
         feedSource = new EventSource('/api/sync/webhook-log-stream?include=1');
+        setStatus(feedStatus, 'Connected', 'ok');
         feedSource.onmessage = function(ev){
-          if(!ev || !ev.data) return;
-          var line = ev.data;
-          try { line = JSON.stringify(JSON.parse(ev.data)); } catch(e){}
-          feedOutput.textContent = (feedOutput.textContent ? feedOutput.textContent + '\\n' : '') + line;
+          feedOutput.textContent = (feedOutput.textContent ? feedOutput.textContent + '\n' : '') + ev.data;
         };
         feedSource.onerror = function(){
-          setStatus(feedStatus, 'Feed error', 'warn');
-          stopFeed();
+          setStatus(feedStatus, 'Error', 'bad');
         };
-        setStatus(feedStatus, 'Running', 'ok');
       }
+
       function stopFeed(){
-        if(feedSource){
-          feedSource.close();
-          feedSource = null;
-        }
+        if(feedSource) feedSource.close();
+        feedSource = null;
         setStatus(feedStatus, 'Stopped', 'muted');
       }
+
       function clearFeed(){
         feedOutput.textContent = '';
+        setStatus(feedStatus, 'Cleared', 'muted');
       }
 
-      byId('planner-test-btn').addEventListener('click', loadPlannerTest);
-      byId('subs-list-btn').addEventListener('click', loadSubscriptions);
-      byId('subs-delete-btn').addEventListener('click', deleteSubscriptions);
-      byId('webhook-snapshot-btn').addEventListener('click', loadWebhookSnapshot);
-      byId('webhook-feed-start').addEventListener('click', startFeed);
-      byId('webhook-feed-stop').addEventListener('click', stopFeed);
-      byId('webhook-feed-clear').addEventListener('click', clearFeed);
-      byId('validate-webhook').addEventListener('click', validateWebhook);
-      byId('refresh-all').addEventListener('click', function(){
-        loadDebug();
-        loadPlannerTest();
-        loadSubscriptions();
-        loadWebhookSnapshot();
-      });
+      async function pingWebhook(){
+        setStatus(validationStatus, 'Pinging...', 'muted');
+        var res = await fetchJson('/api/webhooks/dataverse', { method: 'GET' });
+        renderJson(validationOutput, res.payload);
+        validationOutput.style.display = 'block';
+        setStatus(validationStatus, res.ok ? 'Ping OK' : 'Ping failed', res.ok ? 'ok' : 'bad');
+      }
 
-      window.addEventListener('load', function(){
+      byId('refresh-all')?.addEventListener('click', function(){
         loadDebug();
-        loadPlannerTest();
-        loadSubscriptions();
+        loadPremiumTest();
         loadWebhookSnapshot();
       });
+      byId('premium-test-btn')?.addEventListener('click', loadPremiumTest);
+      byId('webhook-snapshot-btn')?.addEventListener('click', loadWebhookSnapshot);
+      byId('webhook-feed-start')?.addEventListener('click', startFeed);
+      byId('webhook-feed-stop')?.addEventListener('click', stopFeed);
+      byId('webhook-feed-clear')?.addEventListener('click', clearFeed);
+      byId('ping-webhook')?.addEventListener('click', pingWebhook);
+
+      loadDebug();
+      loadPremiumTest();
+      loadWebhookSnapshot();
     })();
-  </script>`;
+  </script>
+  `;
 
-    return layout("Admin Debug Console", inner);
+    return layout("Webhook Debug", inner);
 }
 
 export default async function handler(req, res) {
@@ -374,12 +269,6 @@ export default async function handler(req, res) {
 
     const cookies = parseCookies(req);
     const sess = verifySession(cookies["admin_session"]);
-
-    if (req.method !== "GET") {
-        res.status(405).send("Method not allowed");
-        return;
-    }
-
     if (!sess) {
         res.status(302).setHeader("Location", "/api/admin").end();
         return;

@@ -1,6 +1,4 @@
 import { BusinessCentralClient } from "../../lib/planner-sync/bc-client.js";
-import { GraphClient } from "../../lib/planner-sync/graph-client.js";
-import { getGraphConfig, getPlannerConfig } from "../../lib/planner-sync/config.js";
 import {
     buildDisabledProjectSet,
     listProjectSyncSettings,
@@ -21,43 +19,6 @@ async function readJsonBody(req) {
     } catch {
         return null;
     }
-}
-
-function buildPlanTitle(projectNo, projectDescription) {
-    const cleaned = (projectDescription || "").trim();
-    return cleaned ? `${projectNo} - ${cleaned}` : projectNo;
-}
-
-async function resolvePlannerBaseUrl(graphClient) {
-    const envBase = (process.env.PLANNER_WEB_BASE || "").trim();
-    if (envBase) return envBase.replace(/\/+$/, "");
-    const envDomain = (process.env.PLANNER_TENANT_DOMAIN || "").trim();
-    if (envDomain) return `https://tasks.office.com/${envDomain}`;
-    try {
-        const domain = await graphClient.getDefaultDomain();
-        if (domain) return `https://tasks.office.com/${domain}`;
-    } catch (error) {
-        logger.warn("Failed to resolve Planner tenant domain", { error: error?.message || String(error) });
-    }
-    return "https://planner.cloud.microsoft";
-}
-
-function buildPlannerPlanUrl(planId, baseUrl, tenantId) {
-    if (!planId) return undefined;
-    const base = (baseUrl || "https://planner.cloud.microsoft").replace(/\/+$/, "");
-    if (base.includes("planner.cloud.microsoft")) {
-        const tid = tenantId ? `?tid=${encodeURIComponent(tenantId)}` : "";
-        return `${base}/webui/plan/${planId}/view/board${tid}`;
-    }
-    if (base.includes("planner.office.com")) {
-        const tid = tenantId ? `?tid=${encodeURIComponent(tenantId)}` : "";
-        return `${base}/plan/${planId}${tid}`;
-    }
-    return `${base}/Home/PlanViews/${planId}`;
-}
-
-function normalizeTitle(title) {
-    return (title || "").trim().toLowerCase();
 }
 
 function parseDateMs(value) {
@@ -103,7 +64,7 @@ async function setProjectSyncDisabled(projectNo, disabled, note) {
     await saveProjectSyncSettings(settings);
 }
 
-async function clearPlannerLinksForProject(bcClient, projectNo) {
+async function clearPremiumLinksForProject(bcClient, projectNo) {
     const escaped = projectNo.replace(/'/g, "''");
     const result = { total: 0, cleared: 0, skipped: 0, failed: 0 };
     let tasks = [];
@@ -115,9 +76,6 @@ async function clearPlannerLinksForProject(bcClient, projectNo) {
     }
     result.total = tasks.length;
     for (const task of tasks) {
-        if (!result.resolvedPlanId && task.plannerPlanId) {
-            result.resolvedPlanId = task.plannerPlanId;
-        }
         if (!task.plannerTaskId && !task.plannerPlanId && !task.plannerBucket) {
             result.skipped += 1;
             continue;
@@ -144,9 +102,6 @@ async function clearPlannerLinksForProject(bcClient, projectNo) {
 
 async function loadProjects() {
     const bcClient = new BusinessCentralClient();
-    const graphClient = new GraphClient();
-    const plannerConfig = getPlannerConfig();
-    const { tenantId } = getGraphConfig();
     const settings = await listProjectSyncSettings();
     const disabledProjects = buildDisabledProjectSet(settings);
 
@@ -154,28 +109,18 @@ async function loadProjects() {
 
     let tasks = [];
     try {
-        tasks = await bcClient.listProjectTasks("plannerPlanId ne ''");
+        tasks = await bcClient.listProjectTasks();
     } catch (error) {
-        logger.warn("Failed to load BC tasks for planner plan map", { error: error?.message || String(error) });
+        logger.warn("Failed to load BC tasks", { error: error?.message || String(error) });
     }
 
-    let plans = [];
-    try {
-        plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
-    } catch (error) {
-        logger.warn("Failed to list Planner plans", { error: error?.message || String(error) });
-    }
-
-    const baseUrl = await resolvePlannerBaseUrl(graphClient);
-    const planMap = new Map(plans.map((plan) => [plan.id, plan]));
-    const planByTitle = new Map(plans.map((plan) => [normalizeTitle(plan.title), plan]));
-    const projectPlanMap = new Map();
     const projectSyncMap = new Map();
+    const projectPremiumMap = new Map();
     for (const task of tasks) {
         const projectNo = (task.projectNo || "").trim();
-        if (!projectNo || !task.plannerPlanId) continue;
-        if (!projectPlanMap.has(projectNo)) {
-            projectPlanMap.set(projectNo, task.plannerPlanId);
+        if (!projectNo) continue;
+        if (task.plannerPlanId && !projectPremiumMap.has(projectNo)) {
+            projectPremiumMap.set(projectNo, task.plannerPlanId);
         }
         const syncMs = resolveTaskSyncMs(task);
         if (syncMs != null) {
@@ -190,28 +135,12 @@ async function loadProjects() {
         .map((project) => {
             const projectNo = (project.projectNo || "").trim();
             if (!projectNo) return null;
-            const planTitle = buildPlanTitle(projectNo, project.description);
-            let planId = projectPlanMap.get(projectNo);
-            let planLinked = Boolean(planId);
-            if (!planId) {
-                const planMatch = planByTitle.get(normalizeTitle(planTitle)) || planByTitle.get(normalizeTitle(projectNo));
-                if (planMatch?.id) {
-                    planId = planMatch.id;
-                    planLinked = false;
-                }
-            }
-            const plan = planId ? planMap.get(planId) : null;
-            const planUrl = buildPlannerPlanUrl(planId, baseUrl, tenantId);
             const lastSyncMs = projectSyncMap.get(projectNo) || null;
             return {
                 projectNo,
                 description: project.description || "",
                 status: project.status || "",
-                planId: planId || "",
-                planTitle: plan?.title || "",
-                planExists: Boolean(plan?.id),
-                planLinked,
-                planUrl,
+                premiumProjectId: projectPremiumMap.get(projectNo) || "",
                 syncDisabled: disabledProjects.has(normalizeProjectNo(projectNo)),
                 lastSyncAt: lastSyncMs ? new Date(lastSyncMs).toISOString() : "",
             };
@@ -219,17 +148,7 @@ async function loadProjects() {
         .filter(Boolean)
         .sort((a, b) => a.projectNo.localeCompare(b.projectNo, undefined, { numeric: true, sensitivity: "base" }));
 
-    const linkedPlanIds = new Set(rows.map((row) => row.planId).filter(Boolean));
-    const orphanPlans = plans
-        .filter((plan) => !linkedPlanIds.has(plan.id))
-        .map((plan) => ({
-            planId: plan.id,
-            title: plan.title || "",
-            planUrl: buildPlannerPlanUrl(plan.id, baseUrl, tenantId),
-        }))
-        .sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
-
-    return { projects: rows, orphanPlans, baseUrl };
+    return { projects: rows };
 }
 
 export default async function handler(req, res) {
@@ -240,7 +159,7 @@ export default async function handler(req, res) {
             res.status(200).json({ ok: true, ...payload });
             return;
         } catch (error) {
-            logger.error("Failed to load Planner projects", { error: error?.message || String(error) });
+            logger.error("Failed to load Premium projects", { error: error?.message || String(error) });
             res.status(500).json({ ok: false, error: error?.message || String(error) });
             return;
         }
@@ -261,34 +180,14 @@ export default async function handler(req, res) {
             body?.disabled === "1";
         const note = typeof body?.note === "string" ? body.note.trim() : "";
 
-        if (action === "deleteplan" || action === "delete-plan") {
+        if (action === "clear-links" || action === "clearlinks") {
             await setProjectSyncDisabled(projectNo, true, note);
             const bcClient = new BusinessCentralClient();
-            const graphClient = new GraphClient();
-            const clearedTasks = await clearPlannerLinksForProject(bcClient, projectNo);
+            const clearedTasks = await clearPremiumLinksForProject(bcClient, projectNo);
             if (clearedTasks.error) {
-                logger.warn("Failed to clear BC Planner links", { projectNo, error: clearedTasks.error });
+                logger.warn("Failed to clear BC Premium links", { projectNo, error: clearedTasks.error });
             }
-            let resolvedPlanId = typeof body?.planId === "string" ? body.planId.trim() : "";
-            if (!resolvedPlanId && clearedTasks.resolvedPlanId) {
-                resolvedPlanId = clearedTasks.resolvedPlanId;
-            }
-            let planDelete = { attempted: false };
-            if (resolvedPlanId) {
-                try {
-                    const ok = await graphClient.deletePlan(resolvedPlanId);
-                    planDelete = { attempted: true, ok, planId: resolvedPlanId };
-                } catch (error) {
-                    planDelete = {
-                        attempted: true,
-                        ok: false,
-                        planId: resolvedPlanId,
-                        error: error?.message || String(error),
-                    };
-                    logger.warn("Planner plan deletion failed", { projectNo, planId: resolvedPlanId, error: planDelete.error });
-                }
-            }
-            res.status(200).json({ ok: true, projectNo, disabled: true, clearedTasks, planDelete });
+            res.status(200).json({ ok: true, projectNo, disabled: true, clearedTasks });
             return;
         }
 

@@ -106,8 +106,7 @@ function envPresence(name) {
 
 async function buildDashboardData(req) {
     const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
-    const notificationUrlDefault =
-        process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL || `${origin}/api/webhooks/graph/planner`;
+    const notificationUrlDefault = process.env.DATAVERSE_NOTIFICATION_URL || `${origin}/api/webhooks/dataverse`;
     const bcNotificationUrlDefault = process.env.BC_WEBHOOK_NOTIFICATION_URL || `${origin}/api/webhooks/bc`;
 
     const endpoints = [
@@ -124,15 +123,13 @@ async function buildDashboardData(req) {
         "BC_COMPANY_ID",
         "BC_CLIENT_ID",
         "BC_CLIENT_SECRET",
-        "GRAPH_TENANT_ID",
-        "GRAPH_CLIENT_ID",
-        "GRAPH_CLIENT_SECRET",
-        "GRAPH_SUBSCRIPTION_CLIENT_STATE",
-        "PLANNER_GROUP_ID",
-        "SYNC_MODE",
+        "DATAVERSE_BASE_URL",
+        "DATAVERSE_TENANT_ID",
+        "DATAVERSE_CLIENT_ID",
+        "DATAVERSE_CLIENT_SECRET",
     ];
-    const plannerEnvMissing = plannerEnvRequired.filter((name) => !envPresence(name));
-    const plannerEnvOk = plannerEnvMissing.length === 0;
+    const premiumEnvMissing = plannerEnvRequired.filter((name) => !envPresence(name));
+    const premiumEnvOk = premiumEnvMissing.length === 0;
     const kvDiag = await kvDiagnostics();
     const submissions = await listSubmissions(500);
 
@@ -141,8 +138,8 @@ async function buildDashboardData(req) {
         notificationUrlDefault,
         bcNotificationUrlDefault,
         graphEnvOk,
-        plannerEnvOk,
-        plannerEnvMissing,
+        premiumEnvOk,
+        premiumEnvMissing,
         kvDiag,
         submissions,
         checks,
