@@ -329,6 +329,23 @@ export class GraphClient {
         return res.status === 204 || res.status === 202 || res.status === 200;
     }
 
+    async updatePlan(planId: string, payload: Record<string, unknown>, etag?: string) {
+        let planEtag = etag;
+        if (!planEtag) {
+            const plan = await this.getPlan(planId);
+            planEtag = plan?.["@odata.etag"] as string | undefined;
+        }
+        if (!planEtag) {
+            throw new Error("Planner plan update missing @odata.etag");
+        }
+        const res = await this.request(`/planner/plans/${planId}`, {
+            method: "PATCH",
+            headers: { "If-Match": planEtag },
+            body: JSON.stringify(payload),
+        });
+        return res;
+    }
+
     async getOrganizations() {
         const res = await this.request(`/organization`);
         const data = await readResponseJson<{ value: GraphOrganization[] }>(res);

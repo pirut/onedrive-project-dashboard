@@ -1057,7 +1057,32 @@ async function syncProjectTasks(
     planTitle: string
 ) {
     const { syncMode, allowDefaultPlanFallback } = getSyncConfig();
+    const plannerConfig = getPlannerConfig();
     const { planId, titlePrefix } = await resolvePlanForProject(graphClient, projectNo, tasks, planTitle);
+    if (syncMode === "perProjectPlan" && planId && planTitle) {
+        if (!plannerConfig.defaultPlanId || planId !== plannerConfig.defaultPlanId) {
+            try {
+                const plan = await graphClient.getPlan(planId);
+                const currentTitle = (plan?.title || "").trim();
+                const desiredTitle = planTitle.trim();
+                if (currentTitle && desiredTitle && currentTitle !== desiredTitle) {
+                    await graphClient.updatePlan(planId, { title: desiredTitle }, plan?.["@odata.etag"] as string | undefined);
+                    logger.info("Updated Planner plan title", {
+                        projectNo,
+                        planId,
+                        fromTitle: currentTitle,
+                        toTitle: desiredTitle,
+                    });
+                }
+            } catch (error) {
+                logger.warn("Failed to update Planner plan title", {
+                    projectNo,
+                    planId,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+    }
     const orderedTasks = [...tasks].sort((a, b) => {
         const aKey = (a.taskNo || "").toString();
         const bKey = (b.taskNo || "").toString();
