@@ -403,22 +403,21 @@ function normalizeProjectPlanKey(projectNo: string) {
 }
 
 function matchesProjectPlanTitle(title: string, projectNo: string) {
+    const normalizedTitle = (title || "").trim().toLowerCase();
     const key = normalizeProjectPlanKey(projectNo);
-    if (!key) return false;
-    const extracted = extractProjectNoFromPlanTitle(title);
-    if (!extracted) return false;
-    return extracted === key;
+    if (!normalizedTitle || !key) return false;
+    if (normalizedTitle === key || normalizedTitle.startsWith(`${key} -`)) return true;
+    if (!key.includes("-")) return false;
+    const spacedKey = key.replace(/-/g, " - ");
+    return normalizedTitle === spacedKey || normalizedTitle.startsWith(`${spacedKey} -`);
 }
 
 function extractProjectNoFromPlanTitle(title: string) {
     const trimmed = (title || "").trim();
     if (!trimmed) return null;
-    const match = trimmed.match(/^\s*(PR\d+)(?:\s*-\s*(\d+))?/i);
+    const match = trimmed.match(/^\s*(PR\d+(?:-\d+)?)\b/i);
     if (!match) return null;
-    const base = match[1];
-    const suffix = match[2];
-    const combined = suffix ? `${base}-${suffix}` : base;
-    return normalizeProjectPlanKey(combined);
+    return normalizeProjectPlanKey(match[1]);
 }
 
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
@@ -1734,14 +1733,11 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
                 });
             }
             if (plans) {
-                const planTitleIndex = new Map<string, string>();
-                const planProjectNoIndex = new Set<string>();
+                const planTitles = [];
                 for (const plan of plans || []) {
                     const title = (plan?.title || "").trim();
                     if (title) {
-                        planTitleIndex.set(title.toLowerCase(), plan.id);
-                        const key = extractProjectNoFromPlanTitle(title);
-                        if (key) planProjectNoIndex.add(key);
+                        planTitles.push(title);
                     }
                 }
                 for (const project of projects) {
@@ -1749,9 +1745,8 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
                     if (!projectNo) continue;
                     if (isProjectDisabled(disabledProjects, projectNo)) continue;
                     const planTitle = buildPlanTitle(projectNo, project.description);
-                    const normalizedTitle = planTitle.trim().toLowerCase();
-                    const normalizedProjectNo = normalizeProjectPlanKey(projectNo);
-                    if (planTitleIndex.has(normalizedTitle) || planProjectNoIndex.has(normalizedProjectNo)) continue;
+                    const hasPlan = planTitles.some((title) => matchesProjectPlanTitle(title, projectNo));
+                    if (hasPlan) continue;
                     missingProjects.push({ projectNo, planTitle });
                 }
                 if (missingProjects.length) {
