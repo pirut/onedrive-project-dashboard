@@ -7,7 +7,7 @@ export default async function handler(req, res) {
     const startTime = Date.now();
     const requestId = Math.random().toString(36).slice(2, 12);
 
-    if (req.method !== "POST") {
+    if (req.method !== "POST" && req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
         return;
     }

@@ -14,6 +14,19 @@ function buildExpectedResource(entitySet) {
     return `api/${publisher}/${group}/${version}/companies(${companyId})/${entitySet}`.replace(/^\/+/, "");
 }
 
+function matchesResource(resource, entitySet) {
+    const normalized = normalizeValue(resource);
+    if (!normalized) return false;
+    const expected = normalizeValue(buildExpectedResource(entitySet));
+    if (normalized === expected) return true;
+    const { companyId } = getBcConfig();
+    const entityLower = normalizeValue(entitySet);
+    const companyToken = normalizeValue(`companies(${companyId})/${entityLower}`);
+    if (companyToken && normalized.includes(companyToken)) return true;
+    if (entityLower && normalized.endsWith(`/${entityLower}`)) return true;
+    return false;
+}
+
 function resolveBaseUrl(req) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const host = req.headers["x-forwarded-host"] || req.headers.host;
@@ -99,13 +112,12 @@ export default async function handler(req, res) {
                     throw error;
                 }
 
-                const expectedResource = normalizeValue(buildExpectedResource(normalized));
                 const expectedNotification = normalizeValue(notificationUrl);
                 const list = await bcClient.listWebhookSubscriptions();
                 const existing = list.find((item) => {
                     const resource = normalizeValue(item?.resource);
                     const notify = normalizeValue(item?.notificationUrl);
-                    if (resource !== expectedResource) return false;
+                    if (!matchesResource(resource, normalized)) return false;
                     if (!notify) return true;
                     return notify === expectedNotification;
                 }) || (stored?.id ? stored : null);

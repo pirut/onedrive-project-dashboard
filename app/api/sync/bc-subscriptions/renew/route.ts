@@ -20,7 +20,7 @@ function buildExpirationDate() {
     return new Date(Date.now() + SUBSCRIPTION_TTL_HOURS * 60 * 60 * 1000).toISOString();
 }
 
-export async function POST(request: Request) {
+async function handle(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
@@ -138,4 +138,12 @@ export async function POST(request: Request) {
             headers: { "Content-Type": "application/json", "X-Request-ID": requestId },
         });
     }
+}
+
+export async function POST(request: Request) {
+    return handle(request);
+}
+
+export async function GET(request: Request) {
+    return handle(request);
 }

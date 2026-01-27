@@ -5,7 +5,7 @@ import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(request: Request) {
+async function handle(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
@@ -63,4 +63,12 @@ export async function POST(request: Request) {
     } finally {
         await releaseBcJobLock(lock);
     }
+}
+
+export async function POST(request: Request) {
+    return handle(request);
+}
+
+export async function GET(request: Request) {
+    return handle(request);
 }
