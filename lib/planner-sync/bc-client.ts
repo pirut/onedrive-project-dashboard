@@ -316,7 +316,7 @@ export class BusinessCentralClient {
                 notificationUrl: options.notificationUrl,
                 resource,
                 clientState: options.clientState,
-                expirationDateTime: options.expirationDateTime,
+                ...(options.expirationDateTime ? { expirationDateTime: options.expirationDateTime } : {}),
             }),
         });
         return readResponseJson<BcWebhookSubscription>(res);

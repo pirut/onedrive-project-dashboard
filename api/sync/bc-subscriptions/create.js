@@ -3,16 +3,11 @@ import { getBcSubscription, saveBcSubscription } from "../../../lib/planner-sync
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = ["projectTasks"];
-const SUBSCRIPTION_TTL_HOURS = 48;
 
 function resolveBaseUrl(req) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const host = req.headers["x-forwarded-host"] || req.headers.host;
     return `${proto}://${host}`;
-}
-
-function buildExpirationDate() {
-    return new Date(Date.now() + SUBSCRIPTION_TTL_HOURS * 60 * 60 * 1000).toISOString();
 }
 
 async function readJsonBody(req) {
@@ -48,7 +43,6 @@ export default async function handler(req, res) {
         }
 
         const clientState = (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined;
-        const expirationDateTime = buildExpirationDate();
         const bcClient = new BusinessCentralClient();
 
         const created = [];
@@ -70,21 +64,20 @@ export default async function handler(req, res) {
                 entitySet: normalized,
                 notificationUrl,
                 clientState,
-                expirationDateTime,
             });
 
             created.push({
                 entitySet: normalized,
                 id: subscription?.id,
                 resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime || expirationDateTime,
+                expirationDateTime: subscription?.expirationDateTime,
             });
 
             await saveBcSubscription(normalized, {
                 id: subscription?.id || "",
                 entitySet: normalized,
                 resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime || expirationDateTime,
+                expirationDateTime: subscription?.expirationDateTime,
                 createdAt: new Date().toISOString(),
                 notificationUrl,
                 clientState,

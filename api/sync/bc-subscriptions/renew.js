@@ -104,6 +104,18 @@ export default async function handler(req, res) {
                     notificationUrl: stored?.notificationUrl || process.env.BC_WEBHOOK_NOTIFICATION_URL || `${resolveBaseUrl(req)}/api/webhooks/bc`,
                     clientState: stored?.clientState || (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined,
                 });
+                if (stored?.id && stored.id !== subscription?.id) {
+                    try {
+                        await bcClient.deleteWebhookSubscription(stored.id);
+                    } catch (error) {
+                        logger.warn("Failed to delete previous BC subscription after recreate", {
+                            requestId,
+                            entitySet: normalized,
+                            subscriptionId: stored.id,
+                            error: error?.message || String(error),
+                        });
+                    }
+                }
                 created.push(normalized);
             } catch (error) {
                 failed.push({ entitySet: normalized, error: error?.message || String(error) });

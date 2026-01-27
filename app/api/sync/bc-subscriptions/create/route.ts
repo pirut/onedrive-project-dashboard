@@ -5,17 +5,12 @@ import { logger } from "../../../../../lib/planner-sync/logger";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_ENTITY_SETS = ["projectTasks"];
-const SUBSCRIPTION_TTL_HOURS = 48;
 
 function resolveBaseUrl(request: Request) {
     const url = new URL(request.url);
     const proto = request.headers.get("x-forwarded-proto") || url.protocol.replace(":", "");
     const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || url.host;
     return `${proto}://${host}`;
-}
-
-function buildExpirationDate() {
-    return new Date(Date.now() + SUBSCRIPTION_TTL_HOURS * 60 * 60 * 1000).toISOString();
 }
 
 export async function POST(request: Request) {
@@ -51,7 +46,6 @@ export async function POST(request: Request) {
         }
 
         const clientState = (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined;
-        const expirationDateTime = buildExpirationDate();
         const bcClient = new BusinessCentralClient();
 
         const created: Array<{ entitySet: string; id?: string; resource?: string; expirationDateTime?: string }> = [];
@@ -73,21 +67,20 @@ export async function POST(request: Request) {
                 entitySet: normalized,
                 notificationUrl,
                 clientState,
-                expirationDateTime,
             });
 
             created.push({
                 entitySet: normalized,
                 id: subscription?.id,
                 resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime || expirationDateTime,
+                expirationDateTime: subscription?.expirationDateTime,
             });
 
             await saveBcSubscription(normalized, {
                 id: subscription?.id || "",
                 entitySet: normalized,
                 resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime || expirationDateTime,
+                expirationDateTime: subscription?.expirationDateTime,
                 createdAt: new Date().toISOString(),
                 notificationUrl,
                 clientState,
