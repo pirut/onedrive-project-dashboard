@@ -20,6 +20,10 @@
         {
             "path": "/api/sync/poll-cron?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
             "schedule": "*/15 * * * *"
+        },
+        {
+            "path": "/api/sync/plan-maintenance-cron?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
+            "schedule": "0 6 * * *"
         }
     ],
     "headers": [

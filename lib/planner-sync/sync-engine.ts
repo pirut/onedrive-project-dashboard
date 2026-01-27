@@ -278,7 +278,7 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
     const plannerEtag = typeof plannerTask?.["@odata.etag"] === "string" ? plannerTask["@odata.etag"] : null;
     const lastPlannerEtag = typeof bcTask.lastPlannerEtag === "string" ? bcTask.lastPlannerEtag : null;
     const plannerEtagChanged = plannerEtag && lastPlannerEtag ? plannerEtag !== lastPlannerEtag : null;
-    const { bcModifiedGraceMs } = getSyncConfig();
+    const { bcModifiedGraceMs, preferBc } = getSyncConfig();
     const bcGrace = Number.isFinite(bcModifiedGraceMs) ? bcModifiedGraceMs : 0;
     const bcChangedSinceSync = lastSyncAt != null
         ? bcModified.ms != null
@@ -301,7 +301,7 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
         const plannerChanged = plannerChangedSinceSync === true;
         if (bcChanged && plannerChanged) {
             return {
-                decision: "planner",
+                decision: preferBc ? "bc" : "planner",
                 lastSyncAt,
                 bcModified,
                 plannerModified,
@@ -334,6 +334,18 @@ function resolveSyncDecision(bcTask: BcProjectTask, plannerTask: PlannerTask | n
         }
         return {
             decision: "none",
+            lastSyncAt,
+            bcModified,
+            plannerModified,
+            bcChangedSinceSync,
+            plannerChangedSinceSync,
+            plannerEtagChanged,
+        };
+    }
+
+    if (plannerModified.ms != null && bcModified.ms != null) {
+        return {
+            decision: bcModified.ms >= plannerModified.ms ? "bc" : "planner",
             lastSyncAt,
             bcModified,
             plannerModified,
@@ -1381,6 +1393,21 @@ function buildPlannerTaskIndex(tasks: BcProjectTask[]) {
     return map;
 }
 
+function needsPlannerTaskHydration(task: PlannerTaskDelta | PlannerTask, bcTask: BcProjectTask) {
+    if (!task) return true;
+    if (task["@removed"]) return false;
+    if (!task["@odata.etag"] && !task.lastModifiedDateTime) return true;
+    if (typeof task.percentComplete === "undefined") return true;
+    if (typeof task.startDateTime === "undefined") return true;
+    if (typeof task.dueDateTime === "undefined") return true;
+    if (typeof task.bucketId === "undefined") return true;
+    if (typeof task.assignments === "undefined") {
+        const assignee = resolveAssigneeIdentity(bcTask);
+        if (assignee) return true;
+    }
+    return false;
+}
+
 async function clearPlannerLink(bcClient: BusinessCentralClient, task: BcProjectTask) {
     if (!task.systemId) {
         logger.warn("Planner task removed but systemId missing; skipping", {
@@ -1579,7 +1606,23 @@ async function runPlannerDeltaSync(options: { persist?: boolean } = {}) {
                 continue;
             }
             stats.updated += 1;
-            const plannerTask = item as PlannerTask;
+            let plannerTask = item as PlannerTask;
+            if (needsPlannerTaskHydration(plannerTask, bcTask)) {
+                try {
+                    plannerTask = await graphClient.getTask(item.id);
+                } catch (error) {
+                    if (isNotFound(error)) {
+                        const cleared = await clearPlannerLink(bcClient, bcTask);
+                        if (cleared) stats.cleared += 1;
+                    }
+                    logger.warn("Planner task hydration failed", {
+                        taskId: item.id,
+                        error: (error as Error)?.message,
+                    });
+                    continue;
+                }
+            }
+            if (!plannerTask) continue;
             if (bcTask.lastPlannerEtag && plannerTask["@odata.etag"] && bcTask.lastPlannerEtag === plannerTask["@odata.etag"]) {
                 continue;
             }

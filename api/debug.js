@@ -402,6 +402,7 @@ export default async function handler(req, res) {
         "POST /api/sync/run-bc-to-planner": "BC <-> Planner sync",
         "GET /api/sync/archived-plans": "List archived Planner plans",
         "POST /api/sync/plan-maintenance": "Planner plan title sync + dedupe",
+        "GET /api/sync/plan-maintenance-cron": "Planner plan title sync + dedupe (cron)",
         "GET /api/sync/poll-cron": "BC <-> Planner sync (cron)",
         "GET /api/sync/projects": "List Planner project sync state",
         "POST /api/sync/projects": "Toggle Planner project sync / delete plan",
