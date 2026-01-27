@@ -6,19 +6,19 @@
     },
     "crons": [
         {
-            "path": "/api/sync-folders-cron",
+            "path": "/api/sync-folders-cron?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
             "schedule": "0 9 * * *"
         },
         {
-            "path": "/api/sync/bc-subscriptions/renew",
+            "path": "/api/sync/bc-subscriptions/renew?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
             "schedule": "0 7 * * *"
         },
         {
-            "path": "/api/sync/bc-jobs/process",
+            "path": "/api/sync/bc-jobs/process?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
             "schedule": "*/2 * * * *"
         },
         {
-            "path": "/api/sync/poll-cron",
+            "path": "/api/sync/poll-cron?cronSecret=fKMgGeYzUjZGgqVnaVCxGIg2W1lOEG3b",
             "schedule": "*/15 * * * *"
         }
     ],
