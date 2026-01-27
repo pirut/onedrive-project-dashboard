@@ -322,6 +322,13 @@ export class BusinessCentralClient {
         return readResponseJson<BcWebhookSubscription>(res);
     }
 
+    async listWebhookSubscriptions() {
+        const url = `${this.apiRootUrl()}/subscriptions`;
+        const res = await this.request(url);
+        const data = await readResponseJson<{ value?: BcWebhookSubscription[] }>(res);
+        return Array.isArray(data?.value) ? data?.value || [] : [];
+    }
+
     async renewWebhookSubscription(subscriptionId: string, expirationDateTime: string) {
         const trimmed = (subscriptionId || "").trim();
         if (!trimmed) throw new Error("BC webhook subscription id is required");

@@ -1,8 +1,18 @@
 import { BusinessCentralClient } from "../../../lib/planner-sync/bc-client.js";
 import { getBcSubscription, saveBcSubscription } from "../../../lib/planner-sync/bc-webhook-store.js";
+import { getBcConfig } from "../../../lib/planner-sync/config.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = ["projectTasks"];
+
+function normalizeValue(value) {
+    return (value || "").trim().replace(/^\/+/, "").toLowerCase();
+}
+
+function buildExpectedResource(entitySet) {
+    const { publisher, group, version, companyId } = getBcConfig();
+    return `api/${publisher}/${group}/${version}/companies(${companyId})/${entitySet}`.replace(/^\/+/, "");
+}
 
 function resolveBaseUrl(req) {
     const proto = req.headers["x-forwarded-proto"] || "http";
@@ -60,28 +70,65 @@ export default async function handler(req, res) {
                 }
             }
 
-            const subscription = await bcClient.createWebhookSubscription({
-                entitySet: normalized,
-                notificationUrl,
-                clientState,
-            });
+            try {
+                const subscription = await bcClient.createWebhookSubscription({
+                    entitySet: normalized,
+                    notificationUrl,
+                    clientState,
+                });
 
-            created.push({
-                entitySet: normalized,
-                id: subscription?.id,
-                resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime,
-            });
+                created.push({
+                    entitySet: normalized,
+                    id: subscription?.id,
+                    resource: subscription?.resource,
+                    expirationDateTime: subscription?.expirationDateTime,
+                });
 
-            await saveBcSubscription(normalized, {
-                id: subscription?.id || "",
-                entitySet: normalized,
-                resource: subscription?.resource,
-                expirationDateTime: subscription?.expirationDateTime,
-                createdAt: new Date().toISOString(),
-                notificationUrl,
-                clientState,
-            });
+                await saveBcSubscription(normalized, {
+                    id: subscription?.id || "",
+                    entitySet: normalized,
+                    resource: subscription?.resource,
+                    expirationDateTime: subscription?.expirationDateTime,
+                    createdAt: new Date().toISOString(),
+                    notificationUrl,
+                    clientState,
+                });
+            } catch (error) {
+                const errorMessage = error?.message || String(error);
+                if (!/subscription already exist/i.test(errorMessage)) {
+                    throw error;
+                }
+
+                const expectedResource = normalizeValue(buildExpectedResource(normalized));
+                const expectedNotification = normalizeValue(notificationUrl);
+                const existing = (await bcClient.listWebhookSubscriptions()).find((item) => {
+                    const resource = normalizeValue(item?.resource);
+                    const notify = normalizeValue(item?.notificationUrl);
+                    return resource === expectedResource && notify === expectedNotification;
+                });
+
+                if (!existing?.id) {
+                    throw error;
+                }
+
+                await saveBcSubscription(normalized, {
+                    id: existing.id,
+                    entitySet: normalized,
+                    resource: existing.resource,
+                    expirationDateTime: existing.expirationDateTime,
+                    createdAt: new Date().toISOString(),
+                    notificationUrl,
+                    clientState,
+                });
+
+                created.push({
+                    entitySet: normalized,
+                    id: existing.id,
+                    resource: existing.resource,
+                    expirationDateTime: existing.expirationDateTime,
+                    existing: true,
+                });
+            }
         }
 
         const duration = Date.now() - startTime;
