@@ -182,6 +182,7 @@ function envPresence(name) {
 async function dashboardView(req) {
     const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host}`;
     const notificationUrlDefault = process.env.GRAPH_NOTIFICATION_URL || process.env.PLANNER_NOTIFICATION_URL || `${origin}/api/webhooks/graph/planner`;
+    const bcNotificationUrlDefault = process.env.BC_WEBHOOK_NOTIFICATION_URL || `${origin}/api/webhooks/bc`;
 
     // Gather health info
     const endpoints = [
@@ -406,6 +407,79 @@ async function dashboardView(req) {
       </div>
       <div id="planner-sync-log-status" class="small muted" style="margin-top:6px">Idle.</div>
       <pre id="planner-sync-log-output" class="log-block" style="display:none;max-height:360px;overflow:auto"></pre>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary>Webhook Debugging</summary>
+    <div class="panel-body">
+      <div class="grid">
+        <div class="panel">
+          <div style="font-weight:600">Planner Webhooks (Graph → BC)</div>
+          <div class="small muted" style="margin-top:4px">Graph subscriptions + Planner webhook logs</div>
+          <div class="row">
+            <label for="planner-notify-url">Notification URL</label>
+            <input id="planner-notify-url" value="${htmlEscape(notificationUrlDefault)}" />
+          </div>
+          <div class="row">
+            <label for="planner-plan-ids">Plan IDs (comma)</label>
+            <input id="planner-plan-ids" placeholder="planId1, planId2" />
+          </div>
+          <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" id="planner-subscriptions-list" style="background:#1f2a44;color:#e6ecff">List Graph subscriptions</button>
+            <button type="button" id="planner-create-subs">Create subscriptions</button>
+            <button type="button" id="planner-renew-subs" style="background:#1f2a44;color:#e6ecff">Renew subscriptions</button>
+            <button type="button" id="planner-test-webhook" style="background:#0f8b4c;color:#fff">Validate webhook</button>
+            <button type="button" id="planner-webhook-log" style="background:#1f2a44;color:#e6ecff">Load webhook log</button>
+            <button type="button" id="planner-webhook-stream" style="background:#0f8b4c;color:#fff">Start live feed</button>
+            <button type="button" id="planner-webhook-stop" style="background:#1f2a44;color:#e6ecff">Stop feed</button>
+            <button type="button" id="planner-webhook-clear" style="background:#1f2a44;color:#e6ecff">Clear feed</button>
+          </div>
+          <div class="small muted">Webhook log shows recent Graph notifications (if any).</div>
+          <pre id="planner-webhook-output" class="log-block" style="display:none;max-height:220px;overflow:auto"></pre>
+          <pre id="planner-webhook-feed" class="log-block" style="display:none;max-height:220px;overflow:auto;margin-top:8px"></pre>
+        </div>
+
+        <div class="panel">
+          <div style="font-weight:600">Business Central Webhooks (BC → Planner)</div>
+          <div class="small muted" style="margin-top:4px">BC subscriptions + enqueue + process</div>
+          <div class="row">
+            <label for="bc-notify-url">Notification URL</label>
+            <input id="bc-notify-url" value="${htmlEscape(bcNotificationUrlDefault)}" />
+          </div>
+          <div class="row">
+            <label for="bc-entity-sets">Entity sets (comma)</label>
+            <input id="bc-entity-sets" value="projectTasks" />
+          </div>
+          <div class="row">
+            <label for="bc-cron-secret">Cron secret</label>
+            <input id="bc-cron-secret" type="password" placeholder="CRON_SECRET" />
+          </div>
+          <div class="row">
+            <label for="bc-resource">Webhook resource (optional)</label>
+            <input id="bc-resource" placeholder="projectTasks(systemId) or full resource path" />
+          </div>
+          <div class="row">
+            <label for="bc-system-id">System ID (for test)</label>
+            <input id="bc-system-id" placeholder="c23f4835-84fb-f011-8405-7ced8ded633e" />
+          </div>
+          <div class="row">
+            <label for="bc-change-type">Change type</label>
+            <input id="bc-change-type" value="updated" />
+          </div>
+          <div class="row" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" id="bc-subs-list" style="background:#1f2a44;color:#e6ecff">List BC subscriptions</button>
+            <button type="button" id="bc-subs-create">Create subscription</button>
+            <button type="button" id="bc-subs-renew" style="background:#1f2a44;color:#e6ecff">Renew subscription</button>
+            <button type="button" id="bc-subs-delete" style="background:#ef4444;color:#fff">Delete subscription</button>
+            <button type="button" id="bc-webhook-validate" style="background:#0f8b4c;color:#fff">Validate webhook</button>
+            <button type="button" id="bc-webhook-test" style="background:#2b61d1;color:#fff">Send test webhook</button>
+            <button type="button" id="bc-jobs-process" style="background:#1f2a44;color:#e6ecff">Process BC jobs</button>
+          </div>
+          <div id="bc-webhook-status" class="small muted">Idle.</div>
+          <pre id="bc-webhook-output" class="log-block" style="display:none;max-height:220px;overflow:auto"></pre>
+        </div>
+      </div>
     </div>
   </details>
 
