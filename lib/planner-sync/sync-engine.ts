@@ -403,17 +403,22 @@ function normalizeProjectPlanKey(projectNo: string) {
 }
 
 function matchesProjectPlanTitle(title: string, projectNo: string) {
-    const normalizedTitle = (title || "").trim().toLowerCase();
     const key = normalizeProjectPlanKey(projectNo);
-    if (!normalizedTitle || !key) return false;
-    return normalizedTitle === key || normalizedTitle.startsWith(`${key} -`);
+    if (!key) return false;
+    const extracted = extractProjectNoFromPlanTitle(title);
+    if (!extracted) return false;
+    return extracted === key;
 }
 
 function extractProjectNoFromPlanTitle(title: string) {
     const trimmed = (title || "").trim();
     if (!trimmed) return null;
-    const prefix = trimmed.split(" - ")[0]?.trim();
-    return normalizeProjectPlanKey(prefix);
+    const match = trimmed.match(/^\s*(PR\d+)(?:\s*-\s*(\d+))?/i);
+    if (!match) return null;
+    const base = match[1];
+    const suffix = match[2];
+    const combined = suffix ? `${base}-${suffix}` : base;
+    return normalizeProjectPlanKey(combined);
 }
 
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
