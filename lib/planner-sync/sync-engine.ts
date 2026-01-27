@@ -1,4 +1,4 @@
-import { BusinessCentralClient, BcProjectTask } from "./bc-client";
+import { BusinessCentralClient, BcProject, BcProjectTask } from "./bc-client";
 import { GraphClient, GraphUser, PlannerPlan, PlannerTask, PlannerTaskDelta, PlannerTaskDetails } from "./graph-client";
 import { getBcConfig, getGraphConfig, getPlannerConfig, getSyncConfig } from "./config";
 import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "./bc-change-store";
@@ -1934,6 +1934,168 @@ export async function runSmartPollingSync(options: { dryRun?: boolean } = {}) {
         planner: { processed: plannerProcessed, affectedProjects: plannerAffectedProjectNos.size, mode: plannerMode },
         syncedProjects: projectsToSync,
     };
+}
+
+export async function syncPlannerPlanTitlesAndDedupe(options: { projectNo?: string; dryRun?: boolean } = {}) {
+    const { projectNo, dryRun = false } = options;
+    const { syncMode } = getSyncConfig();
+    if (syncMode !== "perProjectPlan") {
+        logger.info("Planner plan maintenance skipped; sync mode not perProjectPlan", { syncMode });
+        return { ok: false, skipped: true, reason: "syncMode not perProjectPlan", syncMode };
+    }
+
+    const plannerConfig = getPlannerConfig();
+    if (!plannerConfig.groupId) {
+        throw new Error("PLANNER_GROUP_ID is required to maintain planner plans");
+    }
+
+    const bcClient = new BusinessCentralClient();
+    const graphClient = new GraphClient();
+    const normalizedProjectNo = projectNo ? normalizeProjectNo(projectNo) : "";
+    const escapedProjectNo = projectNo ? projectNo.replace(/'/g, "''") : "";
+
+    let projects: BcProject[] = [];
+    try {
+        projects = await bcClient.listProjects(
+            escapedProjectNo ? `projectNo eq '${escapedProjectNo}'` : undefined
+        );
+    } catch (error) {
+        logger.warn("Failed to load BC projects for plan maintenance", { error: (error as Error)?.message });
+        throw error;
+    }
+
+    const projectMap = new Map<string, { projectNo: string; description?: string | null }>();
+    for (const project of projects) {
+        const projNo = (project.projectNo || "").trim();
+        if (!projNo) continue;
+        const key = normalizeProjectNo(projNo);
+        if (normalizedProjectNo && key !== normalizedProjectNo) continue;
+        projectMap.set(key, { projectNo: projNo, description: project.description });
+    }
+
+    let plans: PlannerPlan[] = [];
+    try {
+        plans = await graphClient.listPlansForGroup(plannerConfig.groupId);
+    } catch (error) {
+        logger.warn("Failed to list Planner plans for maintenance", { error: (error as Error)?.message });
+        throw error;
+    }
+
+    const planGroups = new Map<string, PlannerPlan[]>();
+    for (const plan of plans) {
+        const key = extractProjectNoFromPlanTitle(plan.title || "");
+        if (!key) continue;
+        if (normalizedProjectNo && key !== normalizedProjectNo) continue;
+        const group = planGroups.get(key) || [];
+        group.push(plan);
+        planGroups.set(key, group);
+    }
+
+    const summary = {
+        ok: true,
+        dryRun,
+        projectNo: projectNo || null,
+        plansScanned: plans.length,
+        groups: planGroups.size,
+        keptPlans: 0,
+        deletedPlans: 0,
+        updatedTitles: 0,
+        skippedNoProject: 0,
+        skippedNoPlan: 0,
+        skippedDefaultPlan: 0,
+        failedDeletes: 0,
+        failedUpdates: 0,
+    };
+
+    for (const key of projectMap.keys()) {
+        if (!planGroups.has(key)) summary.skippedNoPlan += 1;
+    }
+
+    for (const [projectKey, groupPlans] of planGroups) {
+        const project = projectMap.get(projectKey);
+        if (!project) {
+            summary.skippedNoProject += 1;
+            continue;
+        }
+
+        const desiredTitle = buildPlanTitle(project.projectNo, project.description);
+        const sorted = [...groupPlans].sort((a, b) => {
+            const aCreated = Date.parse(String(a.createdDateTime || ""));
+            const bCreated = Date.parse(String(b.createdDateTime || ""));
+            if (Number.isFinite(aCreated) && Number.isFinite(bCreated) && aCreated !== bCreated) {
+                return aCreated - bCreated;
+            }
+            const aTitle = (a.title || "").trim().toLowerCase();
+            const bTitle = (b.title || "").trim().toLowerCase();
+            return aTitle.localeCompare(bTitle);
+        });
+
+        let keep = sorted[0];
+        if (plannerConfig.defaultPlanId) {
+            const defaultPlan = sorted.find((plan) => plan.id === plannerConfig.defaultPlanId);
+            if (defaultPlan) keep = defaultPlan;
+        }
+
+        summary.keptPlans += 1;
+
+        for (const plan of sorted) {
+            if (plan.id === keep.id) continue;
+            if (plannerConfig.defaultPlanId && plan.id === plannerConfig.defaultPlanId) {
+                summary.skippedDefaultPlan += 1;
+                continue;
+            }
+            try {
+                if (!dryRun) {
+                    await graphClient.deletePlan(plan.id);
+                }
+                summary.deletedPlans += 1;
+                logger.info("Removed duplicate Planner plan", {
+                    projectNo: project.projectNo,
+                    planId: plan.id,
+                    planTitle: plan.title,
+                    dryRun,
+                });
+            } catch (error) {
+                summary.failedDeletes += 1;
+                logger.warn("Failed to remove duplicate Planner plan", {
+                    projectNo: project.projectNo,
+                    planId: plan.id,
+                    planTitle: plan.title,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+
+        const normalizedKeepTitle = (keep.title || "").trim();
+        if (desiredTitle && normalizedKeepTitle !== desiredTitle) {
+            if (plannerConfig.defaultPlanId && keep.id === plannerConfig.defaultPlanId) {
+                summary.skippedDefaultPlan += 1;
+            } else {
+                try {
+                    if (!dryRun) {
+                        await graphClient.updatePlan(keep.id, { title: desiredTitle });
+                    }
+                    summary.updatedTitles += 1;
+                    logger.info("Updated Planner plan title", {
+                        projectNo: project.projectNo,
+                        planId: keep.id,
+                        fromTitle: keep.title,
+                        toTitle: desiredTitle,
+                        dryRun,
+                    });
+                } catch (error) {
+                    summary.failedUpdates += 1;
+                    logger.warn("Failed to update Planner plan title", {
+                        projectNo: project.projectNo,
+                        planId: keep.id,
+                        error: (error as Error)?.message,
+                    });
+                }
+            }
+        }
+    }
+
+    return summary;
 }
 
 export async function runPollingSync() {

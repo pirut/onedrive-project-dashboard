@@ -399,6 +399,7 @@ export default async function handler(req, res) {
         "GET /api/health": "Base health check",
         "GET /api/debug": "Admin debug info",
         "POST /api/sync/run-bc-to-planner": "BC <-> Planner sync",
+        "POST /api/sync/plan-maintenance": "Planner plan title sync + dedupe",
         "GET /api/sync/poll-cron": "BC <-> Planner sync (cron)",
         "GET /api/sync/projects": "List Planner project sync state",
         "POST /api/sync/projects": "Toggle Planner project sync / delete plan",
