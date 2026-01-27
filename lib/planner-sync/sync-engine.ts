@@ -426,6 +426,11 @@ function isPlanArchived(plan: PlannerPlan | null | undefined) {
     return raw.isArchived === true || raw.archived === true;
 }
 
+function isArchivedEntityError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    return /ArchivedEntityCanNotBeUpdated/i.test(message) || /archived entity/i.test(message);
+}
+
 function buildPlannerTitle(task: BcProjectTask, prefix: string | null) {
     const description = (task.description || "").trim();
     const taskNo = (task.taskNo || "").trim();
@@ -1081,11 +1086,15 @@ async function syncProjectTasks(
                     });
                 }
             } catch (error) {
-                logger.warn("Failed to update Planner plan title", {
-                    projectNo,
-                    planId,
-                    error: (error as Error)?.message,
-                });
+                if (isArchivedEntityError(error)) {
+                    logger.info("Skipping archived Planner plan title update", { projectNo, planId });
+                } else {
+                    logger.warn("Failed to update Planner plan title", {
+                        projectNo,
+                        planId,
+                        error: (error as Error)?.message,
+                    });
+                }
             }
         }
     }
@@ -2125,12 +2134,23 @@ export async function syncPlannerPlanTitlesAndDedupe(options: { projectNo?: stri
                         dryRun,
                     });
                 } catch (error) {
-                    summary.failedUpdates += 1;
-                    logger.warn("Failed to update Planner plan title", {
-                        projectNo: project.projectNo,
-                        planId: keep.id,
-                        error: (error as Error)?.message,
-                    });
+                    if (isArchivedEntityError(error)) {
+                        summary.skippedArchived += 1;
+                        logger.info("Skipping archived Planner plan title update", {
+                            projectNo: project.projectNo,
+                            planId: keep.id,
+                            fromTitle: keep.title,
+                            toTitle: desiredTitle,
+                            dryRun,
+                        });
+                    } else {
+                        summary.failedUpdates += 1;
+                        logger.warn("Failed to update Planner plan title", {
+                            projectNo: project.projectNo,
+                            planId: keep.id,
+                            error: (error as Error)?.message,
+                        });
+                    }
                 }
             }
         }

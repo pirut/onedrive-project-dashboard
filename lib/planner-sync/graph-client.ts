@@ -223,6 +223,8 @@ export class GraphClient {
             const errorCode = (errorJson as { error?: { code?: string; message?: string } })?.error?.code;
             const errorMessage = (errorJson as { error?: { code?: string; message?: string } })?.error?.message;
             const isDeltaCookie = res.status === 410 && (errorCode === "UnknownCookie" || /sync point cookie/i.test(errorMessage || ""));
+            const isArchivedEntity =
+                errorCode === "ArchivedEntityCanNotBeUpdated" || /archived entity/i.test(errorMessage || "");
             const logMeta = {
                 method,
                 url: this.sanitizeUrl(url),
@@ -231,6 +233,8 @@ export class GraphClient {
                 errorJson: errorJson || undefined,
             };
             if (isDeltaCookie) {
+                logger.info("Graph request failed", logMeta);
+            } else if (isArchivedEntity) {
                 logger.info("Graph request failed", logMeta);
             } else {
                 logger.error("Graph request failed", logMeta);
