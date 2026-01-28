@@ -527,8 +527,10 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
 
 async function resolveBcTaskFromDataverse(
     bcClient: BusinessCentralClient,
+    dataverse: DataverseClient,
     dataverseTask: DataverseEntity,
-    mapping: ReturnType<typeof getDataverseMappingConfig>
+    mapping: ReturnType<typeof getDataverseMappingConfig>,
+    projectCache: Map<string, string | null>
 ) {
     const taskId = dataverseTask[mapping.taskIdField];
     if (typeof taskId === "string" && taskId.trim()) {
@@ -537,9 +539,40 @@ async function resolveBcTaskFromDataverse(
     }
 
     const taskNo = mapping.taskBcNoField ? dataverseTask[mapping.taskBcNoField] : null;
-    const projectNo = mapping.projectBcNoField ? dataverseTask[mapping.projectBcNoField] : null;
     const taskNoValue = typeof taskNo === "string" && taskNo.trim() ? taskNo.trim() : null;
-    const projectNoValue = typeof projectNo === "string" && projectNo.trim() ? projectNo.trim() : null;
+    let projectNoValue: string | null = null;
+
+    if (mapping.projectBcNoField) {
+        const directProjectNo = dataverseTask[mapping.projectBcNoField];
+        if (typeof directProjectNo === "string" && directProjectNo.trim()) {
+            projectNoValue = directProjectNo.trim();
+        }
+    }
+
+    if (!projectNoValue && mapping.projectBcNoField) {
+        const projectIdRaw = dataverseTask[mapping.taskProjectIdField];
+        const projectId = typeof projectIdRaw === "string" ? projectIdRaw.trim() : "";
+        if (projectId) {
+            if (projectCache.has(projectId)) {
+                projectNoValue = projectCache.get(projectId) || null;
+            } else {
+                try {
+                    const project = await dataverse.getById<DataverseEntity>(mapping.projectEntitySet, projectId, [
+                        mapping.projectBcNoField,
+                    ]);
+                    const projectNo = project?.[mapping.projectBcNoField];
+                    projectNoValue = typeof projectNo === "string" && projectNo.trim() ? projectNo.trim() : null;
+                } catch (error) {
+                    logger.warn("Dataverse project lookup failed", {
+                        projectId,
+                        error: (error as Error)?.message,
+                    });
+                    projectNoValue = null;
+                }
+                projectCache.set(projectId, projectNoValue);
+            }
+        }
+    }
 
     if (taskNoValue && projectNoValue) {
         return bcClient.findProjectTaskByProjectAndTaskNo(projectNoValue, taskNoValue);
@@ -564,7 +597,6 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
         mapping.taskStartField,
         mapping.taskFinishField,
         mapping.taskBcNoField,
-        mapping.projectBcNoField,
         mapping.taskProjectIdField,
         mapping.taskModifiedField,
     ].filter(Boolean) as string[];
@@ -585,6 +617,8 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
         errors: 0,
         deltaLinkSaved: false,
     };
+
+    const projectCache = new Map<string, string | null>();
 
     for (const item of value) {
         const removed = item["@removed"] as { reason?: string } | undefined;
@@ -623,7 +657,7 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
             continue;
         }
 
-        const bcTask = await resolveBcTaskFromDataverse(bcClient, item, mapping);
+        const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
         if (!bcTask) {
             summary.skipped += 1;
             continue;
