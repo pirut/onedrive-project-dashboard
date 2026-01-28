@@ -26,6 +26,11 @@ function formatODataGuid(value: string) {
     return `guid'${trimmed}'`;
 }
 
+function isGuid(value: string) {
+    const trimmed = value.trim().replace(/^\{/, "").replace(/\}$/, "");
+    return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(trimmed);
+}
+
 function parseTaskNumber(taskNo?: string | number | null) {
     const raw = String(taskNo || "");
     const match = raw.match(/\d+/);
@@ -473,6 +478,14 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
         const currentSection = { name: null as string | null };
 
         let projectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
+        if (projectId && !isGuid(projectId)) {
+            logger.warn("Ignoring non-GUID plannerPlanId; will resolve project by BC data", {
+                requestId,
+                projectNo: projNo,
+                projectId,
+            });
+            projectId = "";
+        }
         if (projectId) {
             try {
                 await dataverse.getById(mapping.projectEntitySet, projectId, [mapping.projectIdField]);
