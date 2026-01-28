@@ -366,6 +366,14 @@ async function syncTaskToDataverse(
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
     const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
     let taskId = existingId || "";
+    if (taskId && !isGuid(taskId)) {
+        logger.warn("Ignoring non-GUID plannerTaskId; will resolve by BC keys", {
+            projectNo: task.projectNo,
+            taskNo: task.taskNo,
+            taskId,
+        });
+        taskId = "";
+    }
 
     let existingTask: DataverseEntity | null = null;
     if (!taskId && task.taskNo) {
