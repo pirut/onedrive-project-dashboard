@@ -1,5 +1,9 @@
 import { appendPlannerLog } from "./planner-log";
 
+if (!process.noDeprecation) {
+    process.noDeprecation = true;
+}
+
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogMeta = Record<string, unknown>;

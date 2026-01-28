@@ -33,6 +33,7 @@ export function getPremiumSyncConfig() {
         maxProjectsPerRun: Math.max(0, Math.floor(readNumberEnv("SYNC_MAX_PROJECTS_PER_RUN", 0))),
         pollPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_PAGE_SIZE", 200))),
         pollMaxPages: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_MAX_PAGES", 10))),
+        useScheduleApi: readBoolEnv("DATAVERSE_USE_SCHEDULE_API", true),
     };
 }
 

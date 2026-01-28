@@ -127,6 +127,43 @@ export class DataverseClient {
         return res;
     }
 
+    async executeAction<T = Record<string, unknown>>(actionName: string, payload: unknown) {
+        const res = await this.request(`/${actionName}`, {
+            method: "POST",
+            body: payload == null ? undefined : JSON.stringify(payload),
+        });
+        return readResponseJson<T>(res);
+    }
+
+    async createOperationSet(projectId: string, description?: string) {
+        const payload: Record<string, unknown> = { ProjectId: projectId };
+        if (description) payload.Description = description;
+        const data = await this.executeAction<Record<string, unknown>>("msdyn_CreateOperationSetV1", payload);
+        const opId = (data?.OperationSetId || data?.operationSetId) as string | undefined;
+        return opId || "";
+    }
+
+    async executeOperationSet(operationSetId: string) {
+        const payload: Record<string, unknown> = { OperationSetId: operationSetId };
+        return this.executeAction<Record<string, unknown>>("msdyn_ExecuteOperationSetV1", payload);
+    }
+
+    async pssCreate(entity: DataverseEntity, operationSetId: string) {
+        const payload: Record<string, unknown> = {
+            OperationSetId: operationSetId,
+            Entity: entity,
+        };
+        return this.executeAction<Record<string, unknown>>("msdyn_PssCreateV1", payload);
+    }
+
+    async pssUpdate(entity: DataverseEntity, operationSetId: string) {
+        const payload: Record<string, unknown> = {
+            OperationSetId: operationSetId,
+            Entity: entity,
+        };
+        return this.executeAction<Record<string, unknown>>("msdyn_PssUpdateV1", payload);
+    }
+
     async whoAmI() {
         const res = await this.request("/WhoAmI");
         return readResponseJson<{ UserId?: string; BusinessUnitId?: string; OrganizationId?: string }>(res);
