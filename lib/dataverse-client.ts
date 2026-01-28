@@ -1,5 +1,6 @@
 import { fetchWithRetry, readResponseJson, readResponseText } from "./planner-sync/http";
 import { logger } from "./planner-sync/logger";
+import { getDataverseRefreshToken, saveDataverseRefreshToken } from "./dataverse-auth-store";
 
 export type DataverseConfig = {
     baseUrl: string;
@@ -8,6 +9,10 @@ export type DataverseConfig = {
     clientId: string;
     clientSecret: string;
     resourceScope: string;
+    authMode: string;
+    authClientId: string;
+    authClientSecret: string;
+    authScopes: string;
 };
 
 export type DataverseEntity = Record<string, unknown>;
@@ -35,6 +40,17 @@ function normalizeBaseUrl(raw: string) {
     return raw.replace(/\/+$/, "");
 }
 
+function normalizeAuthMode(raw: string | undefined) {
+    const mode = (raw || "client_credentials").trim().toLowerCase();
+    return mode === "delegated" ? "delegated" : "client_credentials";
+}
+
+function normalizeAuthScopes(scopes: string, baseUrl: string) {
+    const trimmed = scopes.trim().replace(/\s+/g, " ");
+    if (trimmed) return trimmed;
+    return `${baseUrl}/user_impersonation offline_access`;
+}
+
 export function getDataverseConfig(): DataverseConfig {
     const baseUrl = normalizeBaseUrl(readEnv("DATAVERSE_BASE_URL", true) as string);
     const apiVersion = readEnv("DATAVERSE_API_VERSION") || "v9.2";
@@ -42,7 +58,22 @@ export function getDataverseConfig(): DataverseConfig {
     const clientId = readEnv("DATAVERSE_CLIENT_ID", true) as string;
     const clientSecret = readEnv("DATAVERSE_CLIENT_SECRET", true) as string;
     const resourceScope = readEnv("DATAVERSE_RESOURCE_SCOPE") || `${baseUrl}/.default`;
-    return { baseUrl, apiVersion, tenantId, clientId, clientSecret, resourceScope };
+    const authMode = normalizeAuthMode(readEnv("DATAVERSE_AUTH_MODE"));
+    const authClientId = (readEnv("DATAVERSE_AUTH_CLIENT_ID") || clientId) as string;
+    const authClientSecret = (readEnv("DATAVERSE_AUTH_CLIENT_SECRET") || clientSecret) as string;
+    const authScopes = normalizeAuthScopes(readEnv("DATAVERSE_AUTH_SCOPES") || "", baseUrl);
+    return {
+        baseUrl,
+        apiVersion,
+        tenantId,
+        clientId,
+        clientSecret,
+        resourceScope,
+        authMode,
+        authClientId,
+        authClientSecret,
+        authScopes,
+    };
 }
 
 function sanitizeUrl(rawUrl: string) {
@@ -80,8 +111,44 @@ export class DataverseClient {
         if (this.tokenCache && now < this.tokenCache.expiresAt - 60_000) {
             return this.tokenCache.token;
         }
-        const { tenantId, clientId, clientSecret, resourceScope } = this.config;
+        const { tenantId, clientId, clientSecret, resourceScope, authMode, authClientId, authClientSecret, authScopes } = this.config;
         const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+        if (authMode === "delegated") {
+            const refreshToken = await getDataverseRefreshToken();
+            if (!refreshToken) {
+                throw new Error("Missing Dataverse refresh token. Visit /api/auth/dataverse/login to authorize.");
+            }
+            const body = new URLSearchParams({
+                grant_type: "refresh_token",
+                client_id: authClientId || clientId,
+                refresh_token: refreshToken,
+            });
+            const secret = authClientSecret || clientSecret;
+            if (secret) body.set("client_secret", secret);
+            if (authScopes) body.set("scope", authScopes);
+            const res = await fetchWithRetry(tokenUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body,
+            });
+            if (!res.ok) {
+                const text = await readResponseText(res);
+                throw new Error(`Dataverse refresh token error ${res.status}: ${text}`);
+            }
+            const data = await readResponseJson<{ access_token: string; expires_in: number; refresh_token?: string }>(res);
+            if (!data?.access_token) {
+                throw new Error("Dataverse token response missing access_token");
+            }
+            if (data.refresh_token) {
+                await saveDataverseRefreshToken(data.refresh_token);
+            }
+            this.tokenCache = {
+                token: data.access_token,
+                expiresAt: now + (data.expires_in || 3600) * 1000,
+            };
+            return this.tokenCache.token;
+        }
+
         const body = new URLSearchParams({
             grant_type: "client_credentials",
             client_id: clientId,

@@ -1,3 +1,4 @@
+import "../../../lib/planner-sync/bootstrap.js";
 import { runPremiumChangePoll } from "../../../lib/premium-sync/index.js";
 import { getCronSecret, isCronAuthorized } from "../../../lib/planner-sync/cron-auth.js";
 import { logger } from "../../../lib/planner-sync/logger.js";

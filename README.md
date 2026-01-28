@@ -140,6 +140,15 @@ DATAVERSE_CLIENT_SECRET=
 DATAVERSE_RESOURCE_SCOPE=https://yourorg.api.crm.dynamics.com/.default
 DATAVERSE_NOTIFICATION_URL=
 DATAVERSE_WEBHOOK_SECRET=
+DATAVERSE_AUTH_MODE=client_credentials
+DATAVERSE_AUTH_CLIENT_ID=
+DATAVERSE_AUTH_CLIENT_SECRET=
+DATAVERSE_AUTH_SCOPES=https://yourorg.api.crm.dynamics.com/user_impersonation offline_access
+DATAVERSE_AUTH_REDIRECT_URI=
+DATAVERSE_AUTH_STATE_SECRET=
+DATAVERSE_AUTH_SUCCESS_REDIRECT=
+DATAVERSE_TOKEN_ENCRYPTION_SECRET=
+DATAVERSE_REFRESH_TOKEN_FILE=.dataverse-refresh-token.json
 
 # Dataverse mapping (override to match your schema)
 DATAVERSE_PROJECT_ENTITY_SET=msdyn_projects
@@ -191,6 +200,24 @@ Notes:
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms).
 - If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
 - Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
+
+### Dataverse delegated auth (recommended for Schedule API)
+
+Planner Premium schedule updates require a licensed user context. Set `DATAVERSE_AUTH_MODE=delegated` and run the OAuth flow once to store a refresh token.
+
+1) Add a redirect URI to your Entra app:
+   - `https://<your-domain>/api/auth/dataverse/callback` (prod)
+   - `http://localhost:3000/api/auth/dataverse/callback` (local)
+2) Set env vars:
+   - `DATAVERSE_AUTH_CLIENT_ID`, `DATAVERSE_AUTH_CLIENT_SECRET`
+   - `DATAVERSE_AUTH_REDIRECT_URI` (must match the redirect above)
+   - `DATAVERSE_AUTH_SCOPES` (default: `<baseUrl>/user_impersonation offline_access`)
+   - `DATAVERSE_AUTH_STATE_SECRET` (recommended for state validation)
+   - `DATAVERSE_TOKEN_ENCRYPTION_SECRET` (optional, encrypts refresh token at rest)
+3) Visit:
+   - `GET /api/auth/dataverse/login`
+4) Confirm:
+   - `GET /api/sync/premium-test` returns `ok: true`.
 
 ### Dataverse change tracking + webhooks
 
