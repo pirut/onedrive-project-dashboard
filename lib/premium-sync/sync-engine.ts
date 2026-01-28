@@ -139,11 +139,9 @@ function buildScheduleTaskEntity(params: {
     const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
     if (start) {
         entity[mapping.taskStartField] = start;
-        entity["msdyn_scheduledstart"] = start;
     }
     if (finish) {
         entity[mapping.taskFinishField] = finish;
-        entity["msdyn_scheduleend"] = finish;
     }
 
     const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale);
