@@ -44,6 +44,12 @@ export function createDataverseAuthState(secret: string) {
     return `${payload}.${sig}`;
 }
 
+export function createDataversePkcePair() {
+    const verifier = crypto.randomBytes(32).toString("base64url");
+    const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
+    return { verifier, challenge };
+}
+
 export function verifyDataverseAuthState(state: string, secret: string, maxAgeMs = 10 * 60 * 1000) {
     if (!secret) return true;
     const parts = state.split(".");
@@ -75,7 +81,12 @@ export function getDataverseOAuthConfig(origin?: string): DataverseOAuthConfig {
     return { baseUrl, tenantId, clientId, clientSecret, scopes, redirectUri, authorizeUrl, tokenUrl };
 }
 
-export function buildDataverseAuthorizeUrl(config: DataverseOAuthConfig, state: string, prompt?: string) {
+export function buildDataverseAuthorizeUrl(
+    config: DataverseOAuthConfig,
+    state: string,
+    prompt?: string,
+    codeChallenge?: string
+) {
     const params = new URLSearchParams({
         client_id: config.clientId,
         response_type: "code",
@@ -84,11 +95,15 @@ export function buildDataverseAuthorizeUrl(config: DataverseOAuthConfig, state: 
         scope: config.scopes,
         state,
     });
+    if (codeChallenge) {
+        params.set("code_challenge", codeChallenge);
+        params.set("code_challenge_method", "S256");
+    }
     if (prompt) params.set("prompt", prompt);
     return `${config.authorizeUrl}?${params.toString()}`;
 }
 
-export async function exchangeDataverseCode(config: DataverseOAuthConfig, code: string) {
+export async function exchangeDataverseCode(config: DataverseOAuthConfig, code: string, codeVerifier?: string) {
     const body = new URLSearchParams({
         grant_type: "authorization_code",
         client_id: config.clientId,
@@ -96,6 +111,7 @@ export async function exchangeDataverseCode(config: DataverseOAuthConfig, code: 
         redirect_uri: config.redirectUri,
         scope: config.scopes,
     });
+    if (codeVerifier) body.set("code_verifier", codeVerifier);
     if (config.clientSecret) body.set("client_secret", config.clientSecret);
     const res = await fetchWithRetry(config.tokenUrl, {
         method: "POST",

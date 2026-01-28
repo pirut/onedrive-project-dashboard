@@ -1,5 +1,5 @@
 import { exchangeDataverseCode, getDataverseAuthStateSecret, getDataverseOAuthConfig, verifyDataverseAuthState } from "../../../lib/dataverse-oauth.js";
-import { saveDataverseRefreshToken } from "../../../lib/dataverse-auth-store.js";
+import { consumeDataverseAuthState, saveDataverseRefreshToken } from "../../../lib/dataverse-auth-store.js";
 
 function getOrigin(req) {
     const proto = req.headers["x-forwarded-proto"] || "https";
@@ -30,7 +30,12 @@ export default async function handler(req, res) {
             res.status(400).json({ ok: false, error: "Invalid OAuth state" });
             return;
         }
-        const token = await exchangeDataverseCode(config, String(code));
+        const verifier = await consumeDataverseAuthState(String(state));
+        if (!verifier) {
+            res.status(400).json({ ok: false, error: "Missing PKCE verifier. Restart login." });
+            return;
+        }
+        const token = await exchangeDataverseCode(config, String(code), verifier);
         if (token.refresh_token) {
             await saveDataverseRefreshToken(token.refresh_token);
         }

@@ -72,8 +72,8 @@ async function readStore() {
         try {
             const raw = await redis.get(KV_KEY);
             if (!raw) return null;
-            if (typeof raw === "string") return JSON.parse(raw) as { refreshToken?: string } | null;
-            if (typeof raw === "object") return raw as { refreshToken?: string } | null;
+            if (typeof raw === "string") return JSON.parse(raw) as Record<string, unknown> | null;
+            if (typeof raw === "object") return raw as Record<string, unknown> | null;
         } catch (error) {
             logger.warn("KV read failed for Dataverse refresh token; falling back to file", {
                 error: (error as Error)?.message,
@@ -106,7 +106,9 @@ export async function getDataverseRefreshToken() {
 
 export async function saveDataverseRefreshToken(refreshToken: string) {
     if (!refreshToken) return;
+    const store = (await readStore()) as Record<string, unknown> | null;
     const payload = {
+        ...(store || {}),
         refreshToken: encryptToken(refreshToken),
         updatedAt: new Date().toISOString(),
     };
@@ -114,5 +116,37 @@ export async function saveDataverseRefreshToken(refreshToken: string) {
 }
 
 export async function clearDataverseRefreshToken() {
-    await writeStore({ refreshToken: "", clearedAt: new Date().toISOString() });
+    const store = (await readStore()) as Record<string, unknown> | null;
+    await writeStore({ ...(store || {}), refreshToken: "", clearedAt: new Date().toISOString() });
+}
+
+const AUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+export async function saveDataverseAuthState(state: string, codeVerifier: string) {
+    if (!state || !codeVerifier) return;
+    const store = (await readStore()) as Record<string, unknown> | null;
+    const payload = {
+        ...(store || {}),
+        authState: {
+            state,
+            codeVerifier: encryptToken(codeVerifier),
+            createdAt: new Date().toISOString(),
+        },
+    };
+    await writeStore(payload);
+}
+
+export async function consumeDataverseAuthState(state: string) {
+    if (!state) return "";
+    const store = (await readStore()) as { authState?: { state?: string; codeVerifier?: string; createdAt?: string } } | null;
+    const authState = store?.authState;
+    if (!authState?.state || authState.state !== state) return "";
+    const createdAt = authState.createdAt ? Date.parse(authState.createdAt) : NaN;
+    if (!Number.isFinite(createdAt) || Date.now() - createdAt > AUTH_STATE_MAX_AGE_MS) {
+        await writeStore({ ...(store || {}), authState: undefined });
+        return "";
+    }
+    const verifier = authState.codeVerifier ? decryptToken(authState.codeVerifier) : "";
+    await writeStore({ ...(store || {}), authState: undefined });
+    return verifier;
 }

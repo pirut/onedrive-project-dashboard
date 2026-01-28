@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { exchangeDataverseCode, getDataverseAuthStateSecret, getDataverseOAuthConfig, verifyDataverseAuthState } from "../../../../../lib/dataverse-oauth";
-import { saveDataverseRefreshToken } from "../../../../../lib/dataverse-auth-store";
+import { consumeDataverseAuthState, saveDataverseRefreshToken } from "../../../../../lib/dataverse-auth-store";
 
 function getOrigin() {
     const hdrs = headers();
@@ -37,7 +37,14 @@ export async function GET(request: Request) {
                 headers: { "Content-Type": "application/json" },
             });
         }
-        const token = await exchangeDataverseCode(config, code);
+        const verifier = await consumeDataverseAuthState(state);
+        if (!verifier) {
+            return new Response(JSON.stringify({ ok: false, error: "Missing PKCE verifier. Restart login." }, null, 2), {
+                status: 400,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
+        const token = await exchangeDataverseCode(config, code, verifier);
         if (token.refresh_token) {
             await saveDataverseRefreshToken(token.refresh_token);
         }

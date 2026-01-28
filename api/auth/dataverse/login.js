@@ -1,4 +1,5 @@
-import { buildDataverseAuthorizeUrl, createDataverseAuthState, getDataverseAuthStateSecret, getDataverseOAuthConfig, warnIfMissingAuthSecret } from "../../../lib/dataverse-oauth.js";
+import { buildDataverseAuthorizeUrl, createDataverseAuthState, createDataversePkcePair, getDataverseAuthStateSecret, getDataverseOAuthConfig, warnIfMissingAuthSecret } from "../../../lib/dataverse-oauth.js";
+import { saveDataverseAuthState } from "../../../lib/dataverse-auth-store.js";
 
 function getOrigin(req) {
     const proto = req.headers["x-forwarded-proto"] || "https";
@@ -18,8 +19,10 @@ export default async function handler(req, res) {
         const config = getDataverseOAuthConfig(origin);
         const secret = getDataverseAuthStateSecret();
         const state = createDataverseAuthState(secret);
+        const { verifier, challenge } = createDataversePkcePair();
+        await saveDataverseAuthState(state, verifier);
         const prompt = req.query?.prompt ? String(req.query.prompt) : undefined;
-        const url = buildDataverseAuthorizeUrl(config, state, prompt);
+        const url = buildDataverseAuthorizeUrl(config, state, prompt, challenge);
         res.writeHead(302, { Location: url });
         res.end();
     } catch (error) {
