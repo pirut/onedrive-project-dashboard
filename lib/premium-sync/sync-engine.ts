@@ -23,7 +23,7 @@ function escapeODataString(value: string) {
 
 function formatODataGuid(value: string) {
     const trimmed = value.trim().replace(/^\{/, "").replace(/\}$/, "");
-    return `guid'${trimmed}'`;
+    return trimmed;
 }
 
 function isGuid(value: string) {
@@ -262,10 +262,6 @@ function buildTaskPayload(
 
     if (mapping.taskBcNoField && task.taskNo) {
         payload[mapping.taskBcNoField] = String(task.taskNo).trim();
-    }
-
-    if (mapping.projectBcNoField && task.projectNo) {
-        payload[mapping.projectBcNoField] = String(task.projectNo).trim();
     }
 
     const lookupBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
