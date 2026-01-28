@@ -183,7 +183,6 @@ export class DataverseClient {
                     ...(options.select?.length ? { $select: options.select.join(",") } : {}),
                     ...(options.filter ? { $filter: options.filter } : {}),
                     ...(options.orderBy ? { $orderby: options.orderBy } : {}),
-                    ...(typeof options.top === "number" ? { $top: String(options.top) } : {}),
                 } as Record<string, string>).toString()}`,
                 {
                     headers: {
