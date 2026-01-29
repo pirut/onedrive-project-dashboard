@@ -181,19 +181,30 @@ function extractBcProjectNo(title) {
     return match ? match[0].toUpperCase() : "";
 }
 
-function getPremiumProjectUrlTemplate() {
-    const tenantId = getTenantIdForUrl();
+function getPremiumProjectUrlTemplate(context = {}) {
+    const tenantId = context.tenantId || getTenantIdForUrl();
+    const orgId = context.orgId || "";
     const rawTemplate = (process.env.PREMIUM_PROJECT_URL_TEMPLATE || "").trim();
     if (rawTemplate) {
-        return rawTemplate.replace("{tenantId}", tenantId || "");
+        return rawTemplate
+            .replace("{tenantId}", tenantId || "")
+            .replace("{orgId}", orgId || "");
     }
     const base = (process.env.PREMIUM_PROJECT_WEB_BASE || "").trim();
     if (base) {
         const clean = base.replace(/\/+$/, "");
-        if (clean.includes("{projectId}")) return clean.replace("{tenantId}", tenantId || "");
-        return `${clean}/{projectId}`;
+        if (clean.includes("{projectId}")) {
+            return clean
+                .replace("{tenantId}", tenantId || "")
+                .replace("{orgId}", orgId || "");
+        }
+        const orgSegment = orgId ? `/org/${orgId}` : "";
+        const tidParam = tenantId ? `?tid=${tenantId}` : "";
+        return `${clean}/{projectId}${orgSegment}${tidParam}`;
     }
-    return "https://planner.cloud.microsoft/webui/premiumplan/{projectId}";
+    const orgSegment = orgId ? `/org/${orgId}` : "";
+    const tidParam = tenantId ? `?tid=${tenantId}` : "";
+    return `https://planner.cloud.microsoft/webui/premiumplan/{projectId}${orgSegment}${tidParam}`;
 }
 
 function buildPremiumProjectUrl(template, projectId) {
@@ -257,17 +268,20 @@ export default async function handler(req, res) {
             const msalApp = createGraphClient(graphConfig);
             const graphEnabled = Boolean(msalApp && graphConfig.groupId);
             const graphPlansPromise = graphEnabled ? listGraphPlans(graphConfig, msalApp) : Promise.resolve([]);
-            const [dataverseProjects, graphPlans] = await Promise.all([
+            const whoPromise = dataverse.whoAmI().catch(() => null);
+            const [dataverseProjects, graphPlans, who] = await Promise.all([
                 listDataverseProjects(dataverse, mapping),
                 graphPlansPromise,
+                whoPromise,
             ]);
+            const orgId = who && who.OrganizationId ? String(who.OrganizationId) : "";
             res.status(200).json({
                 ok: true,
                 mapping,
                 dataverseProjects,
                 graphPlans,
                 graphEnabled,
-                projectUrlTemplate: getPremiumProjectUrlTemplate(),
+                projectUrlTemplate: getPremiumProjectUrlTemplate({ tenantId: getTenantIdForUrl(), orgId }),
             });
         } catch (error) {
             logger.warn("Admin planner assets list failed", { error: error?.message || String(error) });
