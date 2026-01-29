@@ -205,7 +205,7 @@ Notes:
 - If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
 - Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
 - To show Premium project links in the admin cleanup list, set `PREMIUM_PROJECT_URL_TEMPLATE` (use `{projectId}` and optional `{tenantId}` placeholders). Example:
-  `https://planner.cloud.microsoft/webui/plan/{projectId}/view/board?tid={tenantId}`.
+  `https://planner.cloud.microsoft/webui/premiumplan/{projectId}`.
   If you don't set it, the app defaults to that format.
 - Percent complete auto-detects 0–100 input when `DATAVERSE_PERCENT_MAX=1` (it divides by 100).
 

@@ -188,16 +188,12 @@ function getPremiumProjectUrlTemplate() {
         return rawTemplate.replace("{tenantId}", tenantId || "");
     }
     const base = (process.env.PREMIUM_PROJECT_WEB_BASE || "").trim();
-    const tidParam = tenantId ? `?tid=${tenantId}` : "";
     if (base) {
         const clean = base.replace(/\/+$/, "");
         if (clean.includes("{projectId}")) return clean.replace("{tenantId}", tenantId || "");
-        if (/\/webui\/plan$/i.test(clean)) {
-            return `${clean}/{projectId}/view/board${tidParam}`;
-        }
-        return `${clean}/webui/plan/{projectId}/view/board${tidParam}`;
+        return `${clean}/{projectId}`;
     }
-    return `https://planner.cloud.microsoft/webui/plan/{projectId}/view/board${tidParam}`;
+    return "https://planner.cloud.microsoft/webui/premiumplan/{projectId}";
 }
 
 function buildPremiumProjectUrl(template, projectId) {
