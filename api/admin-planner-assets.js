@@ -177,6 +177,20 @@ function extractBcProjectNo(title) {
     return match ? match[0].toUpperCase() : "";
 }
 
+function getPremiumProjectUrlTemplate() {
+    const template = (process.env.PREMIUM_PROJECT_URL_TEMPLATE || "").trim();
+    if (template) return template;
+    const base = (process.env.PREMIUM_PROJECT_WEB_BASE || "").trim();
+    if (!base) return "";
+    const clean = base.replace(/\/+$/, "");
+    return `${clean}/?projectId={projectId}`;
+}
+
+function buildPremiumProjectUrl(template, projectId) {
+    if (!template || !projectId) return "";
+    return template.replace("{projectId}", projectId);
+}
+
 async function listDataverseProjects(dataverse, mapping) {
     const select = [mapping.projectIdField, mapping.projectTitleField, mapping.projectBcNoField, "modifiedon"].filter(Boolean);
     const res = await dataverse.list(mapping.projectEntitySet, { select, top: 200 });
@@ -243,6 +257,7 @@ export default async function handler(req, res) {
                 dataverseProjects,
                 graphPlans,
                 graphEnabled,
+                projectUrlTemplate: getPremiumProjectUrlTemplate(),
             });
         } catch (error) {
             logger.warn("Admin planner assets list failed", { error: error?.message || String(error) });

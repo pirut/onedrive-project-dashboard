@@ -149,6 +149,8 @@ DATAVERSE_AUTH_STATE_SECRET=
 DATAVERSE_AUTH_SUCCESS_REDIRECT=
 DATAVERSE_TOKEN_ENCRYPTION_SECRET=
 DATAVERSE_REFRESH_TOKEN_FILE=.dataverse-refresh-token.json
+PREMIUM_PROJECT_WEB_BASE=
+PREMIUM_PROJECT_URL_TEMPLATE=
 
 # Dataverse mapping (override to match your schema)
 DATAVERSE_PROJECT_ENTITY_SET=msdyn_projects
@@ -202,6 +204,7 @@ Notes:
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms).
 - If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
 - Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
+- To show Planner links in the admin cleanup list, set `PREMIUM_PROJECT_URL_TEMPLATE` (use `{projectId}` placeholder) or set `PREMIUM_PROJECT_WEB_BASE` and it will append `?projectId=...`.
 - Percent complete auto-detects 0–100 input when `DATAVERSE_PERCENT_MAX=1` (it divides by 100).
 
 ### Dataverse delegated auth (recommended for Schedule API)
