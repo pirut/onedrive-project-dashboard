@@ -231,6 +231,19 @@ export class DataverseClient {
         return this.executeAction<Record<string, unknown>>("msdyn_PssUpdateV1", payload);
     }
 
+    async createProjectV1(project: DataverseEntity) {
+        const payload: Record<string, unknown> = {
+            Project: project,
+        };
+        const data = await this.executeAction<Record<string, unknown>>("msdyn_CreateProjectV1", payload);
+        const projectId =
+            (data?.ProjectId as string | undefined) ||
+            (data?.projectId as string | undefined) ||
+            (data?.projectid as string | undefined) ||
+            "";
+        return { projectId, raw: data };
+    }
+
     async whoAmI() {
         const res = await this.request("/WhoAmI");
         return readResponseJson<{ UserId?: string; BusinessUnitId?: string; OrganizationId?: string }>(res);

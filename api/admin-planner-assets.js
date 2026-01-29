@@ -314,11 +314,21 @@ export default async function handler(req, res) {
                             continue;
                         }
                         const payload = { [mapping.projectTitleField]: title || planId };
-                        if (bcNo && mapping.projectBcNoField) {
-                            payload[mapping.projectBcNoField] = bcNo;
+                        const createResult = await dataverse.createProjectV1(payload);
+                        let projectId = createResult.projectId;
+                        if (!projectId) {
+                            const created = await dataverse.create(mapping.projectEntitySet, payload);
+                            projectId = created.entityId || "";
                         }
-                        const created = await dataverse.create(mapping.projectEntitySet, payload);
-                        results.push({ id: planId, ok: true, projectId: created.entityId || "" });
+                        if (projectId && bcNo && mapping.projectBcNoField) {
+                            try {
+                                await dataverse.update(mapping.projectEntitySet, projectId, { [mapping.projectBcNoField]: bcNo });
+                            } catch (error) {
+                                results.push({ id: planId, ok: false, error: `BC No update failed: ${error?.message || String(error)}` });
+                                continue;
+                            }
+                        }
+                        results.push({ id: planId, ok: true, projectId });
                     } catch (error) {
                         results.push({ id: planId, ok: false, error: error?.message || String(error) });
                     }
