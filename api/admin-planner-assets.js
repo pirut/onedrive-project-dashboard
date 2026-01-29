@@ -134,6 +134,33 @@ async function graphRequest(config, msalApp, path, options = {}) {
     return res.json();
 }
 
+async function graphDeletePlan(config, msalApp, planId) {
+    const token = await getGraphToken(config, msalApp);
+    const url = `https://graph.microsoft.com/v1.0/planner/plans/${planId}`;
+    const getRes = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!getRes.ok) {
+        const text = await getRes.text();
+        throw new Error(`Graph GET ${url} -> ${getRes.status}: ${text}`);
+    }
+    let etag = getRes.headers.get("etag") || getRes.headers.get("ETag") || "";
+    if (!etag) {
+        const data = await getRes.json();
+        etag = data?.["@odata.etag"] || data?.["@odata.etag".toString()] || "";
+    }
+    if (!etag) {
+        throw new Error("Missing ETag for planner plan delete");
+    }
+    const delRes = await fetch(url, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "If-Match": etag },
+    });
+    if (!delRes.ok) {
+        const text = await delRes.text();
+        throw new Error(`Graph DELETE ${url} -> ${delRes.status}: ${text}`);
+    }
+    return true;
+}
+
 function escapeODataString(value) {
     return String(value).replace(/'/g, "''");
 }
@@ -253,10 +280,7 @@ export default async function handler(req, res) {
                 const results = [];
                 for (const id of ids) {
                     try {
-                        await graphRequest(graphConfig, msalApp, `/planner/plans/${id}`, {
-                            method: "DELETE",
-                            headers: { "If-Match": "*" },
-                        });
+                        await graphDeletePlan(graphConfig, msalApp, String(id));
                         results.push({ id, ok: true });
                     } catch (error) {
                         results.push({ id, ok: false, error: error?.message || String(error) });
