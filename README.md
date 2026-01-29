@@ -214,7 +214,9 @@ Planner Premium schedule updates require a licensed user context. Set `DATAVERSE
    - `DATAVERSE_AUTH_SCOPES` (default: `<baseUrl>/user_impersonation offline_access`)
    - `DATAVERSE_AUTH_STATE_SECRET` (recommended for state validation)
    - `DATAVERSE_TOKEN_ENCRYPTION_SECRET` (optional, encrypts refresh token at rest)
-3) Visit:
+3) If your app is **public client** (no secret), leave `DATAVERSE_AUTH_CLIENT_SECRET` empty.
+
+4) Visit:
    - `GET /api/auth/dataverse/login`
 4) Confirm:
    - `GET /api/sync/premium-test` returns `ok: true`.

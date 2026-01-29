@@ -60,7 +60,7 @@ export function getDataverseConfig(): DataverseConfig {
     const resourceScope = readEnv("DATAVERSE_RESOURCE_SCOPE") || `${baseUrl}/.default`;
     const authMode = normalizeAuthMode(readEnv("DATAVERSE_AUTH_MODE"));
     const authClientId = (readEnv("DATAVERSE_AUTH_CLIENT_ID") || clientId) as string;
-    const authClientSecret = (readEnv("DATAVERSE_AUTH_CLIENT_SECRET") || clientSecret) as string;
+    const authClientSecret = (readEnv("DATAVERSE_AUTH_CLIENT_SECRET") || "") as string;
     const authScopes = normalizeAuthScopes(readEnv("DATAVERSE_AUTH_SCOPES") || "", baseUrl);
     return {
         baseUrl,
