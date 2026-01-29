@@ -315,10 +315,10 @@ export default async function handler(req, res) {
                         }
                         const payload = { [mapping.projectTitleField]: title || planId };
                         const createResult = await dataverse.createProjectV1(payload);
-                        let projectId = createResult.projectId;
+                        const projectId = createResult.projectId;
                         if (!projectId) {
-                            const created = await dataverse.create(mapping.projectEntitySet, payload);
-                            projectId = created.entityId || "";
+                            results.push({ id: planId, ok: false, error: "Project service did not return ProjectId" });
+                            continue;
                         }
                         if (projectId && bcNo && mapping.projectBcNoField) {
                             try {
