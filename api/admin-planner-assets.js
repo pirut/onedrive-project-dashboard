@@ -160,7 +160,7 @@ async function listDataverseProjects(dataverse, mapping) {
         const pageRes = await dataverse.request(next);
         const data = await pageRes.json();
         if (Array.isArray(data?.value)) items.push(...data.value);
-        next = data?."@odata.nextLink" || null;
+        next = data?.["@odata.nextLink"] || null;
     }
     return items;
 }
