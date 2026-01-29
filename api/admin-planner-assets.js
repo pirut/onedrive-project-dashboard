@@ -92,6 +92,10 @@ function getGraphConfig() {
     return { tenantId, clientId, clientSecret, scope, groupId };
 }
 
+function getTenantIdForUrl() {
+    return process.env.GRAPH_TENANT_ID || process.env.DATAVERSE_TENANT_ID || process.env.TENANT_ID || "";
+}
+
 function createGraphClient(config) {
     if (!config.tenantId || !config.clientId || !config.clientSecret) {
         return null;
@@ -178,12 +182,22 @@ function extractBcProjectNo(title) {
 }
 
 function getPremiumProjectUrlTemplate() {
-    const template = (process.env.PREMIUM_PROJECT_URL_TEMPLATE || "").trim();
-    if (template) return template;
+    const tenantId = getTenantIdForUrl();
+    const rawTemplate = (process.env.PREMIUM_PROJECT_URL_TEMPLATE || "").trim();
+    if (rawTemplate) {
+        return rawTemplate.replace("{tenantId}", tenantId || "");
+    }
     const base = (process.env.PREMIUM_PROJECT_WEB_BASE || "").trim();
-    if (!base) return "";
-    const clean = base.replace(/\/+$/, "");
-    return `${clean}/?projectId={projectId}`;
+    const tidParam = tenantId ? `?tid=${tenantId}` : "";
+    if (base) {
+        const clean = base.replace(/\/+$/, "");
+        if (clean.includes("{projectId}")) return clean.replace("{tenantId}", tenantId || "");
+        if (/\/webui\/plan$/i.test(clean)) {
+            return `${clean}/{projectId}/view/board${tidParam}`;
+        }
+        return `${clean}/webui/plan/{projectId}/view/board${tidParam}`;
+    }
+    return `https://planner.cloud.microsoft/webui/plan/{projectId}/view/board${tidParam}`;
 }
 
 function buildPremiumProjectUrl(template, projectId) {
