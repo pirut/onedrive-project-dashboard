@@ -57,6 +57,8 @@ export function getDataverseMappingConfig() {
         taskPercentField: readEnv("DATAVERSE_TASK_PERCENT_FIELD") || "msdyn_percentcomplete",
         taskDescriptionField: readEnv("DATAVERSE_TASK_DESCRIPTION_FIELD") || "",
         percentScale: readNumberEnv("DATAVERSE_PERCENT_SCALE", 1),
+        percentMin: readNumberEnv("DATAVERSE_PERCENT_MIN", 0),
+        percentMax: readNumberEnv("DATAVERSE_PERCENT_MAX", 100),
         allowProjectCreate: readBoolEnv("DATAVERSE_ALLOW_PROJECT_CREATE", false),
         allowTaskCreate: readBoolEnv("DATAVERSE_ALLOW_TASK_CREATE", true),
         allowTaskDelete: readBoolEnv("DATAVERSE_ALLOW_TASK_DELETE", false),

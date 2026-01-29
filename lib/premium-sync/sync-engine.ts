@@ -87,10 +87,15 @@ function buildTaskTitle(task: BcProjectTask) {
     return description || taskNo || "Untitled Task";
 }
 
-function toDataversePercent(value: number | null | undefined, scale: number) {
+function toDataversePercent(value: number | null | undefined, scale: number, min: number, max: number) {
     if (typeof value !== "number" || Number.isNaN(value)) return null;
-    if (!scale || scale === 1) return value;
-    return value / scale;
+    const raw = !scale || scale === 1 ? value : value / scale;
+    if (!Number.isFinite(raw)) return null;
+    const lower = Number.isFinite(min) ? min : 0;
+    const upper = Number.isFinite(max) ? max : 100;
+    if (raw < lower) return lower;
+    if (raw > upper) return upper;
+    return raw;
 }
 
 function fromDataversePercent(value: number | null | undefined, scale: number) {
@@ -144,7 +149,7 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskFinishField] = finish;
     }
 
-    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale);
+    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) entity[mapping.taskPercentField] = percent;
 
     if (mapping.taskDescriptionField && task.description) {
@@ -335,7 +340,7 @@ function buildTaskPayload(
     if (start) payload[mapping.taskStartField] = start;
     if (finish) payload[mapping.taskFinishField] = finish;
 
-    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale);
+    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) payload[mapping.taskPercentField] = percent;
 
     if (mapping.taskDescriptionField && task.description) {
