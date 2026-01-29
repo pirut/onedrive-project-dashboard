@@ -162,16 +162,36 @@ function buildScheduleTaskEntity(params: {
     const projectBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
     if (projectBinding) {
         entity[`${mapping.taskProjectLookupField}@odata.bind`] = projectBinding;
+        // Schedule API can require raw lookup fields.
+        entity[mapping.taskProjectLookupField] = projectId;
     }
 
     if (bucketId) {
         const bucketBinding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
         if (bucketBinding) {
             entity["msdyn_projectbucket@odata.bind"] = bucketBinding;
+            entity["msdyn_projectbucket"] = bucketId;
         }
     }
 
     return entity;
+}
+
+async function createProjectBucket(dataverse: DataverseClient, projectId: string, name: string) {
+    try {
+        const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
+        if (!projectBinding) return null;
+        const payload: DataverseEntity = {
+            msdyn_name: name,
+            "msdyn_project@odata.bind": projectBinding,
+        };
+        const created = await dataverse.create("msdyn_projectbuckets", payload);
+        if (!created.entityId) return null;
+        return created.entityId;
+    } catch (error) {
+        logger.warn("Dataverse bucket create failed", { projectId, error: (error as Error)?.message });
+        return null;
+    }
 }
 
 async function getProjectBucketId(
@@ -190,8 +210,13 @@ async function getProjectBucketId(
         });
         const bucketId = result.value[0]?.msdyn_projectbucketid;
         const resolved = typeof bucketId === "string" && bucketId.trim() ? bucketId.trim() : null;
-        cache.set(projectId, resolved);
-        return resolved;
+        if (resolved) {
+            cache.set(projectId, resolved);
+            return resolved;
+        }
+        const created = await createProjectBucket(dataverse, projectId, "General");
+        cache.set(projectId, created);
+        return created;
     } catch (error) {
         logger.warn("Dataverse bucket lookup failed", { projectId, error: (error as Error)?.message });
         cache.set(projectId, null);
