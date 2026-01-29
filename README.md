@@ -202,6 +202,7 @@ Notes:
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms).
 - If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
 - Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
+- Percent complete auto-detects 0–100 input when `DATAVERSE_PERCENT_MAX=1` (it divides by 100).
 
 ### Dataverse delegated auth (recommended for Schedule API)
 
