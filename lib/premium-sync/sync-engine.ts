@@ -161,16 +161,17 @@ function buildScheduleTaskEntity(params: {
 
     const projectBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
     if (projectBinding) {
-        entity[`${mapping.taskProjectLookupField}@odata.bind`] = projectBinding;
-        // Schedule API can require raw lookup fields.
-        entity[mapping.taskProjectLookupField] = projectId;
+        entity[mapping.taskProjectLookupField] = {
+            "@odata.id": `${dataverse.apiRoot()}${projectBinding}`,
+        };
     }
 
     if (bucketId) {
         const bucketBinding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
         if (bucketBinding) {
-            entity["msdyn_projectbucket@odata.bind"] = bucketBinding;
-            entity["msdyn_projectbucket"] = bucketId;
+            entity["msdyn_projectbucket"] = {
+                "@odata.id": `${dataverse.apiRoot()}${bucketBinding}`,
+            };
         }
     }
 
