@@ -253,7 +253,10 @@ export default async function handler(req, res) {
                 const results = [];
                 for (const id of ids) {
                     try {
-                        await graphRequest(graphConfig, msalApp, `/planner/plans/${id}`, { method: "DELETE" });
+                        await graphRequest(graphConfig, msalApp, `/planner/plans/${id}`, {
+                            method: "DELETE",
+                            headers: { "If-Match": "*" },
+                        });
                         results.push({ id, ok: true });
                     } catch (error) {
                         results.push({ id, ok: false, error: error?.message || String(error) });
