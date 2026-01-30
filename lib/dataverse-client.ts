@@ -194,6 +194,10 @@ export class DataverseClient {
         return res;
     }
 
+    async requestRaw(pathOrUrl: string, options: RequestInit = {}) {
+        return this.request(pathOrUrl, options);
+    }
+
     async executeAction<T = Record<string, unknown>>(actionName: string, payload: unknown) {
         const res = await this.request(`/${actionName}`, {
             method: "POST",

@@ -22,6 +22,59 @@ function escapeODataString(value: string) {
     return value.replace(/'/g, "''");
 }
 
+const lookupFieldCache = new Map<string, string | null>();
+
+async function resolveLookupField(
+    dataverse: DataverseClient,
+    entityLogicalName: string,
+    targetLogicalName: string
+) {
+    const key = `${entityLogicalName}:${targetLogicalName}`;
+    if (lookupFieldCache.has(key)) return lookupFieldCache.get(key) || null;
+    try {
+        const res = await dataverse.requestRaw(
+            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName,AttributeType,Targets`
+        );
+        const data = (await res.json()) as { value?: Array<{ LogicalName?: string; AttributeType?: string; Targets?: string[] }> };
+        const attrs = Array.isArray(data?.value) ? data.value : [];
+        const match = attrs.find((attr) => {
+            const type = String(attr.AttributeType || "").toLowerCase();
+            if (!type.includes("lookup")) return false;
+            if (!Array.isArray(attr.Targets)) return false;
+            return attr.Targets.some((target) => String(target).toLowerCase() === targetLogicalName.toLowerCase());
+        });
+        const logical = match?.LogicalName ? String(match.LogicalName) : "";
+        const resolved = logical && logical.trim() ? logical.trim() : null;
+        lookupFieldCache.set(key, resolved);
+        return resolved;
+    } catch (error) {
+        logger.warn("Dataverse lookup field resolve failed", {
+            entityLogicalName,
+            targetLogicalName,
+            error: (error as Error)?.message,
+        });
+        lookupFieldCache.set(key, null);
+        return null;
+    }
+}
+
+async function getProjectTeamLookupFields(dataverse: DataverseClient) {
+    const project = (await resolveLookupField(dataverse, "msdyn_projectteam", "msdyn_project")) || "msdyn_project";
+    const resource =
+        (await resolveLookupField(dataverse, "msdyn_projectteam", "bookableresource")) || "msdyn_bookableresource";
+    return { project, resource };
+}
+
+async function getAssignmentLookupFields(dataverse: DataverseClient) {
+    const project =
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_project")) || "msdyn_project";
+    const task =
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projecttask")) || "msdyn_task";
+    const team =
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projectteam")) || "msdyn_projectteam";
+    return { project, task, team };
+}
+
 function formatODataGuid(value: string) {
     const trimmed = value.trim().replace(/^\{/, "").replace(/\}$/, "");
     return trimmed;
@@ -118,6 +171,8 @@ function resolveTaskDate(value?: string | null) {
     const trimmed = value.trim();
     if (!trimmed) return null;
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        const year = Number(trimmed.slice(0, 4));
+        if (Number.isFinite(year) && year < 1753) return null;
         return trimmed;
     }
     const parsed = parseDateMs(trimmed);
@@ -266,7 +321,8 @@ async function getProjectTeamMemberId(
     const key = `${projectId}:${resourceId}`;
     if (cache.has(key)) return cache.get(key) || null;
     try {
-        const filter = `_msdyn_project_value eq ${formatODataGuid(projectId)} and _msdyn_bookableresource_value eq ${formatODataGuid(
+        const lookups = await getProjectTeamLookupFields(dataverse);
+        const filter = `_${lookups.project}_value eq ${formatODataGuid(projectId)} and _${lookups.resource}_value eq ${formatODataGuid(
             resourceId
         )}`;
         const res = await dataverse.list<DataverseEntity>("msdyn_projectteams", {
@@ -291,6 +347,7 @@ async function createProjectTeamMember(
     resourceId: string,
     name: string
 ) {
+    const lookups = await getProjectTeamLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
     const resourceBinding = dataverse.buildLookupBinding("bookableresources", resourceId);
     if (!projectBinding || !resourceBinding) return null;
@@ -298,8 +355,8 @@ async function createProjectTeamMember(
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projectteam",
         msdyn_projectteamid: crypto.randomUUID(),
         msdyn_name: name,
-        "msdyn_project@odata.bind": projectBinding,
-        "msdyn_bookableresource@odata.bind": resourceBinding,
+        [`${lookups.project}@odata.bind`]: projectBinding,
+        [`${lookups.resource}@odata.bind`]: resourceBinding,
     };
     try {
         const created = await dataverse.create("msdyn_projectteams", entity);
@@ -342,7 +399,10 @@ async function ensureAssignmentForTask(
     const assignmentKey = `${taskId}:${teamId}`;
     if (options.assignmentCache.has(assignmentKey)) return;
     try {
-        const filter = `_msdyn_task_value eq ${formatODataGuid(taskId)} and _msdyn_projectteam_value eq ${formatODataGuid(teamId)}`;
+        const lookups = await getAssignmentLookupFields(dataverse);
+        const filter = `_${lookups.task}_value eq ${formatODataGuid(taskId)} and _${lookups.team}_value eq ${formatODataGuid(
+            teamId
+        )}`;
         const existing = await dataverse.list<DataverseEntity>("msdyn_resourceassignments", {
             select: ["msdyn_resourceassignmentid"],
             filter,
@@ -355,6 +415,7 @@ async function ensureAssignmentForTask(
     } catch (error) {
         logger.warn("Dataverse assignment lookup failed", { projectId, taskId, assignee, error: (error as Error)?.message });
     }
+    const lookups = await getAssignmentLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
     const teamBinding = dataverse.buildLookupBinding("msdyn_projectteams", teamId);
     const taskBinding = dataverse.buildLookupBinding("msdyn_projecttasks", taskId);
@@ -363,9 +424,9 @@ async function ensureAssignmentForTask(
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_resourceassignment",
         msdyn_resourceassignmentid: crypto.randomUUID(),
         msdyn_name: assignee,
-        "msdyn_project@odata.bind": projectBinding,
-        "msdyn_projectteam@odata.bind": teamBinding,
-        "msdyn_task@odata.bind": taskBinding,
+        [`${lookups.project}@odata.bind`]: projectBinding,
+        [`${lookups.team}@odata.bind`]: teamBinding,
+        [`${lookups.task}@odata.bind`]: taskBinding,
     };
     try {
         await dataverse.create("msdyn_resourceassignments", entity);
