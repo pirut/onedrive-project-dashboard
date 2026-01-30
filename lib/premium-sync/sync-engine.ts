@@ -56,7 +56,7 @@ async function resolveLookupField(
     }
     try {
         const res = await dataverse.requestRaw(
-            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName&$expand=Targets`
+            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName,Targets`
         );
         const data = (await res.json()) as { value?: Array<{ LogicalName?: string; Targets?: string[] }> };
         const attrs = Array.isArray(data?.value) ? data.value : [];
@@ -115,19 +115,21 @@ async function resolveLookupField(
 }
 
 async function getProjectTeamLookupFields(dataverse: DataverseClient) {
-    const project = (await resolveLookupField(dataverse, "msdyn_projectteam", "msdyn_project")) || "msdyn_project";
+    const project =
+        (await resolveLookupField(dataverse, "msdyn_projectteam", "msdyn_project")) || "msdyn_projectid";
     const resource =
-        (await resolveLookupField(dataverse, "msdyn_projectteam", "bookableresource")) || "msdyn_bookableresource";
+        (await resolveLookupField(dataverse, "msdyn_projectteam", "bookableresource")) || "msdyn_bookableresourceid";
     return { project, resource };
 }
 
 async function getAssignmentLookupFields(dataverse: DataverseClient) {
     const project =
-        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_project")) || "msdyn_project";
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_project")) || "msdyn_projectid";
     const task =
-        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projecttask")) || "msdyn_task";
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projecttask")) || "msdyn_taskid";
     const team =
-        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projectteam")) || "msdyn_projectteam";
+        (await resolveLookupField(dataverse, "msdyn_resourceassignment", "msdyn_projectteam")) ||
+        "msdyn_projectteamid";
     return { project, task, team };
 }
 
