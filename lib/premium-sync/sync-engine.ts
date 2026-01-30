@@ -32,6 +32,29 @@ async function resolveLookupField(
     const key = `${entityLogicalName}:${targetLogicalName}`;
     if (lookupFieldCache.has(key)) return lookupFieldCache.get(key) || null;
     try {
+        const relRes = await dataverse.requestRaw(
+            `/EntityDefinitions(LogicalName='${entityLogicalName}')/ManyToOneRelationships?$select=ReferencingAttribute,ReferencedEntity`
+        );
+        const relData = (await relRes.json()) as {
+            value?: Array<{ ReferencingAttribute?: string; ReferencedEntity?: string }>;
+        };
+        const rels = Array.isArray(relData?.value) ? relData.value : [];
+        const relMatch = rels.find(
+            (rel) => String(rel.ReferencedEntity || "").toLowerCase() === targetLogicalName.toLowerCase()
+        );
+        if (relMatch?.ReferencingAttribute) {
+            const resolved = String(relMatch.ReferencingAttribute);
+            lookupFieldCache.set(key, resolved);
+            return resolved;
+        }
+    } catch (error) {
+        logger.warn("Dataverse lookup field resolve failed", {
+            entityLogicalName,
+            targetLogicalName,
+            error: (error as Error)?.message,
+        });
+    }
+    try {
         const res = await dataverse.requestRaw(
             `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName&$expand=Targets`
         );
@@ -378,7 +401,8 @@ async function createProjectTeamMember(
     dataverse: DataverseClient,
     projectId: string,
     resourceId: string,
-    name: string
+    name: string,
+    operationSetId?: string
 ) {
     const lookups = await getProjectTeamLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
@@ -392,11 +416,26 @@ async function createProjectTeamMember(
         [`${lookups.resource}@odata.bind`]: resourceBinding,
     };
     try {
+        if (operationSetId) {
+            await dataverse.pssCreate(entity, operationSetId);
+            return entity.msdyn_projectteamid as string;
+        }
         const created = await dataverse.create("msdyn_projectteams", entity);
         return created.entityId || null;
     } catch (error) {
         logger.warn("Dataverse project team create failed", { projectId, resourceId, error: (error as Error)?.message });
-        return null;
+        if (!operationSetId) return null;
+        try {
+            const created = await dataverse.create("msdyn_projectteams", entity);
+            return created.entityId || null;
+        } catch (fallbackError) {
+            logger.warn("Dataverse project team create fallback failed", {
+                projectId,
+                resourceId,
+                error: (fallbackError as Error)?.message,
+            });
+            return null;
+        }
     }
 }
 
@@ -406,6 +445,7 @@ async function ensureAssignmentForTask(
     projectId: string,
     taskId: string,
     options: {
+        operationSetId?: string;
         resourceCache: Map<string, string | null>;
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
@@ -420,7 +460,7 @@ async function ensureAssignmentForTask(
     }
     let teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, options.teamCache);
     if (!teamId) {
-        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee);
+        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee, options.operationSetId);
         if (teamId) {
             options.teamCache.set(`${projectId}:${resourceId}`, teamId);
         }
@@ -462,7 +502,11 @@ async function ensureAssignmentForTask(
         [`${lookups.task}@odata.bind`]: taskBinding,
     };
     try {
-        await dataverse.create("msdyn_resourceassignments", entity);
+        if (options.operationSetId) {
+            await dataverse.pssCreate(entity, options.operationSetId);
+        } else {
+            await dataverse.create("msdyn_resourceassignments", entity);
+        }
         options.assignmentCache.add(assignmentKey);
     } catch (error) {
         logger.warn("Dataverse assignment create failed", { projectId, taskId, assignee, error: (error as Error)?.message });
@@ -764,6 +808,7 @@ async function syncTaskToDataverse(
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
             await ensureAssignmentForTask(dataverse, task, projectId, taskId, {
+                operationSetId: options.operationSetId,
                 resourceCache: options.resourceCache,
                 teamCache: options.teamCache,
                 assignmentCache: options.assignmentCache,
@@ -806,6 +851,7 @@ async function syncTaskToDataverse(
         });
         await dataverse.pssCreate(entity, options.operationSetId);
         await ensureAssignmentForTask(dataverse, task, projectId, newTaskId, {
+            operationSetId: options.operationSetId,
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
