@@ -372,6 +372,36 @@ async function getBookableResourceIdByName(
     }
 }
 
+async function findBookableResourceByAadObjectId(dataverse: DataverseClient, aadObjectId: string) {
+    const trimmed = (aadObjectId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+    if (!trimmed) return null;
+    const fields = ["msdyn_aadobjectid", "aadobjectid"];
+    for (const field of fields) {
+        try {
+            const filter = `${field} eq ${formatODataGuid(trimmed)}`;
+            const res = await dataverse.list<DataverseEntity>("bookableresources", {
+                select: ["bookableresourceid", "name", field],
+                filter,
+                top: 1,
+            });
+            const row = res.value[0];
+            if (row?.bookableresourceid) {
+                return {
+                    id: String(row.bookableresourceid),
+                    name: row.name ? String(row.name) : "",
+                };
+            }
+        } catch (error) {
+            const message = (error as Error)?.message || "";
+            if (message.includes("Could not find a property named")) {
+                continue;
+            }
+            logger.warn("Dataverse bookable resource lookup failed", { field, error: message });
+        }
+    }
+    return null;
+}
+
 async function getProjectTeamMemberId(
     dataverse: DataverseClient,
     projectId: string,
@@ -515,6 +545,31 @@ async function ensureAssignmentForTask(
     } catch (error) {
         logger.warn("Dataverse assignment create failed", { projectId, taskId, assignee, error: (error as Error)?.message });
     }
+}
+
+async function ensureProjectGroupAccess(
+    dataverse: DataverseClient,
+    projectId: string,
+    operationSetId: string | undefined,
+    groupId: string,
+    teamCache: Map<string, string | null>
+) {
+    if (!groupId) return false;
+    const groupResource = await findBookableResourceByAadObjectId(dataverse, groupId);
+    if (!groupResource) {
+        logger.warn("Dataverse group resource not found", { projectId, groupId });
+        return false;
+    }
+    const teamId = await getProjectTeamMemberId(dataverse, projectId, groupResource.id, teamCache);
+    if (teamId) return false;
+    const created = await createProjectTeamMember(
+        dataverse,
+        projectId,
+        groupResource.id,
+        groupResource.name || "Planner Group",
+        operationSetId
+    );
+    return Boolean(created);
 }
 
 async function resolveProjectFromBc(
@@ -775,6 +830,7 @@ async function syncTaskToDataverse(
         resourceCache: Map<string, string | null>;
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
+        touchOperationSet?: () => void;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
@@ -802,6 +858,7 @@ async function syncTaskToDataverse(
 
     if (taskId) {
         if (options.useScheduleApi && options.operationSetId) {
+            options.touchOperationSet?.();
             const entity = buildScheduleTaskEntity({
                 taskId,
                 projectId,
@@ -843,6 +900,7 @@ async function syncTaskToDataverse(
     }
 
     if (options.useScheduleApi && options.operationSetId) {
+        options.touchOperationSet?.();
         const newTaskId = crypto.randomUUID();
         const bucketId = await getProjectBucketId(dataverse, projectId, options.bucketCache);
         const entity = buildScheduleTaskEntity({
@@ -893,6 +951,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
     const mapping = getDataverseMappingConfig();
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
+    const plannerGroupId = syncConfig.plannerGroupId;
 
     const settings = await listProjectSyncSettings();
     const disabled = buildDisabledProjectSet(settings);
@@ -990,6 +1049,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
         const assignmentCache = new Set<string>();
         let useScheduleApi = syncConfig.useScheduleApi;
         let operationSetId = "";
+        let operationSetTouched = false;
         if (useScheduleApi) {
             try {
                 operationSetId = await dataverse.createOperationSet(
@@ -1006,6 +1066,27 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
             } catch (error) {
                 useScheduleApi = false;
                 logger.warn("Dataverse schedule API init failed; falling back to direct updates", {
+                    requestId,
+                    projectNo: projNo,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+
+        if (plannerGroupId) {
+            try {
+                const added = await ensureProjectGroupAccess(
+                    dataverse,
+                    projectId,
+                    useScheduleApi ? operationSetId : undefined,
+                    plannerGroupId,
+                    teamCache
+                );
+                if (added) {
+                    operationSetTouched = true;
+                }
+            } catch (error) {
+                logger.warn("Dataverse group share failed", {
                     requestId,
                     projectNo: projNo,
                     error: (error as Error)?.message,
@@ -1032,6 +1113,9 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                     resourceCache,
                     teamCache,
                     assignmentCache,
+                    touchOperationSet: () => {
+                        operationSetTouched = true;
+                    },
                 });
                 if (res.action === "created") result.created += 1;
                 else if (res.action === "updated") result.updated += 1;
@@ -1050,7 +1134,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
             }
         }
 
-        if (useScheduleApi && operationSetId && pendingUpdates.length) {
+        if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
             try {
                 await dataverse.executeOperationSet(operationSetId);
                 for (const entry of pendingUpdates) {

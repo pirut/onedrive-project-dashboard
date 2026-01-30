@@ -34,6 +34,7 @@ export function getPremiumSyncConfig() {
         pollPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_PAGE_SIZE", 200))),
         pollMaxPages: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_MAX_PAGES", 10))),
         useScheduleApi: readBoolEnv("DATAVERSE_USE_SCHEDULE_API", true),
+        plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
     };
 }
 
