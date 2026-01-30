@@ -1,6 +1,5 @@
 import { BusinessCentralClient } from "../../../../../lib/planner-sync/bc-client";
 import { getBcSubscription, saveBcSubscription } from "../../../../../lib/planner-sync/bc-webhook-store";
-import { getCronSecret, isCronAuthorized } from "../../../../../lib/planner-sync/cron-auth";
 import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
@@ -24,16 +23,6 @@ async function handle(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
-    const cronSecret = getCronSecret();
-    const provided = request.headers.get("x-cron-secret") || url.searchParams.get("cronSecret") || url.searchParams.get("cron_secret");
-
-    if (!cronSecret || !isCronAuthorized(provided || "")) {
-        logger.warn("BC subscription renew unauthorized", { requestId });
-        return new Response(JSON.stringify({ ok: false, error: "Unauthorized", requestId }), {
-            status: 401,
-            headers: { "Content-Type": "application/json", "X-Request-ID": requestId },
-        });
-    }
 
     try {
         let body: { entitySets?: string[] } | null = null;

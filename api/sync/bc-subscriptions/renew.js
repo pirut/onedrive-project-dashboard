@@ -1,6 +1,5 @@
 import { BusinessCentralClient } from "../../../lib/planner-sync/bc-client.js";
 import { getBcSubscription, saveBcSubscription } from "../../../lib/planner-sync/bc-webhook-store.js";
-import { getCronSecret, isCronAuthorized } from "../../../lib/planner-sync/cron-auth.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = ["projectTasks"];
@@ -35,14 +34,6 @@ export default async function handler(req, res) {
 
     if (req.method !== "POST" && req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
-        return;
-    }
-
-    const cronSecret = getCronSecret();
-    const provided = req.headers["x-cron-secret"] || req.query?.cronSecret || req.query?.cron_secret;
-    if (!cronSecret || !isCronAuthorized(provided || "")) {
-        logger.warn("BC subscription renew unauthorized", { requestId });
-        res.status(401).json({ ok: false, error: "Unauthorized", requestId });
         return;
     }
 

@@ -69,7 +69,6 @@ export default async function handler(req, res) {
             graph: { ok: graphMissing.length === 0, missing: graphMissing },
             businessCentral: { ok: bcMissing.length === 0, missing: bcMissing },
             dataverse: { ok: dataverseMissing.length === 0, missing: dataverseMissing },
-            cronSecret: Boolean((process.env.CRON_SECRET || "").trim()),
         },
         checks,
         routes,

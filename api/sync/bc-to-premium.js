@@ -1,7 +1,6 @@
 import "../../lib/planner-sync/bootstrap.js";
 import { syncBcToPremium, syncPremiumChanges } from "../../lib/premium-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
-import { getCronSecret, isCronAuthorized } from "../../lib/planner-sync/cron-auth.js";
 
 async function readJsonBody(req) {
     const chunks = [];
@@ -21,12 +20,6 @@ export default async function handler(req, res) {
         return;
     }
 
-    const expected = getCronSecret();
-    const provided = req.headers["x-cron-secret"] || req.query?.cronSecret || req.query?.cronsecret || "";
-    if (expected && req.method === "GET" && !isCronAuthorized(String(provided || ""))) {
-        res.status(401).json({ ok: false, error: "Unauthorized" });
-        return;
-    }
     const body = req.method === "POST" ? await readJsonBody(req) : null;
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const projectNos = Array.isArray(body?.projectNos) ? body.projectNos.map((value) => String(value).trim()).filter(Boolean) : [];

@@ -1,6 +1,5 @@
 import { syncBcToPremium, syncPremiumChanges } from "../../../../lib/premium-sync";
 import { logger } from "../../../../lib/planner-sync/logger";
-import { getCronSecret, isCronAuthorized } from "../../../../lib/planner-sync/cron-auth";
 
 async function readJsonBody(request: Request) {
     try {
@@ -11,15 +10,6 @@ async function readJsonBody(request: Request) {
 }
 
 async function handle(request: Request) {
-    const expected = getCronSecret();
-    const provided = request.headers.get("x-cron-secret") || new URL(request.url).searchParams.get("cronSecret") || "";
-    if (expected && request.method === "GET" && !isCronAuthorized(provided || "")) {
-        return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }, null, 2), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-        });
-    }
-
     const body = request.method === "POST" ? await readJsonBody(request) : null;
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const projectNos = Array.isArray(body?.projectNos) ? body.projectNos.map((value: unknown) => String(value).trim()).filter(Boolean) : [];

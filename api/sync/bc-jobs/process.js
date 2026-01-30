@@ -1,6 +1,5 @@
 import { acquireBcJobLock, releaseBcJobLock } from "../../../lib/planner-sync/bc-webhook-store.js";
 import { processBcJobQueue } from "../../../lib/planner-sync/bc-job-processor.js";
-import { getCronSecret, isCronAuthorized } from "../../../lib/planner-sync/cron-auth.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 export default async function handler(req, res) {
@@ -9,14 +8,6 @@ export default async function handler(req, res) {
 
     if (req.method !== "POST" && req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
-        return;
-    }
-
-    const cronSecret = getCronSecret();
-    const provided = req.headers["x-cron-secret"] || req.query?.cronSecret || req.query?.cron_secret;
-    if (!cronSecret || !isCronAuthorized(provided || "")) {
-        logger.warn("BC jobs process unauthorized", { requestId });
-        res.status(401).json({ ok: false, error: "Unauthorized", requestId });
         return;
     }
 
