@@ -1,5 +1,6 @@
 {
     "buildCommand": "npm run build",
+    "outputDirectory": "dist",
     "functions": {
         "api/sync-folders-cron.js": {
             "maxDuration": 60

@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "webhook": "node server/webhook.js",
-        "build": "tsc -p tsconfig.json",
+        "build": "tsc -p tsconfig.json && node -e \"require('fs').mkdirSync('dist',{recursive:true})\"",
         "test-sync": "node scripts/test-folder-sync.js",
         "diagnose": "node scripts/diagnose-auth.js",
         "test-site": "node scripts/test-site-access.js",
