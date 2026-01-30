@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "webhook": "node server/webhook.js",
-        "build": "tsc -p tsconfig.json && node -e \"require('fs').mkdirSync('dist',{recursive:true})\"",
+        "build": "tsc -p tsconfig.json && node -e \"const fs=require('fs'); fs.mkdirSync('dist',{recursive:true}); if(fs.existsSync('index.html')) { fs.copyFileSync('index.html','dist/index.html'); } else { fs.writeFileSync('dist/index.html',''); }\"",
         "test-sync": "node scripts/test-folder-sync.js",
         "diagnose": "node scripts/diagnose-auth.js",
         "test-site": "node scripts/test-site-access.js",
