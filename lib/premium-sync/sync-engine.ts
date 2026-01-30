@@ -229,7 +229,9 @@ function resolveTaskDate(value?: string | null) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
         const year = Number(trimmed.slice(0, 4));
         if (Number.isFinite(year) && year < 1753) return null;
-        return trimmed;
+        const [y, m, d] = trimmed.split("-").map((part) => Number(part));
+        if (!y || !m || !d) return null;
+        return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)).toISOString();
     }
     const parsed = parseDateMs(trimmed);
     if (parsed == null) return null;
