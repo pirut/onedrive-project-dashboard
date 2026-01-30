@@ -109,7 +109,14 @@ function fromDataversePercent(value: number | null | undefined, scale: number) {
 
 function parseDateMs(value?: string | null) {
     if (!value) return null;
-    const parsed = Date.parse(value);
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        const [year, month, day] = trimmed.split("-").map((part) => Number(part));
+        if (!year || !month || !day) return null;
+        // Use noon UTC for date-only inputs to avoid timezone day-shift.
+        return Date.UTC(year, month - 1, day, 12, 0, 0);
+    }
+    const parsed = Date.parse(trimmed);
     return Number.isNaN(parsed) ? null : parsed;
 }
 
