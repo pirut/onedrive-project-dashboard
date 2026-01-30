@@ -33,29 +33,62 @@ async function resolveLookupField(
     if (lookupFieldCache.has(key)) return lookupFieldCache.get(key) || null;
     try {
         const res = await dataverse.requestRaw(
-            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName,AttributeType,Targets`
+            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=LogicalName&$expand=Targets`
         );
-        const data = (await res.json()) as { value?: Array<{ LogicalName?: string; AttributeType?: string; Targets?: string[] }> };
+        const data = (await res.json()) as { value?: Array<{ LogicalName?: string; Targets?: string[] }> };
         const attrs = Array.isArray(data?.value) ? data.value : [];
         const match = attrs.find((attr) => {
-            const type = String(attr.AttributeType || "").toLowerCase();
-            if (!type.includes("lookup")) return false;
             if (!Array.isArray(attr.Targets)) return false;
             return attr.Targets.some((target) => String(target).toLowerCase() === targetLogicalName.toLowerCase());
         });
         const logical = match?.LogicalName ? String(match.LogicalName) : "";
         const resolved = logical && logical.trim() ? logical.trim() : null;
         lookupFieldCache.set(key, resolved);
-        return resolved;
+        if (resolved) return resolved;
     } catch (error) {
         logger.warn("Dataverse lookup field resolve failed", {
             entityLogicalName,
             targetLogicalName,
             error: (error as Error)?.message,
         });
-        lookupFieldCache.set(key, null);
-        return null;
     }
+    try {
+        const res = await dataverse.requestRaw(
+            `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes?$select=LogicalName,AttributeType`
+        );
+        const data = (await res.json()) as { value?: Array<{ LogicalName?: string; AttributeType?: string }> };
+        const attrs = Array.isArray(data?.value) ? data.value : [];
+        const lookups = attrs.filter((attr) => String(attr.AttributeType || "").toLowerCase() === "lookup");
+        for (const attr of lookups) {
+            if (!attr.LogicalName) continue;
+            try {
+                const detail = await dataverse.requestRaw(
+                    `/EntityDefinitions(LogicalName='${entityLogicalName}')/Attributes(LogicalName='${attr.LogicalName}')/Microsoft.Dynamics.CRM.LookupAttributeMetadata?$select=Targets`
+                );
+                const detailData = (await detail.json()) as { Targets?: string[] };
+                if (Array.isArray(detailData?.Targets)) {
+                    const hit = detailData.Targets.some(
+                        (target) => String(target).toLowerCase() === targetLogicalName.toLowerCase()
+                    );
+                    if (hit) {
+                        const resolved = String(attr.LogicalName);
+                        lookupFieldCache.set(key, resolved);
+                        return resolved;
+                    }
+                }
+            } catch {
+                continue;
+            }
+        }
+    } catch (error) {
+        logger.warn("Dataverse lookup field resolve failed", {
+            entityLogicalName,
+            targetLogicalName,
+            error: (error as Error)?.message,
+        });
+    }
+    lookupFieldCache.set(key, null);
+    return null;
 }
 
 async function getProjectTeamLookupFields(dataverse: DataverseClient) {
