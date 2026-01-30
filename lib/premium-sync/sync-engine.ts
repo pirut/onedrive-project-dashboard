@@ -109,20 +109,18 @@ function fromDataversePercent(value: number | null | undefined, scale: number) {
 
 function parseDateMs(value?: string | null) {
     if (!value) return null;
-    const trimmed = value.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-        const [year, month, day] = trimmed.split("-").map((part) => Number(part));
-        if (!year || !month || !day) return null;
-        // Use noon UTC for date-only inputs to avoid timezone day-shift.
-        return Date.UTC(year, month - 1, day, 12, 0, 0);
-    }
-    const parsed = Date.parse(trimmed);
+    const parsed = Date.parse(value);
     return Number.isNaN(parsed) ? null : parsed;
 }
 
 function resolveTaskDate(value?: string | null) {
     if (!value) return null;
-    const parsed = parseDateMs(value);
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        return trimmed;
+    }
+    const parsed = parseDateMs(trimmed);
     if (parsed == null) return null;
     const minCrmDate = Date.UTC(1753, 0, 1);
     if (parsed < minCrmDate) return null;
@@ -268,7 +266,7 @@ async function getProjectTeamMemberId(
     const key = `${projectId}:${resourceId}`;
     if (cache.has(key)) return cache.get(key) || null;
     try {
-        const filter = `_msdyn_projectid_value eq ${formatODataGuid(projectId)} and _msdyn_bookableresourceid_value eq ${formatODataGuid(
+        const filter = `_msdyn_project_value eq ${formatODataGuid(projectId)} and _msdyn_bookableresource_value eq ${formatODataGuid(
             resourceId
         )}`;
         const res = await dataverse.list<DataverseEntity>("msdyn_projectteams", {
@@ -291,8 +289,7 @@ async function createProjectTeamMember(
     dataverse: DataverseClient,
     projectId: string,
     resourceId: string,
-    name: string,
-    operationSetId?: string
+    name: string
 ) {
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
     const resourceBinding = dataverse.buildLookupBinding("bookableresources", resourceId);
@@ -301,14 +298,10 @@ async function createProjectTeamMember(
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projectteam",
         msdyn_projectteamid: crypto.randomUUID(),
         msdyn_name: name,
-        "msdyn_projectid@odata.bind": projectBinding,
-        "msdyn_bookableresourceid@odata.bind": resourceBinding,
+        "msdyn_project@odata.bind": projectBinding,
+        "msdyn_bookableresource@odata.bind": resourceBinding,
     };
     try {
-        if (operationSetId) {
-            await dataverse.pssCreate(entity, operationSetId);
-            return entity.msdyn_projectteamid as string;
-        }
         const created = await dataverse.create("msdyn_projectteams", entity);
         return created.entityId || null;
     } catch (error) {
@@ -323,7 +316,6 @@ async function ensureAssignmentForTask(
     projectId: string,
     taskId: string,
     options: {
-        operationSetId?: string;
         resourceCache: Map<string, string | null>;
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
@@ -338,7 +330,7 @@ async function ensureAssignmentForTask(
     }
     let teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, options.teamCache);
     if (!teamId) {
-        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee, options.operationSetId);
+        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee);
         if (teamId) {
             options.teamCache.set(`${projectId}:${resourceId}`, teamId);
         }
@@ -350,7 +342,7 @@ async function ensureAssignmentForTask(
     const assignmentKey = `${taskId}:${teamId}`;
     if (options.assignmentCache.has(assignmentKey)) return;
     try {
-        const filter = `_msdyn_taskid_value eq ${formatODataGuid(taskId)} and _msdyn_projectteamid_value eq ${formatODataGuid(teamId)}`;
+        const filter = `_msdyn_task_value eq ${formatODataGuid(taskId)} and _msdyn_projectteam_value eq ${formatODataGuid(teamId)}`;
         const existing = await dataverse.list<DataverseEntity>("msdyn_resourceassignments", {
             select: ["msdyn_resourceassignmentid"],
             filter,
@@ -371,16 +363,12 @@ async function ensureAssignmentForTask(
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_resourceassignment",
         msdyn_resourceassignmentid: crypto.randomUUID(),
         msdyn_name: assignee,
-        "msdyn_projectid@odata.bind": projectBinding,
-        "msdyn_projectteamid@odata.bind": teamBinding,
-        "msdyn_taskid@odata.bind": taskBinding,
+        "msdyn_project@odata.bind": projectBinding,
+        "msdyn_projectteam@odata.bind": teamBinding,
+        "msdyn_task@odata.bind": taskBinding,
     };
     try {
-        if (options.operationSetId) {
-            await dataverse.pssCreate(entity, options.operationSetId);
-        } else {
-            await dataverse.create("msdyn_resourceassignments", entity);
-        }
+        await dataverse.create("msdyn_resourceassignments", entity);
         options.assignmentCache.add(assignmentKey);
     } catch (error) {
         logger.warn("Dataverse assignment create failed", { projectId, taskId, assignee, error: (error as Error)?.message });
@@ -682,7 +670,6 @@ async function syncTaskToDataverse(
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
             await ensureAssignmentForTask(dataverse, task, projectId, taskId, {
-                operationSetId: options.operationSetId,
                 resourceCache: options.resourceCache,
                 teamCache: options.teamCache,
                 assignmentCache: options.assignmentCache,
@@ -725,7 +712,6 @@ async function syncTaskToDataverse(
         });
         await dataverse.pssCreate(entity, options.operationSetId);
         await ensureAssignmentForTask(dataverse, task, projectId, newTaskId, {
-            operationSetId: options.operationSetId,
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
