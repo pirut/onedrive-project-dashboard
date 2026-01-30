@@ -1,6 +1,6 @@
 import { BusinessCentralClient } from "./bc-client.js";
 import { logger } from "./logger.js";
-import { syncBcToPremium } from "../premium-sync.js";
+import { syncBcToPremium } from "../premium-sync/index.js";
 import { popBcJobs, BcWebhookJob } from "./bc-webhook-store.js";
 
 export type BcJobProcessSummary = {

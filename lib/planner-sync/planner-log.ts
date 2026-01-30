@@ -7,10 +7,11 @@ const LOG_KEY = "planner:log";
 const DEFAULT_MAX_LOG = 200;
 const MAX_LOG = Number(process.env.PLANNER_LOG_MAX || DEFAULT_MAX_LOG);
 const inMemoryLog: PlannerLogEntry[] = [];
-const emitter = (globalThis as { __plannerLogEmitter?: EventEmitter }).__plannerLogEmitter || new EventEmitter();
+const globalWithEmitter = globalThis as typeof globalThis & { __plannerLogEmitter?: EventEmitter };
+const emitter = globalWithEmitter.__plannerLogEmitter || new EventEmitter();
 
-if (!(globalThis as { __plannerLogEmitter?: EventEmitter }).__plannerLogEmitter) {
-    (globalThis as { __plannerLogEmitter: EventEmitter }).__plannerLogEmitter = emitter;
+if (!globalWithEmitter.__plannerLogEmitter) {
+    globalWithEmitter.__plannerLogEmitter = emitter;
 }
 
 function resolveMaxLog() {

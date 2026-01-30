@@ -57,12 +57,11 @@ function truncateString(value: string) {
 
 function sanitizeValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
     if (value == null) return value;
-    const valueType = typeof value;
-    if (valueType === "string") return truncateString(value);
-    if (valueType === "number" || valueType === "boolean") return value;
-    if (valueType === "bigint") return value.toString();
-    if (valueType === "symbol") return value.toString();
-    if (valueType === "function") return `[Function ${value.name || "anonymous"}]`;
+    if (typeof value === "string") return truncateString(value);
+    if (typeof value === "number" || typeof value === "boolean") return value;
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "symbol") return value.toString();
+    if (typeof value === "function") return `[Function ${value.name || "anonymous"}]`;
 
     if (value instanceof Date) {
         return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
@@ -147,9 +146,16 @@ function normalizeMeta(meta?: LogMeta) {
     return sanitizeValue(meta, 0, new WeakSet<object>()) as LogMeta;
 }
 
+type PlannerLogPayload = {
+    level: LogLevel;
+    scope: string;
+    message: string;
+    timestamp: string;
+} & Record<string, unknown>;
+
 function emitPayload(level: LogLevel, message: string, meta?: LogMeta) {
     const safeMeta = normalizeMeta(meta);
-    const payload = {
+    const payload: PlannerLogPayload = {
         level,
         scope: "planner-sync",
         message: truncateString(message),
