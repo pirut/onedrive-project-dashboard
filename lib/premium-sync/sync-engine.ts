@@ -143,8 +143,8 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskBcNoField] = String(task.taskNo).trim();
     }
 
-    const start = resolveTaskDate(task.manualStartDate || task.startDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
+    const start = resolveTaskDate(task.manualStartDate || null);
+    const finish = resolveTaskDate(task.manualEndDate || null);
     if (start) {
         entity[mapping.taskStartField] = start;
     }
@@ -360,8 +360,8 @@ function buildTaskPayload(
     const title = buildTaskTitle(task);
     payload[mapping.taskTitleField] = title;
 
-    const start = resolveTaskDate(task.manualStartDate || task.startDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
+    const start = resolveTaskDate(task.manualStartDate || null);
+    const finish = resolveTaskDate(task.manualEndDate || null);
     if (start) payload[mapping.taskStartField] = start;
     if (finish) payload[mapping.taskFinishField] = finish;
 
@@ -385,6 +385,8 @@ function buildTaskPayload(
 }
 
 function shouldSkipTaskForSection(task: BcProjectTask, currentSection: { name: string | null }) {
+    const description = String(task.description || "").trim();
+    if (description.toUpperCase() === "TOTAL") return true;
     const taskNumber = parseTaskNumber(task.taskNo);
     if (Number.isFinite(taskNumber) && HEADING_TASK_SECTIONS.has(taskNumber)) {
         currentSection.name = HEADING_TASK_SECTIONS.get(taskNumber) || null;
