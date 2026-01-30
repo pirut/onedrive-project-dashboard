@@ -159,16 +159,16 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskDescriptionField] = task.description;
     }
 
-    if (projectId) {
-        entity[mapping.taskProjectLookupField] = {
-            [mapping.projectIdField]: projectId,
-        };
+    const projectBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
+    if (projectBinding) {
+        entity[`${mapping.taskProjectLookupField}@odata.bind`] = projectBinding;
     }
 
     if (bucketId) {
-        entity["msdyn_projectbucket"] = {
-            msdyn_projectbucketid: bucketId,
-        };
+        const bucketBinding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
+        if (bucketBinding) {
+            entity["msdyn_projectbucket@odata.bind"] = bucketBinding;
+        }
     }
 
     return entity;
