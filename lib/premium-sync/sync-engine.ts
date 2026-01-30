@@ -654,6 +654,33 @@ function resolveTaskId(entity: DataverseEntity | null, mapping: ReturnType<typeo
     return null;
 }
 
+async function validateTaskIdForProject(
+    dataverse: DataverseClient,
+    taskId: string,
+    projectId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    if (!taskId) return false;
+    try {
+        const fields = [mapping.taskIdField, mapping.taskProjectIdField].filter(Boolean) as string[];
+        const entity = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, fields);
+        if (!entity) return false;
+        const projectField = mapping.taskProjectIdField;
+        if (!projectField) return true;
+        const raw = entity[projectField];
+        if (typeof raw === "string" && raw.trim()) {
+            return raw.trim().toLowerCase() === projectId.toLowerCase();
+        }
+        return true;
+    } catch (error) {
+        const message = (error as Error)?.message || "";
+        if (message.includes("Does Not Exist") || message.includes("404")) {
+            return false;
+        }
+        throw error;
+    }
+}
+
 async function findDataverseTaskByBcNo(
     dataverse: DataverseClient,
     projectId: string,
@@ -843,6 +870,19 @@ async function syncTaskToDataverse(
             taskId,
         });
         taskId = "";
+    }
+
+    if (taskId) {
+        const valid = await validateTaskIdForProject(dataverse, taskId, projectId, mapping);
+        if (!valid) {
+            logger.warn("Planner taskId invalid for project; will recreate", {
+                projectNo: task.projectNo,
+                taskNo: task.taskNo,
+                taskId,
+                projectId,
+            });
+            taskId = "";
+        }
     }
 
     let existingTask: DataverseEntity | null = null;
