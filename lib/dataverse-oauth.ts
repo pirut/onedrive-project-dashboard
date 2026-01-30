@@ -1,6 +1,6 @@
 import crypto from "crypto";
-import { fetchWithRetry, readResponseJson, readResponseText } from "./planner-sync/http";
-import { logger } from "./planner-sync/logger";
+import { fetchWithRetry, readResponseJson, readResponseText } from "./planner-sync/http.js";
+import { logger } from "./planner-sync/logger.js";
 
 export type DataverseOAuthConfig = {
     baseUrl: string;

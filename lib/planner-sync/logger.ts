@@ -1,4 +1,4 @@
-import { appendPlannerLog } from "./planner-log";
+import { appendPlannerLog } from "./planner-log.js";
 
 if (!process.noDeprecation) {
     process.noDeprecation = true;

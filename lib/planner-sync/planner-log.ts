@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { getRedis } from "./redis";
+import { getRedis } from "./redis.js";
 
 type PlannerLogEntry = Record<string, unknown>;
 

@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { getRedis } from "./redis";
-import { logger } from "./logger";
+import { getRedis } from "./redis.js";
+import { logger } from "./logger.js";
 
 export type BcWebhookLogEntry = {
     ts: string;

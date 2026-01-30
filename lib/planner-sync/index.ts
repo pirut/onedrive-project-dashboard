@@ -1,3 +1,3 @@
-export { BusinessCentralClient } from "./bc-client";
-export { getBcConfig, getSyncConfig } from "./config";
-export { logger } from "./logger";
+export { BusinessCentralClient } from "./bc-client.js";
+export { getBcConfig, getSyncConfig } from "./config.js";
+export { logger } from "./logger.js";

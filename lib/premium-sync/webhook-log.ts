@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
-import { getRedis } from "../planner-sync/redis";
-import { logger } from "../planner-sync/logger";
+import { getRedis } from "../planner-sync/redis.js";
+import { logger } from "../planner-sync/logger.js";
 
 export type WebhookLogEntry = {
     ts: string;

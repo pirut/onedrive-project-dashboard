@@ -48,3 +48,8 @@ pids
 
 .vercel
 .planner-subscriptions.json
+
+# Generated JS from TS sources
+lib/planner-sync/*.js
+lib/premium-sync/*.js
+lib/dataverse-*.js

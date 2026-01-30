@@ -1,6 +1,6 @@
-import { fetchWithRetry, readResponseJson, readResponseText } from "./http";
-import { logger } from "./logger";
-import { getBcConfig } from "./config";
+import { fetchWithRetry, readResponseJson, readResponseText } from "./http.js";
+import { logger } from "./logger.js";
+import { getBcConfig } from "./config.js";
 
 function parseDateMs(value: string | null | undefined) {
     if (!value) return null;

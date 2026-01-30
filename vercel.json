@@ -1,4 +1,5 @@
 {
+    "buildCommand": "npm run build",
     "functions": {
         "api/sync-folders-cron.js": {
             "maxDuration": 60

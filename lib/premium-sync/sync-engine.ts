@@ -1,10 +1,10 @@
-import { BusinessCentralClient, BcProject, BcProjectTask } from "../planner-sync/bc-client";
-import { logger } from "../planner-sync/logger";
-import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "../planner-sync/bc-change-store";
-import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../planner-sync/project-sync-store";
-import { DataverseClient, DataverseEntity } from "../dataverse-client";
-import { getDataverseDeltaLink, saveDataverseDeltaLink } from "./delta-store";
-import { getDataverseMappingConfig, getPremiumSyncConfig } from "./config";
+import { BusinessCentralClient, BcProject, BcProjectTask } from "../planner-sync/bc-client.js";
+import { logger } from "../planner-sync/logger.js";
+import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "../planner-sync/bc-change-store.js";
+import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../planner-sync/project-sync-store.js";
+import { DataverseClient, DataverseEntity } from "../dataverse-client.js";
+import { getDataverseDeltaLink, saveDataverseDeltaLink } from "./delta-store.js";
+import { getDataverseMappingConfig, getPremiumSyncConfig } from "./config.js";
 import crypto from "crypto";
 
 const HEADING_TASK_SECTIONS = new Map<number, string | null>([

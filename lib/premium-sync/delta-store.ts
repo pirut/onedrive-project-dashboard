@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { getRedis } from "../planner-sync/redis";
-import { logger } from "../planner-sync/logger";
+import { getRedis } from "../planner-sync/redis.js";
+import { logger } from "../planner-sync/logger.js";
 
 const FILE_PATH = process.env.DATAVERSE_DELTA_FILE || path.join(process.cwd(), ".dataverse-delta.json");
 const KV_KEY = "dataverse:delta";

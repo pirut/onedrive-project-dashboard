@@ -1,6 +1,6 @@
-import { fetchWithRetry, readResponseJson, readResponseText } from "./planner-sync/http";
-import { logger } from "./planner-sync/logger";
-import { getDataverseRefreshToken, saveDataverseRefreshToken } from "./dataverse-auth-store";
+import { fetchWithRetry, readResponseJson, readResponseText } from "./planner-sync/http.js";
+import { logger } from "./planner-sync/logger.js";
+import { getDataverseRefreshToken, saveDataverseRefreshToken } from "./dataverse-auth-store.js";
 
 export type DataverseConfig = {
     baseUrl: string;

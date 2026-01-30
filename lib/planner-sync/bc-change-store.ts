@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { getRedis } from "./redis";
-import { logger } from "./logger";
+import { getRedis } from "./redis.js";
+import { logger } from "./logger.js";
 
 type ChangeCursorEntry = { lastSeq: number; updatedAt?: string };
 
