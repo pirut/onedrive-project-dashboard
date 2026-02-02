@@ -858,7 +858,6 @@ function buildBcUpdateFromPremium(
         const bcDate = toBcDate(start);
         if (bcDate) {
             updates.manualStartDate = bcDate;
-            updates.startDate = bcDate;
         }
     }
 
@@ -867,7 +866,6 @@ function buildBcUpdateFromPremium(
         const bcDate = toBcDate(finish);
         if (bcDate) {
             updates.manualEndDate = bcDate;
-            updates.endDate = bcDate;
         }
     }
 
