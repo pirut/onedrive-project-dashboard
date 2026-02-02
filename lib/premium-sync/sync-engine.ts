@@ -457,8 +457,7 @@ async function createProjectTeamMember(
     dataverse: DataverseClient,
     projectId: string,
     resourceId: string,
-    name: string,
-    operationSetId?: string
+    name: string
 ) {
     const lookups = await getProjectTeamLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
@@ -472,26 +471,11 @@ async function createProjectTeamMember(
         [`${lookups.resource}@odata.bind`]: resourceBinding,
     };
     try {
-        if (operationSetId) {
-            await dataverse.pssCreate(entity, operationSetId);
-            return entity.msdyn_projectteamid as string;
-        }
         const created = await dataverse.create("msdyn_projectteams", entity);
         return created.entityId || null;
     } catch (error) {
         logger.warn("Dataverse project team create failed", { projectId, resourceId, error: (error as Error)?.message });
-        if (!operationSetId) return null;
-        try {
-            const created = await dataverse.create("msdyn_projectteams", entity);
-            return created.entityId || null;
-        } catch (fallbackError) {
-            logger.warn("Dataverse project team create fallback failed", {
-                projectId,
-                resourceId,
-                error: (fallbackError as Error)?.message,
-            });
-            return null;
-        }
+        return null;
     }
 }
 
@@ -516,7 +500,7 @@ async function ensureAssignmentForTask(
     }
     let teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, options.teamCache);
     if (!teamId) {
-        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee, options.operationSetId);
+        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee);
         if (teamId) {
             options.teamCache.set(`${projectId}:${resourceId}`, teamId);
         }
@@ -588,8 +572,7 @@ async function ensureProjectGroupAccess(
         dataverse,
         projectId,
         groupResource.id,
-        groupResource.name || "Planner Group",
-        operationSetId
+        groupResource.name || "Planner Group"
     );
     return Boolean(created);
 }
@@ -609,8 +592,7 @@ async function ensureProjectResourceAccess(
         dataverse,
         projectId,
         resourceId,
-        resourceName || "Planner Resource",
-        operationSetId
+        resourceName || "Planner Resource"
     );
     if (created) {
         teamCache.set(`${projectId}:${resourceId}`, created);
@@ -1165,16 +1147,13 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
 
         if (plannerGroupId) {
             try {
-                const added = await ensureProjectGroupAccess(
+                await ensureProjectGroupAccess(
                     dataverse,
                     projectId,
                     useScheduleApi ? operationSetId : undefined,
                     plannerGroupId,
                     teamCache
                 );
-                if (added) {
-                    operationSetTouched = true;
-                }
             } catch (error) {
                 logger.warn("Dataverse group share failed", {
                     requestId,
@@ -1191,7 +1170,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                         logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
                         continue;
                     }
-                    const added = await ensureProjectResourceAccess(
+                    await ensureProjectResourceAccess(
                         dataverse,
                         projectId,
                         useScheduleApi ? operationSetId : undefined,
@@ -1199,9 +1178,6 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                         resource.name || "Planner Resource",
                         teamCache
                     );
-                    if (added) {
-                        operationSetTouched = true;
-                    }
                 } catch (error) {
                     logger.warn("Dataverse resource share failed", {
                         requestId,
