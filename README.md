@@ -250,6 +250,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
 - `GET /api/sync/debug-operation-sets` (list Dataverse schedule API operation sets)
 - `POST /api/sync/clear-operation-sets` (delete Dataverse schedule API operation sets)
+- `POST /api/sync/clear-bc-sync-lock` (clear syncLock for a BC task)
 - `POST /api/webhooks/dataverse` (Dataverse notification receiver)
 - `POST /api/webhooks/bc` (Business Central notification receiver)
 - `POST /api/sync/bc-subscriptions/create`
@@ -284,6 +285,11 @@ curl -X GET \"https://your-domain.com/api/sync/debug-operation-sets\"
 curl -X POST \"https://your-domain.com/api/sync/clear-operation-sets\" \\
   -H 'Content-Type: application/json' \\
   -d '{\"olderThanMinutes\":60}'
+
+# Clear syncLock for a BC task
+curl -X POST \"https://your-domain.com/api/sync/clear-bc-sync-lock\" \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"projectNo\":\"P-100\",\"taskNo\":\"1200\"}'
 
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse
