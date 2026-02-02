@@ -859,6 +859,103 @@ function isBcChangedSinceLastSync(bcTask: BcProjectTask, graceMs: number) {
     return modifiedMs - lastSync > graceMs;
 }
 
+function isDirectTaskWriteBlocked(error: unknown) {
+    const message = (error as Error)?.message || String(error || "");
+    const normalized = message.toLowerCase();
+    if (normalized.includes("cannot directly do 'update' operation")) return true;
+    if (normalized.includes("cannot directly do 'create' operation")) return true;
+    if (normalized.includes("resource editing ui via project")) return true;
+    return normalized.includes("msdyn_projecttask") && normalized.includes("not supported");
+}
+
+async function runScheduleUpdateFallback(options: {
+    bcClient: BusinessCentralClient;
+    dataverse: DataverseClient;
+    task: BcProjectTask;
+    taskId: string;
+    projectId: string;
+    mapping: ReturnType<typeof getDataverseMappingConfig>;
+    resourceCache: Map<string, string | null>;
+    teamCache: Map<string, string | null>;
+    assignmentCache: Set<string>;
+}) {
+    const operationSetId = await options.dataverse.createOperationSet(
+        options.projectId,
+        `BC sync fallback ${options.projectId} ${new Date().toISOString()}`
+    );
+    if (!operationSetId) {
+        throw new Error("Dataverse schedule API unavailable for fallback update");
+    }
+    const entity = buildScheduleTaskEntity({
+        taskId: options.taskId,
+        projectId: options.projectId,
+        bucketId: null,
+        task: options.task,
+        mapping: options.mapping,
+        dataverse: options.dataverse,
+    });
+    await options.dataverse.pssUpdate(entity, operationSetId);
+    await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
+        operationSetId,
+        resourceCache: options.resourceCache,
+        teamCache: options.teamCache,
+        assignmentCache: options.assignmentCache,
+    });
+    await options.dataverse.executeOperationSet(operationSetId);
+    await updateBcTaskWithSyncLock(options.bcClient, options.task, {
+        plannerTaskId: options.taskId,
+        plannerPlanId: options.projectId,
+        lastPlannerEtag: options.task.lastPlannerEtag || "",
+        lastSyncAt: new Date().toISOString(),
+    });
+    return { action: "updated" as const, taskId: options.taskId };
+}
+
+async function runScheduleCreateFallback(options: {
+    bcClient: BusinessCentralClient;
+    dataverse: DataverseClient;
+    task: BcProjectTask;
+    projectId: string;
+    mapping: ReturnType<typeof getDataverseMappingConfig>;
+    bucketCache: Map<string, string | null>;
+    resourceCache: Map<string, string | null>;
+    teamCache: Map<string, string | null>;
+    assignmentCache: Set<string>;
+}) {
+    const operationSetId = await options.dataverse.createOperationSet(
+        options.projectId,
+        `BC sync fallback ${options.projectId} ${new Date().toISOString()}`
+    );
+    if (!operationSetId) {
+        throw new Error("Dataverse schedule API unavailable for fallback create");
+    }
+    const newTaskId = crypto.randomUUID();
+    const bucketId = await getProjectBucketId(options.dataverse, options.projectId, options.bucketCache);
+    const entity = buildScheduleTaskEntity({
+        taskId: newTaskId,
+        projectId: options.projectId,
+        bucketId,
+        task: options.task,
+        mapping: options.mapping,
+        dataverse: options.dataverse,
+    });
+    await options.dataverse.pssCreate(entity, operationSetId);
+    await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, newTaskId, {
+        operationSetId,
+        resourceCache: options.resourceCache,
+        teamCache: options.teamCache,
+        assignmentCache: options.assignmentCache,
+    });
+    await options.dataverse.executeOperationSet(operationSetId);
+    await updateBcTaskWithSyncLock(options.bcClient, options.task, {
+        plannerTaskId: newTaskId,
+        plannerPlanId: options.projectId,
+        lastPlannerEtag: "",
+        lastSyncAt: new Date().toISOString(),
+    });
+    return { action: "created" as const, taskId: newTaskId };
+}
+
 async function clearStaleSyncLockIfNeeded(bcClient: BusinessCentralClient, task: BcProjectTask, timeoutMinutes: number) {
     if (!task.syncLock) return task;
     if (!isStaleSyncLock(task, timeoutMinutes)) return task;
@@ -952,15 +1049,40 @@ async function syncTaskToDataverse(
         }
 
         const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
-        const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
-        const updates = {
-            plannerTaskId: taskId,
-            plannerPlanId: projectId,
-            lastPlannerEtag: updateResult.etag || task.lastPlannerEtag,
-            lastSyncAt: new Date().toISOString(),
-        };
-        await updateBcTaskWithSyncLock(bcClient, task, updates);
-        return { action: "updated", taskId };
+        try {
+            const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
+            const updates = {
+                plannerTaskId: taskId,
+                plannerPlanId: projectId,
+                lastPlannerEtag: updateResult.etag || task.lastPlannerEtag,
+                lastSyncAt: new Date().toISOString(),
+            };
+            await updateBcTaskWithSyncLock(bcClient, task, updates);
+            return { action: "updated", taskId };
+        } catch (error) {
+            if (isDirectTaskWriteBlocked(error)) {
+                try {
+                    return await runScheduleUpdateFallback({
+                        bcClient,
+                        dataverse,
+                        task,
+                        taskId,
+                        projectId,
+                        mapping,
+                        resourceCache: options.resourceCache,
+                        teamCache: options.teamCache,
+                        assignmentCache: options.assignmentCache,
+                    });
+                } catch (fallbackError) {
+                    logger.warn("Schedule update fallback failed", {
+                        projectId,
+                        taskId,
+                        error: (fallbackError as Error)?.message,
+                    });
+                }
+            }
+            throw error;
+        }
     }
 
     if (!mapping.allowTaskCreate) {
@@ -995,22 +1117,46 @@ async function syncTaskToDataverse(
         return { action: "created", taskId: newTaskId, pendingUpdate: { task, updates } };
     }
 
-    const created = await dataverse.create(mapping.taskEntitySet, payload);
-    if (!created.entityId) {
-        return { action: "error", taskId: "" };
+    try {
+        const created = await dataverse.create(mapping.taskEntitySet, payload);
+        if (!created.entityId) {
+            return { action: "error", taskId: "" };
+        }
+        await updateBcTaskWithSyncLock(bcClient, task, {
+            plannerTaskId: created.entityId,
+            plannerPlanId: projectId,
+            lastPlannerEtag: created.etag,
+            lastSyncAt: new Date().toISOString(),
+        });
+        await ensureAssignmentForTask(dataverse, task, projectId, created.entityId, {
+            resourceCache: options.resourceCache,
+            teamCache: options.teamCache,
+            assignmentCache: options.assignmentCache,
+        });
+        return { action: "created", taskId: created.entityId };
+    } catch (error) {
+        if (isDirectTaskWriteBlocked(error)) {
+            try {
+                return await runScheduleCreateFallback({
+                    bcClient,
+                    dataverse,
+                    task,
+                    projectId,
+                    mapping,
+                    bucketCache: options.bucketCache,
+                    resourceCache: options.resourceCache,
+                    teamCache: options.teamCache,
+                    assignmentCache: options.assignmentCache,
+                });
+            } catch (fallbackError) {
+                logger.warn("Schedule create fallback failed", {
+                    projectId,
+                    error: (fallbackError as Error)?.message,
+                });
+            }
+        }
+        throw error;
     }
-    await updateBcTaskWithSyncLock(bcClient, task, {
-        plannerTaskId: created.entityId,
-        plannerPlanId: projectId,
-        lastPlannerEtag: created.etag,
-        lastSyncAt: new Date().toISOString(),
-    });
-    await ensureAssignmentForTask(dataverse, task, projectId, created.entityId, {
-        resourceCache: options.resourceCache,
-        teamCache: options.teamCache,
-        assignmentCache: options.assignmentCache,
-    });
-    return { action: "created", taskId: created.entityId };
 }
 
 export async function syncBcToPremium(projectNo?: string, options: { requestId?: string; projectNos?: string[] } = {}) {
