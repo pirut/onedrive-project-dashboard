@@ -242,6 +242,17 @@ function resolveTaskDate(value?: string | null) {
     return new Date(parsed).toISOString();
 }
 
+function toBcDate(value?: string | null) {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+    const parsed = parseDateMs(trimmed);
+    if (parsed == null) return null;
+    return new Date(parsed).toISOString().slice(0, 10);
+}
+
 function buildScheduleTaskEntity(params: {
     taskId: string;
     projectId: string;
@@ -844,14 +855,20 @@ function buildBcUpdateFromPremium(
 
     const start = dataverseTask[mapping.taskStartField];
     if (typeof start === "string") {
-        updates.manualStartDate = start;
-        updates.startDate = start;
+        const bcDate = toBcDate(start);
+        if (bcDate) {
+            updates.manualStartDate = bcDate;
+            updates.startDate = bcDate;
+        }
     }
 
     const finish = dataverseTask[mapping.taskFinishField];
     if (typeof finish === "string") {
-        updates.manualEndDate = finish;
-        updates.endDate = finish;
+        const bcDate = toBcDate(finish);
+        if (bcDate) {
+            updates.manualEndDate = bcDate;
+            updates.endDate = bcDate;
+        }
     }
 
     return buildBcPatch(bcTask, updates);
