@@ -1592,17 +1592,43 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
         const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
         if (!bcTask) {
             summary.skipped += 1;
+            if (requestId) {
+                logger.warn("Premium -> BC skipped (no BC task match)", {
+                    requestId,
+                    taskId: item[mapping.taskIdField],
+                    taskNo: mapping.taskBcNoField ? item[mapping.taskBcNoField] : null,
+                    projectId: item[mapping.taskProjectIdField],
+                });
+            }
             continue;
         }
 
         const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, bcTask, syncConfig.syncLockTimeoutMinutes);
         if (cleanTask.syncLock) {
             summary.skipped += 1;
+            if (requestId) {
+                logger.warn("Premium -> BC skipped (syncLock)", {
+                    requestId,
+                    projectNo: cleanTask.projectNo,
+                    taskNo: cleanTask.taskNo,
+                });
+            }
             continue;
         }
 
         if (syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
             summary.skipped += 1;
+            if (requestId) {
+                logger.warn("Premium -> BC skipped (BC newer)", {
+                    requestId,
+                    projectNo: cleanTask.projectNo,
+                    taskNo: cleanTask.taskNo,
+                    lastSyncAt: cleanTask.lastSyncAt,
+                    systemModifiedAt: cleanTask.systemModifiedAt,
+                    lastModifiedDateTime: cleanTask.lastModifiedDateTime,
+                    modifiedAt: cleanTask.modifiedAt,
+                });
+            }
             continue;
         }
 
