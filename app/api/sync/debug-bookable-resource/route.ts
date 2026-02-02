@@ -39,16 +39,20 @@ async function readJsonBody(request: Request) {
 async function listMetadataHints(dataverse: DataverseClient) {
     try {
         const res = await dataverse.requestRaw(
-            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead&$filter=" +
-                "contains(tolower(LogicalName),'aad') or contains(tolower(SchemaName),'aad') or " +
-                "contains(tolower(LogicalName),'objectid') or contains(tolower(SchemaName),'objectid')"
+            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead"
         );
         const data = (await res.json()) as { value?: Array<Record<string, unknown>> };
         const attrs = Array.isArray(data?.value) ? data.value : [];
+        const filtered = attrs.filter((attr) => {
+            const logical = String((attr as { LogicalName?: string }).LogicalName || "").toLowerCase();
+            const schema = String((attr as { SchemaName?: string }).SchemaName || "").toLowerCase();
+            return logical.includes("aad") || schema.includes("aad") || logical.includes("objectid") || schema.includes("objectid");
+        });
         return {
             ok: true,
-            count: attrs.length,
-            attributes: attrs.map((attr) => ({
+            total: attrs.length,
+            count: filtered.length,
+            attributes: filtered.map((attr) => ({
                 logicalName: (attr as { LogicalName?: string }).LogicalName || null,
                 schemaName: (attr as { SchemaName?: string }).SchemaName || null,
                 type: (attr as { AttributeType?: string }).AttributeType || null,

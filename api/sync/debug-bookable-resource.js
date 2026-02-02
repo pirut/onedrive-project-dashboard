@@ -44,16 +44,20 @@ async function readJsonBody(req) {
 async function listMetadataHints(dataverse) {
     try {
         const res = await dataverse.requestRaw(
-            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead&$filter=" +
-                "contains(tolower(LogicalName),'aad') or contains(tolower(SchemaName),'aad') or " +
-                "contains(tolower(LogicalName),'objectid') or contains(tolower(SchemaName),'objectid')"
+            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead"
         );
         const data = await res.json();
         const attrs = Array.isArray(data?.value) ? data.value : [];
+        const filtered = attrs.filter((attr) => {
+            const logical = String(attr.LogicalName || "").toLowerCase();
+            const schema = String(attr.SchemaName || "").toLowerCase();
+            return logical.includes("aad") || schema.includes("aad") || logical.includes("objectid") || schema.includes("objectid");
+        });
         return {
             ok: true,
-            count: attrs.length,
-            attributes: attrs.map((attr) => ({
+            total: attrs.length,
+            count: filtered.length,
+            attributes: filtered.map((attr) => ({
                 logicalName: attr.LogicalName || null,
                 schemaName: attr.SchemaName || null,
                 type: attr.AttributeType || null,
