@@ -248,6 +248,8 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `GET /api/sync/projects` (list Premium projects + sync state)
 - `GET /api/sync/premium-project-link` (resolve a Premium plan link by projectNo/projectId)
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
+- `GET /api/sync/debug-operation-sets` (list Dataverse schedule API operation sets)
+- `POST /api/sync/clear-operation-sets` (delete Dataverse schedule API operation sets)
 - `POST /api/webhooks/dataverse` (Dataverse notification receiver)
 - `POST /api/webhooks/bc` (Business Central notification receiver)
 - `POST /api/sync/bc-subscriptions/create`
@@ -274,6 +276,14 @@ curl -X GET \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-
 
 # Resolve Premium plan link and redirect the browser
 curl -i \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-100&redirect=1\"
+
+# List Dataverse schedule API operation sets
+curl -X GET \"https://your-domain.com/api/sync/debug-operation-sets\"
+
+# Delete operation sets older than 60 minutes
+curl -X POST \"https://your-domain.com/api/sync/clear-operation-sets\" \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"olderThanMinutes\":60}'
 
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse

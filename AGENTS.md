@@ -22,6 +22,8 @@ Important endpoints
 - Premium → BC sync: `POST /api/sync/premium-to-bc`
 - Auto sync (decide by most recent changes): `POST /api/sync/auto` (use `GET` or `?dryRun=1` to preview)
 - Premium plan link: `GET /api/sync/premium-project-link` (query `projectNo` or `projectId`, add `redirect=1` to 302)
+- Operation set debug: `GET /api/sync/debug-operation-sets` (lists schedule API operation sets)
+- Operation set cleanup: `POST /api/sync/clear-operation-sets` (deletes schedule API operation sets)
 - Premium change poll (legacy): `POST /api/sync/premium-change/poll`
 - Debug: `GET /api/debug`
 - Webhook (Dataverse): `POST /api/webhooks/dataverse`
