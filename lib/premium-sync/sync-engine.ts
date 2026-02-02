@@ -606,7 +606,7 @@ async function ensureProjectResourceAccess(
     return Boolean(created);
 }
 
-async function resolveProjectFromBc(
+export async function resolveProjectFromBc(
     bcClient: BusinessCentralClient,
     dataverse: DataverseClient,
     projectNo: string,
@@ -674,7 +674,7 @@ async function resolveProjectFromBc(
     } as DataverseEntity;
 }
 
-function resolveProjectId(entity: DataverseEntity | null, mapping: ReturnType<typeof getDataverseMappingConfig>) {
+export function resolveProjectId(entity: DataverseEntity | null, mapping: ReturnType<typeof getDataverseMappingConfig>) {
     if (!entity) return null;
     const id = entity[mapping.projectIdField];
     if (typeof id === "string" && id.trim()) return id.trim();
@@ -1238,8 +1238,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
             continue;
         }
 
-        if (!tasks.length) continue;
-        const sorted = sortTasksByTaskNo(tasks);
+        const sorted = tasks.length ? sortTasksByTaskNo(tasks) : [];
         const currentSection = { name: null as string | null };
 
         let projectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
@@ -1343,6 +1342,12 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                     });
                 }
             }
+        }
+
+        if (!sorted.length) {
+            result.projects += 1;
+            result.projectNos.push(projNo);
+            continue;
         }
 
         for (const task of sorted) {

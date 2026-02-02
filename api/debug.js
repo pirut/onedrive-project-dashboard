@@ -53,6 +53,7 @@ export default async function handler(req, res) {
         "POST /api/sync/bc-to-premium": "BC → Planner Premium sync",
         "POST /api/sync/premium-to-bc": "Premium → BC sync (Dataverse delta)",
         "POST /api/sync/auto": "Auto sync (choose most recent changes)",
+        "GET /api/sync/premium-project-link": "Resolve Premium plan link for a BC project",
         "GET /api/sync/debug-bookable-resource": "Debug Dataverse bookable resource lookup",
         "GET /api/sync/list-bookable-resources": "List Dataverse bookable resources",
         "GET /api/sync/debug-project-team": "List Dataverse project team members",

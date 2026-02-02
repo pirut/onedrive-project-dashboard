@@ -204,6 +204,7 @@ Notes:
 - `SYNC_BC_MODIFIED_GRACE_MS` ignores BC modified timestamps within this window after `lastSyncAt` (defaults to 2000ms).
 - If `SYNC_PREFER_BC=true` and BC changed since `lastSyncAt`, Premium → BC updates are skipped to avoid overwrites.
 - Use `POST /api/sync/projects` to disable sync or clear Premium IDs for specific projects.
+- Set `DATAVERSE_ALLOW_PROJECT_CREATE=true` to auto-create a Premium plan when a BC project appears, even before any tasks exist.
 - To show Premium project links in the admin cleanup list, set `PREMIUM_PROJECT_URL_TEMPLATE` (use `{projectId}` and optional `{tenantId}` / `{orgId}` placeholders). Example:
   `https://planner.cloud.microsoft/webui/premiumplan/{projectId}/org/{orgId}?tid={tenantId}`.
   If you don't set it, the app defaults to that format when it can resolve `OrganizationId` from Dataverse.
@@ -245,6 +246,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `POST /api/sync/auto` (decides direction by most recent changes)
 - `POST /api/sync/premium-change/poll` (legacy)
 - `GET /api/sync/projects` (list Premium projects + sync state)
+- `GET /api/sync/premium-project-link` (resolve a Premium plan link by projectNo/projectId)
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
 - `POST /api/webhooks/dataverse` (Dataverse notification receiver)
 - `POST /api/webhooks/bc` (Business Central notification receiver)
@@ -266,6 +268,9 @@ curl -X POST https://your-domain.com/api/sync/premium-to-bc
 
 # Auto sync (decides by most recent changes)
 curl -X POST https://your-domain.com/api/sync/auto
+
+# Resolve Premium plan link for a BC project
+curl -X GET \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-100\"
 
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse

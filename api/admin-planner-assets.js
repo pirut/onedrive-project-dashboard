@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { DataverseClient } from "../lib/dataverse-client.js";
 import { getDataverseMappingConfig } from "../lib/premium-sync/config.js";
+import { getPremiumProjectUrlTemplate, getTenantIdForUrl } from "../lib/premium-sync/premium-url.js";
 import { logger } from "../lib/planner-sync/logger.js";
 
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || "";
@@ -92,9 +93,6 @@ function getGraphConfig() {
     return { tenantId, clientId, clientSecret, scope, groupId };
 }
 
-function getTenantIdForUrl() {
-    return process.env.GRAPH_TENANT_ID || process.env.DATAVERSE_TENANT_ID || process.env.TENANT_ID || "";
-}
 
 function createGraphClient(config) {
     if (!config.tenantId || !config.clientId || !config.clientSecret) {
@@ -181,36 +179,6 @@ function extractBcProjectNo(title) {
     return match ? match[0].toUpperCase() : "";
 }
 
-function getPremiumProjectUrlTemplate(context = {}) {
-    const tenantId = context.tenantId || getTenantIdForUrl();
-    const orgId = context.orgId || "";
-    const rawTemplate = (process.env.PREMIUM_PROJECT_URL_TEMPLATE || "").trim();
-    if (rawTemplate) {
-        return rawTemplate
-            .replace("{tenantId}", tenantId || "")
-            .replace("{orgId}", orgId || "");
-    }
-    const base = (process.env.PREMIUM_PROJECT_WEB_BASE || "").trim();
-    if (base) {
-        const clean = base.replace(/\/+$/, "");
-        if (clean.includes("{projectId}")) {
-            return clean
-                .replace("{tenantId}", tenantId || "")
-                .replace("{orgId}", orgId || "");
-        }
-        const orgSegment = orgId ? `/org/${orgId}` : "";
-        const tidParam = tenantId ? `?tid=${tenantId}` : "";
-        return `${clean}/{projectId}${orgSegment}${tidParam}`;
-    }
-    const orgSegment = orgId ? `/org/${orgId}` : "";
-    const tidParam = tenantId ? `?tid=${tenantId}` : "";
-    return `https://planner.cloud.microsoft/webui/premiumplan/{projectId}${orgSegment}${tidParam}`;
-}
-
-function buildPremiumProjectUrl(template, projectId) {
-    if (!template || !projectId) return "";
-    return template.replace("{projectId}", projectId);
-}
 
 async function listDataverseProjects(dataverse, mapping) {
     const select = [mapping.projectIdField, mapping.projectTitleField, mapping.projectBcNoField, "modifiedon"].filter(Boolean);
