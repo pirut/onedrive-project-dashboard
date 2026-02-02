@@ -3,6 +3,7 @@ import { DataverseClient } from "../../lib/dataverse-client.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 function parseNumber(value, fallback) {
+    if (value == null || value === "") return fallback;
     const num = Number(value);
     return Number.isFinite(num) ? num : fallback;
 }
