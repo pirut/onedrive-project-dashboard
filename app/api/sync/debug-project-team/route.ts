@@ -18,6 +18,12 @@ function formatODataGuid(value: unknown) {
     return `guid'${trimmed}'`;
 }
 
+function formatODataGuidRaw(value: unknown) {
+    const trimmed = normalizeGuid(value);
+    if (!trimmed) return "";
+    return trimmed;
+}
+
 function escapeODataString(value: unknown) {
     return String(value || "").replace(/'/g, "''");
 }
@@ -122,9 +128,20 @@ async function handle(request: Request) {
         const projectLookup = (await resolveLookupField(dataverse, "msdyn_projectteam", "msdyn_project")) || "msdyn_projectid";
         const resourceLookup = (await resolveLookupField(dataverse, "msdyn_projectteam", "bookableresource")) || "msdyn_bookableresourceid";
 
-        const filter = `_${projectLookup}_value eq ${formatODataGuid(projectId)}`;
         const select = ["msdyn_projectteamid", "msdyn_name", `_${projectLookup}_value`, `_${resourceLookup}_value`];
-        const teamRes = await dataverse.list("msdyn_projectteams", { select, filter, top: 500 });
+        let teamRes;
+        const guidFilter = `_${projectLookup}_value eq ${formatODataGuid(projectId)}`;
+        try {
+            teamRes = await dataverse.list("msdyn_projectteams", { select, filter: guidFilter, top: 500 });
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            if (message.includes("0x80060888") || message.includes("Unrecognized 'Edm.String' literal 'guid'")) {
+                const rawFilter = `_${projectLookup}_value eq ${formatODataGuidRaw(projectId)}`;
+                teamRes = await dataverse.list("msdyn_projectteams", { select, filter: rawFilter, top: 500 });
+            } else {
+                throw error;
+            }
+        }
 
         const resourceCache = new Map<string, string | null>();
         const members = [] as Array<Record<string, unknown>>;
