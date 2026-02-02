@@ -233,14 +233,16 @@ Planner Premium schedule updates require a licensed user context. Set `DATAVERSE
 
 Preferred path is Dataverse change tracking (delta links). Optionally register Dataverse webhooks on the task entity for real-time triggers.
 
-- Delta polling endpoint: `POST /api/sync/premium-change/poll`
-- Webhook receiver: `POST /api/webhooks/dataverse` (set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
+- Delta polling endpoint: `POST /api/sync/premium-to-bc` (legacy: `POST /api/sync/premium-change/poll`)
+- Webhook receiver: `POST /api/webhooks/dataverse` (runs auto sync decision; set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
 - If using webhooks, configure your Dataverse service endpoint to send notifications to the webhook URL and include the shared secret header (`x-dataverse-secret`) matching `DATAVERSE_WEBHOOK_SECRET`.
 
 ### Admin endpoints
 
-- `POST /api/sync/bc-to-premium` (optional JSON: `{ \"projectNo\": \"P-100\", \"includePremiumChanges\": true }`)
-- `POST /api/sync/premium-change/poll`
+- `POST /api/sync/bc-to-premium` (optional JSON: `{ \"projectNo\": \"P-100\" }`, set `includePremiumChanges: true` to run both)
+- `POST /api/sync/premium-to-bc`
+- `POST /api/sync/auto` (decides direction by most recent changes)
+- `POST /api/sync/premium-change/poll` (legacy)
 - `GET /api/sync/projects` (list Premium projects + sync state)
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
 - `POST /api/webhooks/dataverse` (Dataverse notification receiver)
@@ -253,13 +255,16 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 ### Example curl commands
 
 ```bash
-# Run full sync (BC ↔ Premium) for a single project
+# Run BC → Premium for a single project
 curl -X POST http://localhost:3000/api/sync/bc-to-premium \\
   -H 'Content-Type: application/json' \\
   -d '{\"projectNo\":\"P-100\"}'
 
-# Poll Premium changes (Dataverse delta)
-curl -X POST https://your-domain.com/api/sync/premium-change/poll?cronSecret=YOUR_SECRET
+# Run Premium → BC (Dataverse delta)
+curl -X POST https://your-domain.com/api/sync/premium-to-bc
+
+# Auto sync (decides by most recent changes)
+curl -X POST https://your-domain.com/api/sync/auto
 
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse
@@ -304,7 +309,7 @@ curl -X POST https://your-domain.com/api/sync/bc-subscriptions/renew?cronSecret=
 ```
 
 Vercel Cron will call `/api/sync/bc-subscriptions/renew` daily and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
-Cron auth now protects `/api/sync/premium-change/poll`, `/api/sync/bc-to-premium`, and `/api/sync-folders-cron` as well, so include the same secret there.
+Cron auth now protects `/api/sync/auto` and `/api/sync-folders-cron` as well, so include the same secret there.
 
 ## Notes
 

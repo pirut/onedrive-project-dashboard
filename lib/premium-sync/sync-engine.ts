@@ -1,4 +1,4 @@
-import { BusinessCentralClient, BcProject, BcProjectTask } from "../planner-sync/bc-client.js";
+import { BusinessCentralClient, BcProject, BcProjectTask, BcProjectChange } from "../planner-sync/bc-client.js";
 import { logger } from "../planner-sync/logger.js";
 import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "../planner-sync/bc-change-store.js";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../planner-sync/project-sync-store.js";
@@ -1377,4 +1377,224 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
 
 export async function runPremiumChangePoll(options: { requestId?: string } = {}) {
     return syncPremiumChanges(options);
+}
+
+const BC_CHANGE_TIME_FIELDS = [
+    "changedAt",
+    "systemModifiedAt",
+    "lastModifiedDateTime",
+    "modifiedAt",
+    "modifiedOn",
+    "lastModifiedOn",
+    "systemModifiedOn",
+];
+
+function parseTimestamp(value: unknown): number | null {
+    if (value == null) return null;
+    const ms = Date.parse(String(value));
+    return Number.isFinite(ms) ? ms : null;
+}
+
+function formatTimestamp(ms: number | null): string | null {
+    if (ms == null || !Number.isFinite(ms)) return null;
+    return new Date(ms).toISOString();
+}
+
+function resolveBcChangeTimestamp(change: BcProjectChange): number | null {
+    const record = change as Record<string, unknown>;
+    for (const field of BC_CHANGE_TIME_FIELDS) {
+        const ms = parseTimestamp(record[field]);
+        if (ms != null) return ms;
+    }
+    return null;
+}
+
+export type BcChangePreview = {
+    hasChanges: boolean;
+    changes: number;
+    latestChangedAt: string | null;
+    latestChangedMs: number | null;
+    lastSeq: number | null;
+    projectNos: string[];
+    error?: string;
+};
+
+export type PremiumChangePreview = {
+    hasChanges: boolean;
+    changes: number;
+    latestModifiedAt: string | null;
+    latestModifiedMs: number | null;
+    error?: string;
+};
+
+export type SyncDecision = {
+    decision: "bcToPremium" | "premiumToBc" | "none";
+    reason: string;
+    decidedAt: string;
+    preferBc: boolean;
+    graceMs: number;
+    bc: BcChangePreview;
+    premium: PremiumChangePreview;
+};
+
+export async function previewBcChanges(options: { requestId?: string } = {}): Promise<BcChangePreview> {
+    const requestId = options.requestId || "";
+    const bcClient = new BusinessCentralClient();
+    try {
+        const cursor = await getBcProjectChangeCursor("premium");
+        const { items, lastSeq } = await bcClient.listProjectChangesSince(cursor);
+        const projectNos = new Set<string>();
+        let latestMs: number | null = null;
+        for (const item of items) {
+            const projectNo = typeof item.projectNo === "string" ? item.projectNo.trim() : "";
+            if (projectNo) projectNos.add(projectNo);
+            const changeMs = resolveBcChangeTimestamp(item);
+            if (changeMs != null && (latestMs == null || changeMs > latestMs)) {
+                latestMs = changeMs;
+            }
+        }
+        return {
+            hasChanges: items.length > 0,
+            changes: items.length,
+            latestChangedAt: formatTimestamp(latestMs),
+            latestChangedMs: latestMs,
+            lastSeq: lastSeq ?? null,
+            projectNos: Array.from(projectNos),
+        };
+    } catch (error) {
+        logger.warn("BC change preview failed", { requestId, error: (error as Error)?.message });
+        return {
+            hasChanges: false,
+            changes: 0,
+            latestChangedAt: null,
+            latestChangedMs: null,
+            lastSeq: null,
+            projectNos: [],
+            error: (error as Error)?.message,
+        };
+    }
+}
+
+export async function previewPremiumChanges(options: { requestId?: string; deltaLink?: string | null } = {}): Promise<PremiumChangePreview> {
+    const requestId = options.requestId || "";
+    const syncConfig = getPremiumSyncConfig();
+    const mapping = getDataverseMappingConfig();
+    const dataverse = new DataverseClient();
+    try {
+        const deltaLink = options.deltaLink ?? (await getDataverseDeltaLink(mapping.taskEntitySet));
+        const modifiedField = mapping.taskModifiedField || "modifiedon";
+        const selectFields = [mapping.taskIdField, modifiedField, "modifiedon"].filter(Boolean) as string[];
+        const { value } = await dataverse.listChanges<DataverseEntity>(mapping.taskEntitySet, {
+            select: Array.from(new Set(selectFields)),
+            deltaLink,
+            orderBy: modifiedField ? `${modifiedField} desc` : undefined,
+            maxPages: syncConfig.pollMaxPages,
+            top: syncConfig.pollPageSize,
+        });
+        let latestMs: number | null = null;
+        for (const item of value) {
+            const record = item as Record<string, unknown>;
+            const raw = record[modifiedField] ?? record.modifiedon ?? record.modifiedOn;
+            const ms = parseTimestamp(raw);
+            if (ms != null && (latestMs == null || ms > latestMs)) {
+                latestMs = ms;
+            }
+        }
+        return {
+            hasChanges: value.length > 0,
+            changes: value.length,
+            latestModifiedAt: formatTimestamp(latestMs),
+            latestModifiedMs: latestMs,
+        };
+    } catch (error) {
+        logger.warn("Premium change preview failed", { requestId, error: (error as Error)?.message });
+        return {
+            hasChanges: false,
+            changes: 0,
+            latestModifiedAt: null,
+            latestModifiedMs: null,
+            error: (error as Error)?.message,
+        };
+    }
+}
+
+export async function decidePremiumSync(options: { requestId?: string; preferBc?: boolean; graceMs?: number } = {}): Promise<SyncDecision> {
+    const requestId = options.requestId || "";
+    const syncConfig = getPremiumSyncConfig();
+    const preferBc = options.preferBc ?? syncConfig.preferBc;
+    const graceMs = Number.isFinite(options.graceMs ?? NaN) ? Number(options.graceMs) : syncConfig.bcModifiedGraceMs;
+    const [bc, premium] = await Promise.all([previewBcChanges({ requestId }), previewPremiumChanges({ requestId })]);
+
+    let decision: SyncDecision["decision"] = "none";
+    let reason = "No changes detected in BC or Premium.";
+
+    if (bc.hasChanges && !premium.hasChanges) {
+        decision = "bcToPremium";
+        reason = "BC has changes and Premium does not.";
+    } else if (!bc.hasChanges && premium.hasChanges) {
+        decision = "premiumToBc";
+        reason = "Premium has changes and BC does not.";
+    } else if (bc.hasChanges && premium.hasChanges) {
+        const bcMs = bc.latestChangedMs;
+        const premiumMs = premium.latestModifiedMs;
+        if (bcMs != null && premiumMs != null) {
+            const diff = bcMs - premiumMs;
+            if (Math.abs(diff) <= graceMs) {
+                decision = preferBc ? "bcToPremium" : "premiumToBc";
+                reason = `Changes within ${graceMs}ms; preferBc=${preferBc}.`;
+            } else if (diff > 0) {
+                decision = "bcToPremium";
+                reason = "BC changes are more recent than Premium changes.";
+            } else {
+                decision = "premiumToBc";
+                reason = "Premium changes are more recent than BC changes.";
+            }
+        } else if (preferBc) {
+            decision = "bcToPremium";
+            reason = "Changes detected on both sides without comparable timestamps; preferBc=true.";
+        } else if (premiumMs != null) {
+            decision = "premiumToBc";
+            reason = "Premium changes include timestamps while BC does not; preferBc=false.";
+        } else {
+            decision = "premiumToBc";
+            reason = "Changes detected on both sides without comparable timestamps; preferBc=false.";
+        }
+    }
+
+    return {
+        decision,
+        reason,
+        decidedAt: new Date().toISOString(),
+        preferBc,
+        graceMs,
+        bc,
+        premium,
+    };
+}
+
+export async function runPremiumSyncDecision(options: {
+    requestId?: string;
+    dryRun?: boolean;
+    preferBc?: boolean;
+    graceMs?: number;
+} = {}) {
+    const requestId = options.requestId || "";
+    const decision = await decidePremiumSync({
+        requestId,
+        preferBc: options.preferBc,
+        graceMs: options.graceMs,
+    });
+    if (options.dryRun || decision.decision === "none") {
+        return { decision, result: null };
+    }
+    if (decision.decision === "bcToPremium") {
+        const projectNos = decision.bc.projectNos?.length ? decision.bc.projectNos : undefined;
+        const bcResult = await syncBcToPremium(undefined, { requestId, projectNos });
+        if (projectNos && decision.bc.lastSeq != null) {
+            await saveBcProjectChangeCursor("premium", decision.bc.lastSeq);
+        }
+        return { decision, result: { bcToPremium: bcResult } };
+    }
+    const premiumResult = await syncPremiumChanges({ requestId });
+    return { decision, result: { premiumToBc: premiumResult } };
 }

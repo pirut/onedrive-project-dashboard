@@ -13,7 +13,7 @@ async function handle(request: Request) {
     const body = request.method === "POST" ? await readJsonBody(request) : null;
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const projectNos = Array.isArray(body?.projectNos) ? body.projectNos.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
-    const includePremiumChanges = body?.includePremiumChanges !== false;
+    const includePremiumChanges = body?.includePremiumChanges === true;
 
     try {
         const bcResult = await syncBcToPremium(projectNo || undefined, {

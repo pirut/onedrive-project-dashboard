@@ -1,6 +1,5 @@
 import crypto from "crypto";
-import { appendPremiumWebhookLog } from "../../lib/premium-sync/index.js";
-import { syncPremiumChanges } from "../../lib/premium-sync/index.js";
+import { appendPremiumWebhookLog, runPremiumSyncDecision } from "../../lib/premium-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 function readEnv(name) {
@@ -86,8 +85,8 @@ export default async function handler(req, res) {
     });
 
     try {
-        const result = await syncPremiumChanges({ requestId });
-        res.status(200).json({ ok: true, result });
+        const { decision, result } = await runPremiumSyncDecision({ requestId });
+        res.status(200).json({ ok: true, decision, result });
     } catch (error) {
         logger.error("Dataverse webhook processing failed", { requestId, error: error?.message || String(error) });
         await appendPremiumWebhookLog({

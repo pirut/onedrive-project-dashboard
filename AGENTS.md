@@ -18,8 +18,10 @@ Key behaviors (Premium sync)
   - `SYNC_LOCK_TIMEOUT_MINUTES` (default 30) clears stale locks.
 
 Important endpoints
-- Sync: `POST /api/sync/bc-to-premium` (optional `{ "projectNo": "PR00001" }`, runs BC → Premium and optionally Premium → BC)
-- Premium change poll: `POST /api/sync/premium-change/poll`
+- BC → Premium sync: `POST /api/sync/bc-to-premium` (optional `{ "projectNo": "PR00001" }`; pass `{ "includePremiumChanges": true }` to run both)
+- Premium → BC sync: `POST /api/sync/premium-to-bc`
+- Auto sync (decide by most recent changes): `POST /api/sync/auto` (use `GET` or `?dryRun=1` to preview)
+- Premium change poll (legacy): `POST /api/sync/premium-change/poll`
 - Debug: `GET /api/debug`
 - Webhook (Dataverse): `POST /api/webhooks/dataverse`
 - Admin helpers:
@@ -30,9 +32,10 @@ Important endpoints
 Admin dashboard (UI)
 - `api/admin.js` renders the dashboard.
 - Premium panel includes:
-  - Run Sync
-  - Run Sync (PR00001) quick test
-  - Poll Premium changes
+  - Run BC → Premium
+  - Run BC → Premium (PR00001) quick test
+  - Run Premium → BC
+  - Run Auto Sync
   - Inspect BC Task (enter Project No + Task No)
   - Webhook debug: Start/Stop feed, Clear, Snapshot
 - Premium Projects panel includes per-project sync toggles and clear-links action.
@@ -62,5 +65,5 @@ Environment variables (Premium/BC)
 
 Recent changes to remember
 - Added Dataverse client + premium sync layer in `lib/premium-sync/`.
-- Added `/api/webhooks/dataverse` and `/api/sync/premium-change/poll` routes.
+- Added `/api/webhooks/dataverse`, `/api/sync/premium-to-bc`, and `/api/sync/auto` routes.
 - Admin UI now targets Planner Premium endpoints and logs.

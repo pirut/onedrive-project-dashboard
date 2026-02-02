@@ -50,8 +50,10 @@ export default async function handler(req, res) {
     };
 
     const routes = {
-        "POST /api/sync/bc-to-premium": "BC → Planner Premium sync (optionally run Premium → BC)",
-        "POST /api/sync/premium-change/poll": "Poll Premium changes via Dataverse delta",
+        "POST /api/sync/bc-to-premium": "BC → Planner Premium sync",
+        "POST /api/sync/premium-to-bc": "Premium → BC sync (Dataverse delta)",
+        "POST /api/sync/auto": "Auto sync (choose most recent changes)",
+        "POST /api/sync/premium-change/poll": "Poll Premium changes via Dataverse delta (legacy)",
         "POST /api/webhooks/dataverse": "Dataverse webhook receiver",
         "POST /api/webhooks/bc": "Business Central webhook receiver",
         "GET /api/sync/projects": "Premium project list + sync state",

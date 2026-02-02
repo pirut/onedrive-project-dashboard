@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { appendPremiumWebhookLog, syncPremiumChanges } from "../../../../lib/premium-sync";
+import { appendPremiumWebhookLog, runPremiumSyncDecision } from "../../../../lib/premium-sync";
 import { logger } from "../../../../lib/planner-sync/logger";
 
 function safeEqual(a: string, b: string) {
@@ -77,8 +77,8 @@ export async function POST(request: Request) {
     });
 
     try {
-        const result = await syncPremiumChanges({ requestId });
-        return new Response(JSON.stringify({ ok: true, result }, null, 2), {
+        const { decision, result } = await runPremiumSyncDecision({ requestId });
+        return new Response(JSON.stringify({ ok: true, decision, result }, null, 2), {
             status: 200,
             headers: { "Content-Type": "application/json" },
         });

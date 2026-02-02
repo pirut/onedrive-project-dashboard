@@ -20,12 +20,8 @@
             "schedule": "*/2 * * * *"
         },
         {
-            "path": "/api/sync/premium-change/poll?cronSecret=YOUR_CRON_SECRET",
+            "path": "/api/sync/auto?cronSecret=YOUR_CRON_SECRET",
             "schedule": "*/5 * * * *"
-        },
-        {
-            "path": "/api/sync/bc-to-premium?cronSecret=YOUR_CRON_SECRET",
-            "schedule": "*/15 * * * *"
         }
     ],
     "headers": [

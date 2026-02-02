@@ -23,7 +23,7 @@ export default async function handler(req, res) {
     const body = req.method === "POST" ? await readJsonBody(req) : null;
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const projectNos = Array.isArray(body?.projectNos) ? body.projectNos.map((value) => String(value).trim()).filter(Boolean) : [];
-    const includePremiumChanges = body?.includePremiumChanges !== false;
+    const includePremiumChanges = body?.includePremiumChanges === true;
 
     try {
         const bcResult = await syncBcToPremium(projectNo || undefined, {
