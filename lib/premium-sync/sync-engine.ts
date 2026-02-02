@@ -892,30 +892,34 @@ async function runScheduleUpdateFallback(options: {
     if (!operationSetId) {
         throw new Error("Dataverse schedule API unavailable for fallback update");
     }
-    const entity = buildScheduleTaskEntity({
-        taskId: options.taskId,
-        projectId: options.projectId,
-        bucketId: null,
-        task: options.task,
-        mapping: options.mapping,
-        dataverse: options.dataverse,
-        mode: "update",
-    });
-    await options.dataverse.pssUpdate(entity, operationSetId);
-    await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
-        operationSetId,
-        resourceCache: options.resourceCache,
-        teamCache: options.teamCache,
-        assignmentCache: options.assignmentCache,
-    });
-    await options.dataverse.executeOperationSet(operationSetId);
-    await updateBcTaskWithSyncLock(options.bcClient, options.task, {
-        plannerTaskId: options.taskId,
-        plannerPlanId: options.projectId,
-        lastPlannerEtag: options.task.lastPlannerEtag || "",
-        lastSyncAt: new Date().toISOString(),
-    });
-    return { action: "updated" as const, taskId: options.taskId };
+    try {
+        const entity = buildScheduleTaskEntity({
+            taskId: options.taskId,
+            projectId: options.projectId,
+            bucketId: null,
+            task: options.task,
+            mapping: options.mapping,
+            dataverse: options.dataverse,
+            mode: "update",
+        });
+        await options.dataverse.pssUpdate(entity, operationSetId);
+        await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
+            operationSetId,
+            resourceCache: options.resourceCache,
+            teamCache: options.teamCache,
+            assignmentCache: options.assignmentCache,
+        });
+        await options.dataverse.executeOperationSet(operationSetId);
+        await updateBcTaskWithSyncLock(options.bcClient, options.task, {
+            plannerTaskId: options.taskId,
+            plannerPlanId: options.projectId,
+            lastPlannerEtag: options.task.lastPlannerEtag || "",
+            lastSyncAt: new Date().toISOString(),
+        });
+        return { action: "updated" as const, taskId: options.taskId };
+    } finally {
+        await cleanupOperationSet(options.dataverse, operationSetId, { projectId: options.projectId });
+    }
 }
 
 async function runScheduleCreateFallback(options: {
@@ -936,32 +940,53 @@ async function runScheduleCreateFallback(options: {
     if (!operationSetId) {
         throw new Error("Dataverse schedule API unavailable for fallback create");
     }
-    const newTaskId = crypto.randomUUID();
-    const bucketId = await getProjectBucketId(options.dataverse, options.projectId, options.bucketCache);
-    const entity = buildScheduleTaskEntity({
-        taskId: newTaskId,
-        projectId: options.projectId,
-        bucketId,
-        task: options.task,
-        mapping: options.mapping,
-        dataverse: options.dataverse,
-        mode: "create",
-    });
-    await options.dataverse.pssCreate(entity, operationSetId);
-    await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, newTaskId, {
-        operationSetId,
-        resourceCache: options.resourceCache,
-        teamCache: options.teamCache,
-        assignmentCache: options.assignmentCache,
-    });
-    await options.dataverse.executeOperationSet(operationSetId);
-    await updateBcTaskWithSyncLock(options.bcClient, options.task, {
-        plannerTaskId: newTaskId,
-        plannerPlanId: options.projectId,
-        lastPlannerEtag: "",
-        lastSyncAt: new Date().toISOString(),
-    });
-    return { action: "created" as const, taskId: newTaskId };
+    try {
+        const newTaskId = crypto.randomUUID();
+        const bucketId = await getProjectBucketId(options.dataverse, options.projectId, options.bucketCache);
+        const entity = buildScheduleTaskEntity({
+            taskId: newTaskId,
+            projectId: options.projectId,
+            bucketId,
+            task: options.task,
+            mapping: options.mapping,
+            dataverse: options.dataverse,
+            mode: "create",
+        });
+        await options.dataverse.pssCreate(entity, operationSetId);
+        await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, newTaskId, {
+            operationSetId,
+            resourceCache: options.resourceCache,
+            teamCache: options.teamCache,
+            assignmentCache: options.assignmentCache,
+        });
+        await options.dataverse.executeOperationSet(operationSetId);
+        await updateBcTaskWithSyncLock(options.bcClient, options.task, {
+            plannerTaskId: newTaskId,
+            plannerPlanId: options.projectId,
+            lastPlannerEtag: "",
+            lastSyncAt: new Date().toISOString(),
+        });
+        return { action: "created" as const, taskId: newTaskId };
+    } finally {
+        await cleanupOperationSet(options.dataverse, operationSetId, { projectId: options.projectId });
+    }
+}
+
+async function cleanupOperationSet(
+    dataverse: DataverseClient,
+    operationSetId: string,
+    meta: Record<string, unknown> = {}
+) {
+    if (!operationSetId) return;
+    try {
+        await dataverse.delete("msdyn_operationsets", operationSetId);
+    } catch (error) {
+        logger.warn("Dataverse operation set cleanup failed", {
+            operationSetId,
+            ...meta,
+            error: (error as Error)?.message,
+        });
+    }
 }
 
 async function clearStaleSyncLockIfNeeded(bcClient: BusinessCentralClient, task: BcProjectTask, timeoutMinutes: number) {
@@ -1300,114 +1325,118 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
             }
         }
 
-        if (plannerGroupId) {
-            try {
-                await ensureProjectGroupAccess(
-                    dataverse,
-                    projectId,
-                    useScheduleApi ? operationSetId : undefined,
-                    plannerGroupId,
-                    teamCache
-                );
-            } catch (error) {
-                logger.warn("Dataverse group share failed", {
-                    requestId,
-                    projectNo: projNo,
-                    error: (error as Error)?.message,
-                });
-            }
-        }
-        if (plannerGroupResourceIds.length) {
-            for (const resourceId of plannerGroupResourceIds) {
+        try {
+            if (plannerGroupId) {
                 try {
-                    const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
-                    if (!resource) {
-                        logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
-                        continue;
-                    }
-                    await ensureProjectResourceAccess(
+                    await ensureProjectGroupAccess(
                         dataverse,
                         projectId,
                         useScheduleApi ? operationSetId : undefined,
-                        resource.id,
-                        resource.name || "Planner Resource",
+                        plannerGroupId,
                         teamCache
                     );
                 } catch (error) {
-                    logger.warn("Dataverse resource share failed", {
+                    logger.warn("Dataverse group share failed", {
                         requestId,
                         projectNo: projNo,
-                        resourceId,
                         error: (error as Error)?.message,
                     });
                 }
             }
-        }
+            if (plannerGroupResourceIds.length) {
+                for (const resourceId of plannerGroupResourceIds) {
+                    try {
+                        const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
+                        if (!resource) {
+                            logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
+                            continue;
+                        }
+                        await ensureProjectResourceAccess(
+                            dataverse,
+                            projectId,
+                            useScheduleApi ? operationSetId : undefined,
+                            resource.id,
+                            resource.name || "Planner Resource",
+                            teamCache
+                        );
+                    } catch (error) {
+                        logger.warn("Dataverse resource share failed", {
+                            requestId,
+                            projectNo: projNo,
+                            resourceId,
+                            error: (error as Error)?.message,
+                        });
+                    }
+                }
+            }
 
-        if (!sorted.length) {
+            if (!sorted.length) {
+                result.projects += 1;
+                result.projectNos.push(projNo);
+                continue;
+            }
+
+            for (const task of sorted) {
+                result.tasks += 1;
+                const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
+                if (cleanTask.syncLock) {
+                    result.skipped += 1;
+                    continue;
+                }
+                if (shouldSkipTaskForSection(cleanTask, currentSection)) {
+                    result.skipped += 1;
+                    continue;
+                }
+                try {
+                    const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                        useScheduleApi,
+                        operationSetId: useScheduleApi ? operationSetId : undefined,
+                        bucketCache,
+                        resourceCache,
+                        teamCache,
+                        assignmentCache,
+                        touchOperationSet: () => {
+                            operationSetTouched = true;
+                        },
+                    });
+                    if (res.action === "created") result.created += 1;
+                    else if (res.action === "updated") result.updated += 1;
+                    else result.skipped += 1;
+                    if (res.pendingUpdate) {
+                        pendingUpdates.push(res.pendingUpdate);
+                    }
+                } catch (error) {
+                    logger.warn("Premium task sync failed", {
+                        requestId,
+                        projectNo: projNo,
+                        taskNo: cleanTask.taskNo,
+                        error: (error as Error)?.message,
+                    });
+                    result.errors += 1;
+                }
+            }
+
+            if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
+                try {
+                    await dataverse.executeOperationSet(operationSetId);
+                    for (const entry of pendingUpdates) {
+                        await updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates);
+                    }
+                } catch (error) {
+                    logger.warn("Dataverse schedule execute failed", {
+                        requestId,
+                        projectNo: projNo,
+                        error: (error as Error)?.message,
+                    });
+                    result.errors += pendingUpdates.length;
+                }
+            }
+
             result.projects += 1;
             result.projectNos.push(projNo);
-            continue;
+        } finally {
+            await cleanupOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
         }
-
-        for (const task of sorted) {
-            result.tasks += 1;
-            const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
-            if (cleanTask.syncLock) {
-                result.skipped += 1;
-                continue;
-            }
-            if (shouldSkipTaskForSection(cleanTask, currentSection)) {
-                result.skipped += 1;
-                continue;
-            }
-            try {
-                const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                    useScheduleApi,
-                    operationSetId: useScheduleApi ? operationSetId : undefined,
-                    bucketCache,
-                    resourceCache,
-                    teamCache,
-                    assignmentCache,
-                    touchOperationSet: () => {
-                        operationSetTouched = true;
-                    },
-                });
-                if (res.action === "created") result.created += 1;
-                else if (res.action === "updated") result.updated += 1;
-                else result.skipped += 1;
-                if (res.pendingUpdate) {
-                    pendingUpdates.push(res.pendingUpdate);
-                }
-            } catch (error) {
-                logger.warn("Premium task sync failed", {
-                    requestId,
-                    projectNo: projNo,
-                    taskNo: cleanTask.taskNo,
-                    error: (error as Error)?.message,
-                });
-                result.errors += 1;
-            }
-        }
-
-        if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
-            try {
-                await dataverse.executeOperationSet(operationSetId);
-                for (const entry of pendingUpdates) {
-                    await updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates);
-                }
-            } catch (error) {
-                logger.warn("Dataverse schedule execute failed", {
-                    requestId,
-                    projectNo: projNo,
-                    error: (error as Error)?.message,
-                });
-                result.errors += pendingUpdates.length;
-            }
-        }
-
-        result.projects += 1;
-        result.projectNos.push(projNo);
     }
 
     return result;
