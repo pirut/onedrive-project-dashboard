@@ -402,6 +402,28 @@ async function findBookableResourceByAadObjectId(dataverse: DataverseClient, aad
     return null;
 }
 
+async function getBookableResourceById(
+    dataverse: DataverseClient,
+    resourceId: string,
+    cache: Map<string, { id: string; name: string } | null>
+) {
+    const trimmed = (resourceId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+    if (!trimmed) return null;
+    if (cache.has(trimmed)) return cache.get(trimmed) || null;
+    try {
+        const res = await dataverse.getById<DataverseEntity>("bookableresources", trimmed, ["bookableresourceid", "name"]);
+        const id = res?.bookableresourceid ? String(res.bookableresourceid) : trimmed;
+        const name = res?.name ? String(res.name) : "";
+        const record = { id, name };
+        cache.set(trimmed, record);
+        return record;
+    } catch (error) {
+        logger.warn("Dataverse resource lookup failed", { resourceId: trimmed, error: (error as Error)?.message });
+        cache.set(trimmed, null);
+        return null;
+    }
+}
+
 async function getProjectTeamMemberId(
     dataverse: DataverseClient,
     projectId: string,
@@ -569,6 +591,30 @@ async function ensureProjectGroupAccess(
         groupResource.name || "Planner Group",
         operationSetId
     );
+    return Boolean(created);
+}
+
+async function ensureProjectResourceAccess(
+    dataverse: DataverseClient,
+    projectId: string,
+    operationSetId: string | undefined,
+    resourceId: string,
+    resourceName: string,
+    teamCache: Map<string, string | null>
+) {
+    if (!resourceId) return false;
+    const teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, teamCache);
+    if (teamId) return false;
+    const created = await createProjectTeamMember(
+        dataverse,
+        projectId,
+        resourceId,
+        resourceName || "Planner Resource",
+        operationSetId
+    );
+    if (created) {
+        teamCache.set(`${projectId}:${resourceId}`, created);
+    }
     return Boolean(created);
 }
 
@@ -992,6 +1038,9 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
     const plannerGroupId = syncConfig.plannerGroupId;
+    const plannerGroupResourceIds = Array.from(
+        new Set((syncConfig.plannerGroupResourceIds || []).map((value) => value.trim()).filter(Boolean))
+    );
 
     const settings = await listProjectSyncSettings();
     const disabled = buildDisabledProjectSet(settings);
@@ -1085,6 +1134,7 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
         const pendingUpdates: Array<{ task: BcProjectTask; updates: Record<string, unknown> }> = [];
         const bucketCache = new Map<string, string | null>();
         const resourceCache = new Map<string, string | null>();
+        const resourceNameCache = new Map<string, { id: string; name: string } | null>();
         const teamCache = new Map<string, string | null>();
         const assignmentCache = new Set<string>();
         let useScheduleApi = syncConfig.useScheduleApi;
@@ -1131,6 +1181,35 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                     projectNo: projNo,
                     error: (error as Error)?.message,
                 });
+            }
+        }
+        if (plannerGroupResourceIds.length) {
+            for (const resourceId of plannerGroupResourceIds) {
+                try {
+                    const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
+                    if (!resource) {
+                        logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
+                        continue;
+                    }
+                    const added = await ensureProjectResourceAccess(
+                        dataverse,
+                        projectId,
+                        useScheduleApi ? operationSetId : undefined,
+                        resource.id,
+                        resource.name || "Planner Resource",
+                        teamCache
+                    );
+                    if (added) {
+                        operationSetTouched = true;
+                    }
+                } catch (error) {
+                    logger.warn("Dataverse resource share failed", {
+                        requestId,
+                        projectNo: projNo,
+                        resourceId,
+                        error: (error as Error)?.message,
+                    });
+                }
             }
         }
 

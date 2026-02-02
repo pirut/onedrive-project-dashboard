@@ -24,6 +24,15 @@ function readNumberEnv(name: string, fallback: number) {
     return Number.isFinite(num) ? num : fallback;
 }
 
+function readListEnv(name: string) {
+    const raw = readEnv(name);
+    if (!raw) return [];
+    return raw
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
 export function getPremiumSyncConfig() {
     return {
         preferBc: readBoolEnv("SYNC_PREFER_BC", true),
@@ -35,6 +44,7 @@ export function getPremiumSyncConfig() {
         pollMaxPages: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_MAX_PAGES", 10))),
         useScheduleApi: readBoolEnv("DATAVERSE_USE_SCHEDULE_API", true),
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
+        plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
     };
 }
 
