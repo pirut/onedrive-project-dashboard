@@ -53,6 +53,7 @@ export default async function handler(req, res) {
         "POST /api/sync/bc-to-premium": "BC → Planner Premium sync",
         "POST /api/sync/premium-to-bc": "Premium → BC sync (Dataverse delta)",
         "POST /api/sync/auto": "Auto sync (choose most recent changes)",
+        "GET /api/sync/debug-bookable-resource": "Debug Dataverse bookable resource lookup",
         "POST /api/sync/premium-change/poll": "Poll Premium changes via Dataverse delta (legacy)",
         "POST /api/webhooks/dataverse": "Dataverse webhook receiver",
         "POST /api/webhooks/bc": "Business Central webhook receiver",
