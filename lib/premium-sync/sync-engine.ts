@@ -249,8 +249,10 @@ function buildScheduleTaskEntity(params: {
     task: BcProjectTask;
     mapping: ReturnType<typeof getDataverseMappingConfig>;
     dataverse: DataverseClient;
+    mode?: "create" | "update";
 }) {
-    const { taskId, projectId, bucketId, task, mapping, dataverse } = params;
+    const { taskId, projectId, bucketId, task, mapping, dataverse, mode } = params;
+    const isCreate = mode === "create";
     const entity: DataverseEntity = {
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
         [mapping.taskIdField]: taskId,
@@ -259,7 +261,7 @@ function buildScheduleTaskEntity(params: {
     const title = buildTaskTitle(task);
     entity[mapping.taskTitleField] = title;
 
-    if (mapping.taskBcNoField && task.taskNo) {
+    if (isCreate && mapping.taskBcNoField && task.taskNo) {
         entity[mapping.taskBcNoField] = String(task.taskNo).trim();
     }
 
@@ -269,7 +271,9 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskStartField] = start;
     }
     if (finish) {
-        entity[mapping.taskFinishField] = finish;
+        if (!start || Date.parse(finish) >= Date.parse(start)) {
+            entity[mapping.taskFinishField] = finish;
+        }
     }
 
     const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
@@ -279,15 +283,17 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskDescriptionField] = task.description;
     }
 
-    const projectBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
-    if (projectBinding) {
-        entity[`${mapping.taskProjectLookupField}@odata.bind`] = projectBinding;
-    }
+    if (isCreate) {
+        const projectBinding = dataverse.buildLookupBinding(mapping.projectEntitySet, projectId);
+        if (projectBinding) {
+            entity[`${mapping.taskProjectLookupField}@odata.bind`] = projectBinding;
+        }
 
-    if (bucketId) {
-        const bucketBinding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
-        if (bucketBinding) {
-            entity["msdyn_projectbucket@odata.bind"] = bucketBinding;
+        if (bucketId) {
+            const bucketBinding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
+            if (bucketBinding) {
+                entity["msdyn_projectbucket@odata.bind"] = bucketBinding;
+            }
         }
     }
 
@@ -893,6 +899,7 @@ async function runScheduleUpdateFallback(options: {
         task: options.task,
         mapping: options.mapping,
         dataverse: options.dataverse,
+        mode: "update",
     });
     await options.dataverse.pssUpdate(entity, operationSetId);
     await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
@@ -938,6 +945,7 @@ async function runScheduleCreateFallback(options: {
         task: options.task,
         mapping: options.mapping,
         dataverse: options.dataverse,
+        mode: "create",
     });
     await options.dataverse.pssCreate(entity, operationSetId);
     await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, newTaskId, {
@@ -1031,6 +1039,7 @@ async function syncTaskToDataverse(
                 task,
                 mapping,
                 dataverse,
+                mode: "update",
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
             await ensureAssignmentForTask(dataverse, task, projectId, taskId, {
@@ -1100,6 +1109,7 @@ async function syncTaskToDataverse(
             task,
             mapping,
             dataverse,
+            mode: "create",
         });
         await dataverse.pssCreate(entity, options.operationSetId);
         await ensureAssignmentForTask(dataverse, task, projectId, newTaskId, {
