@@ -21,11 +21,42 @@ function escapeODataString(value: unknown) {
     return String(value || "").replace(/'/g, "''");
 }
 
+function parseBool(value: unknown) {
+    if (value == null) return false;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    return ["1", "true", "yes", "y", "on"].includes(normalized);
+}
+
 async function readJsonBody(request: Request) {
     try {
         return await request.json();
     } catch {
         return null;
+    }
+}
+
+async function listMetadataHints(dataverse: DataverseClient) {
+    try {
+        const res = await dataverse.requestRaw(
+            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead&$filter=" +
+                "contains(tolower(LogicalName),'aad') or contains(tolower(SchemaName),'aad') or " +
+                "contains(tolower(LogicalName),'objectid') or contains(tolower(SchemaName),'objectid')"
+        );
+        const data = (await res.json()) as { value?: Array<Record<string, unknown>> };
+        const attrs = Array.isArray(data?.value) ? data.value : [];
+        return {
+            ok: true,
+            count: attrs.length,
+            attributes: attrs.map((attr) => ({
+                logicalName: (attr as { LogicalName?: string }).LogicalName || null,
+                schemaName: (attr as { SchemaName?: string }).SchemaName || null,
+                type: (attr as { AttributeType?: string }).AttributeType || null,
+                readable: (attr as { IsValidForRead?: boolean }).IsValidForRead ?? null,
+            })),
+        };
+    } catch (error) {
+        return { ok: false, error: (error as Error)?.message || String(error) };
     }
 }
 
@@ -97,17 +128,20 @@ async function handle(request: Request) {
     const body = request.method === "POST" ? await readJsonBody(request) : null;
     const aadObjectId = String(body?.aadObjectId || body?.groupId || url.searchParams.get("aadObjectId") || url.searchParams.get("groupId") || "").trim();
     const name = String(body?.name || url.searchParams.get("name") || "").trim();
+    const includeMetadata = parseBool(body?.includeMetadata ?? url.searchParams.get("includeMetadata") ?? url.searchParams.get("metadata"));
 
     try {
         const dataverse = new DataverseClient();
         const table = await checkTable(dataverse);
         const byAadObjectId = aadObjectId ? await queryByAadObjectId(dataverse, aadObjectId) : null;
         const byName = name ? await queryByName(dataverse, name) : null;
+        const metadata = includeMetadata ? await listMetadataHints(dataverse) : null;
 
         return new Response(JSON.stringify({
             ok: true,
             query: { aadObjectId: aadObjectId || null, name: name || null },
             table,
+            metadata,
             results: {
                 byAadObjectId,
                 byName,

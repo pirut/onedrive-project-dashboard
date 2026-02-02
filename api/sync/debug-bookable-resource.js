@@ -22,6 +22,13 @@ function escapeODataString(value) {
     return String(value || "").replace(/'/g, "''");
 }
 
+function parseBool(value) {
+    if (value == null) return false;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    return ["1", "true", "yes", "y", "on"].includes(normalized);
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -31,6 +38,30 @@ async function readJsonBody(req) {
         return JSON.parse(text);
     } catch {
         return null;
+    }
+}
+
+async function listMetadataHints(dataverse) {
+    try {
+        const res = await dataverse.requestRaw(
+            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,SchemaName,AttributeType,IsValidForRead&$filter=" +
+                "contains(tolower(LogicalName),'aad') or contains(tolower(SchemaName),'aad') or " +
+                "contains(tolower(LogicalName),'objectid') or contains(tolower(SchemaName),'objectid')"
+        );
+        const data = await res.json();
+        const attrs = Array.isArray(data?.value) ? data.value : [];
+        return {
+            ok: true,
+            count: attrs.length,
+            attributes: attrs.map((attr) => ({
+                logicalName: attr.LogicalName || null,
+                schemaName: attr.SchemaName || null,
+                type: attr.AttributeType || null,
+                readable: attr.IsValidForRead ?? null,
+            })),
+        };
+    } catch (error) {
+        return { ok: false, error: error?.message || String(error) };
     }
 }
 
@@ -109,17 +140,20 @@ export default async function handler(req, res) {
 
     const aadObjectId = (body?.aadObjectId || body?.groupId || url.searchParams.get("aadObjectId") || url.searchParams.get("groupId") || "").trim();
     const name = (body?.name || url.searchParams.get("name") || "").trim();
+    const includeMetadata = parseBool(body?.includeMetadata ?? url.searchParams.get("includeMetadata") ?? url.searchParams.get("metadata"));
 
     try {
         const dataverse = new DataverseClient();
         const table = await checkTable(dataverse);
         const byAadObjectId = aadObjectId ? await queryByAadObjectId(dataverse, aadObjectId) : null;
         const byName = name ? await queryByName(dataverse, name) : null;
+        const metadata = includeMetadata ? await listMetadataHints(dataverse) : null;
 
         res.status(200).json({
             ok: true,
             query: { aadObjectId: aadObjectId || null, name: name || null },
             table,
+            metadata,
             results: {
                 byAadObjectId,
                 byName,
