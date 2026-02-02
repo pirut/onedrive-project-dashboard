@@ -291,6 +291,11 @@ curl -X POST \"https://your-domain.com/api/sync/clear-bc-sync-lock\" \\
   -H 'Content-Type: application/json' \\
   -d '{\"projectNo\":\"P-100\",\"taskNo\":\"1200\"}'
 
+# Clear syncLock for all tasks in a project
+curl -X POST \"https://your-domain.com/api/sync/clear-bc-sync-lock\" \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"projectNo\":\"P-100\"}'
+
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse
 ```

@@ -14,6 +14,10 @@ async function readJsonBody(req) {
     }
 }
 
+function escapeODataString(value) {
+    return String(value || "").replace(/'/g, "''");
+}
+
 export default async function handler(req, res) {
     if (req.method !== "POST") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
@@ -26,14 +30,40 @@ export default async function handler(req, res) {
     const systemId = body?.systemId ? String(body.systemId).trim() : "";
     const plannerTaskId = body?.plannerTaskId ? String(body.plannerTaskId).trim() : "";
 
-    if (!systemId && !(projectNo && taskNo) && !plannerTaskId) {
-        res.status(400).json({ ok: false, error: "Provide systemId, plannerTaskId, or projectNo + taskNo" });
+    if (!systemId && !(projectNo && taskNo) && !plannerTaskId && !projectNo) {
+        res.status(400).json({ ok: false, error: "Provide systemId, plannerTaskId, projectNo + taskNo, or projectNo" });
         return;
     }
 
     try {
         const bcClient = new BusinessCentralClient();
         let task = null;
+        if (projectNo && !taskNo && !systemId && !plannerTaskId) {
+            const escapedProject = escapeODataString(projectNo);
+            const filter = `projectNo eq '${escapedProject}' and syncLock eq true`;
+            const tasks = await bcClient.listProjectTasks(filter);
+            const results = [];
+            for (const entry of tasks) {
+                if (!entry.systemId) {
+                    results.push({ taskNo: entry.taskNo || null, ok: false, error: "Missing systemId" });
+                    continue;
+                }
+                try {
+                    await bcClient.patchProjectTask(entry.systemId, { syncLock: false });
+                    results.push({ taskNo: entry.taskNo || null, ok: true });
+                } catch (err) {
+                    results.push({ taskNo: entry.taskNo || null, ok: false, error: err?.message || String(err) });
+                }
+            }
+            res.status(200).json({
+                ok: true,
+                projectNo,
+                cleared: results.filter((row) => row.ok).length,
+                errors: results.filter((row) => !row.ok).length,
+                results,
+            });
+            return;
+        }
         if (systemId) {
             task = { systemId };
         } else if (plannerTaskId) {

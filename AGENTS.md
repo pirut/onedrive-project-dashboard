@@ -24,7 +24,7 @@ Important endpoints
 - Premium plan link: `GET /api/sync/premium-project-link` (query `projectNo` or `projectId`, add `redirect=1` to 302)
 - Operation set debug: `GET /api/sync/debug-operation-sets` (lists schedule API operation sets)
 - Operation set cleanup: `POST /api/sync/clear-operation-sets` (deletes schedule API operation sets)
-- Clear BC syncLock: `POST /api/sync/clear-bc-sync-lock` (clears syncLock for a BC task)
+- Clear BC syncLock: `POST /api/sync/clear-bc-sync-lock` (clears syncLock for a BC task; pass only `projectNo` to clear all)
 - Premium change poll (legacy): `POST /api/sync/premium-change/poll`
 - Debug: `GET /api/debug`
 - Webhook (Dataverse): `POST /api/webhooks/dataverse`
