@@ -16,6 +16,15 @@ function normalizeGuid(value) {
     return raw.trim();
 }
 
+function parseBool(value) {
+    if (value == null) return null;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return null;
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -40,6 +49,8 @@ export default async function handler(req, res) {
 
     const projectNo = String(body?.projectNo || url.searchParams.get("projectNo") || "").trim();
     const projectIdInput = String(body?.projectId || url.searchParams.get("projectId") || "").trim();
+    const redirectParam = parseBool(body?.redirect ?? url.searchParams.get("redirect"));
+    const redirect = redirectParam === true;
 
     if (!projectNo && !projectIdInput) {
         res.status(400).json({ ok: false, error: "projectNo or projectId is required" });
@@ -95,6 +106,11 @@ export default async function handler(req, res) {
         }
 
         const projectNoOut = projectNo || (mapping.projectBcNoField && projectEntity?.[mapping.projectBcNoField]) || null;
+        if (redirect) {
+            res.writeHead(302, { Location: premiumUrl });
+            res.end();
+            return;
+        }
         res.status(200).json({
             ok: true,
             projectId,

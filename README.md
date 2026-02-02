@@ -269,8 +269,11 @@ curl -X POST https://your-domain.com/api/sync/premium-to-bc
 # Auto sync (decides by most recent changes)
 curl -X POST https://your-domain.com/api/sync/auto
 
-# Resolve Premium plan link for a BC project
+# Resolve Premium plan link for a BC project (JSON)
 curl -X GET \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-100\"
+
+# Resolve Premium plan link and redirect the browser
+curl -i \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-100&redirect=1\"
 
 # Ping webhook locally
 curl -i http://localhost:3000/api/webhooks/dataverse
