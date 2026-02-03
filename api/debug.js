@@ -59,6 +59,7 @@ export default async function handler(req, res) {
         "GET /api/sync/debug-project-team": "List Dataverse project team members",
         "GET /api/sync/debug-operation-sets": "List Dataverse operation sets (schedule API)",
         "POST /api/sync/clear-operation-sets": "Delete Dataverse operation sets (schedule API)",
+        "GET /api/sync/debug-dataverse-webhook": "List Dataverse webhook endpoints + steps",
         "POST /api/sync/premium-change/poll": "Poll Premium changes via Dataverse delta (legacy)",
         "POST /api/webhooks/dataverse": "Dataverse webhook receiver",
         "POST /api/webhooks/bc": "Business Central webhook receiver",
