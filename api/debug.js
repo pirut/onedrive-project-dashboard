@@ -66,6 +66,7 @@ export default async function handler(req, res) {
         "POST /api/sync/projects": "Toggle per-project sync or clear links",
         "POST /api/sync/bc-jobs/process": "Process BC webhook job queue",
         "POST /api/sync/clear-bc-sync-lock": "Clear BC syncLock for a task",
+        "POST /api/sync/register-dataverse-webhook": "Register Dataverse webhook for Premium changes",
         "POST /api/sync/bc-subscriptions/create": "Create BC webhook subscription",
         "POST /api/sync/bc-subscriptions/renew": "Renew BC webhook subscription",
         "POST /api/sync/bc-subscriptions/delete": "Delete BC webhook subscription",

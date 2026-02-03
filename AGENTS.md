@@ -25,6 +25,7 @@ Important endpoints
 - Operation set debug: `GET /api/sync/debug-operation-sets` (lists schedule API operation sets)
 - Operation set cleanup: `POST /api/sync/clear-operation-sets` (deletes schedule API operation sets)
 - Clear BC syncLock: `POST /api/sync/clear-bc-sync-lock` (clears syncLock for a BC task; pass only `projectNo` to clear all)
+- Register Dataverse webhook: `POST /api/sync/register-dataverse-webhook` (creates service endpoint + steps)
 - Premium change poll (legacy): `POST /api/sync/premium-change/poll`
 - Debug: `GET /api/debug`
 - Webhook (Dataverse): `POST /api/webhooks/dataverse`
