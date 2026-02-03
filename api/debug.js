@@ -31,13 +31,13 @@ export default async function handler(req, res) {
         return;
     }
 
-    const graphEnvRequired = ["TENANT_ID", "MSAL_CLIENT_ID", "MSAL_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"];
-    const bcEnvRequired = ["TENANT_ID", "BC_ENVIRONMENT", "BC_COMPANY_ID", "BC_CLIENT_ID", "BC_CLIENT_SECRET"];
+    const graphEnvRequired = ["TENANT_ID", "MSAL_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"];
+    const bcEnvRequired = ["TENANT_ID", "BC_ENVIRONMENT", "BC_COMPANY_ID", "BC_CLIENT_ID", "MICROSOFT_CLIENT_SECRET"];
     const dataverseEnvRequired = [
         "DATAVERSE_BASE_URL",
         "TENANT_ID",
         "DATAVERSE_CLIENT_ID",
-        "DATAVERSE_CLIENT_SECRET",
+        "MICROSOFT_CLIENT_SECRET",
     ];
 
     const graphMissing = graphEnvRequired.filter((name) => !envPresence(name));

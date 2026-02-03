@@ -116,16 +116,15 @@ async function buildDashboardData(req) {
     ];
     const checks = await Promise.all(endpoints.map(async (e) => ({ ...e, result: await ping(e.url) })));
 
-    const graphEnvOk = ["TENANT_ID", "MSAL_CLIENT_ID", "MSAL_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"].every(envPresence);
+    const graphEnvOk = ["TENANT_ID", "MSAL_CLIENT_ID", "MICROSOFT_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"].every(envPresence);
     const plannerEnvRequired = [
         "TENANT_ID",
+        "MICROSOFT_CLIENT_SECRET",
         "BC_ENVIRONMENT",
         "BC_COMPANY_ID",
         "BC_CLIENT_ID",
-        "BC_CLIENT_SECRET",
         "DATAVERSE_BASE_URL",
         "DATAVERSE_CLIENT_ID",
-        "DATAVERSE_CLIENT_SECRET",
     ];
     const premiumEnvMissing = plannerEnvRequired.filter((name) => !envPresence(name));
     const premiumEnvOk = premiumEnvMissing.length === 0;

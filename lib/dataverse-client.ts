@@ -56,11 +56,11 @@ export function getDataverseConfig(): DataverseConfig {
     const apiVersion = readEnv("DATAVERSE_API_VERSION") || "v9.2";
     const tenantId = readEnv("TENANT_ID", true) as string;
     const clientId = readEnv("DATAVERSE_CLIENT_ID", true) as string;
-    const clientSecret = readEnv("DATAVERSE_CLIENT_SECRET", true) as string;
+    const clientSecret = readEnv("MICROSOFT_CLIENT_SECRET", true) as string;
     const resourceScope = readEnv("DATAVERSE_RESOURCE_SCOPE") || `${baseUrl}/.default`;
     const authMode = normalizeAuthMode(readEnv("DATAVERSE_AUTH_MODE"));
     const authClientId = (readEnv("DATAVERSE_AUTH_CLIENT_ID") || clientId) as string;
-    const authClientSecret = (readEnv("DATAVERSE_AUTH_CLIENT_SECRET") || "") as string;
+    const authClientSecret = (readEnv("MICROSOFT_CLIENT_SECRET") || "") as string;
     const authScopes = normalizeAuthScopes(readEnv("DATAVERSE_AUTH_SCOPES") || "", baseUrl);
     return {
         baseUrl,

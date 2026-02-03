@@ -39,7 +39,7 @@ Environment variables:
 
 - Examples: `.env.example` (front‑end sign‑in values) and `env.example` (server / Graph / FastField). For production, set envs in Vercel.
 - Core server vars:
-  - `TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`, `MS_GRAPH_SCOPE`
+  - `TENANT_ID`, `MSAL_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MS_GRAPH_SCOPE`
   - `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`
   - `CORS_ORIGIN`
 - KV vars (Vercel KV via Upstash REST):

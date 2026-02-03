@@ -13,21 +13,21 @@ const PORT = process.env.PORT || 3001;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*"; // e.g. https://cstonedash.jrbussard.com
 const TENANT_ID = process.env.TENANT_ID; // or domain
 const MSAL_CLIENT_ID = process.env.MSAL_CLIENT_ID;
-const MSAL_CLIENT_SECRET = process.env.MSAL_CLIENT_SECRET;
+const MICROSOFT_CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET;
 const MS_GRAPH_SCOPE = process.env.MS_GRAPH_SCOPE || "https://graph.microsoft.com/.default";
 const DEFAULT_SITE_URL = process.env.DEFAULT_SITE_URL; // e.g. https://tenant.sharepoint.com/sites/work
 const DEFAULT_LIBRARY = process.env.DEFAULT_LIBRARY; // e.g. Documents/Cornerstone Jobs
 
-if (!TENANT_ID || !MSAL_CLIENT_ID || !MSAL_CLIENT_SECRET || !DEFAULT_SITE_URL || !DEFAULT_LIBRARY) {
+if (!TENANT_ID || !MSAL_CLIENT_ID || !MICROSOFT_CLIENT_SECRET || !DEFAULT_SITE_URL || !DEFAULT_LIBRARY) {
     // eslint-disable-next-line no-console
-    console.warn("Missing env. Required: TENANT_ID, MSAL_CLIENT_ID, MSAL_CLIENT_SECRET, DEFAULT_SITE_URL, DEFAULT_LIBRARY");
+    console.warn("Missing env. Required: TENANT_ID, MSAL_CLIENT_ID, MICROSOFT_CLIENT_SECRET, DEFAULT_SITE_URL, DEFAULT_LIBRARY");
 }
 
 const msalApp = new ConfidentialClientApplication({
     auth: {
         authority: `https://login.microsoftonline.com/${TENANT_ID}`,
         clientId: MSAL_CLIENT_ID,
-        clientSecret: MSAL_CLIENT_SECRET,
+        clientSecret: MICROSOFT_CLIENT_SECRET,
     },
 });
 

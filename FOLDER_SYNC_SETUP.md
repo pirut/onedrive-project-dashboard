@@ -32,7 +32,7 @@ Add these to your `.env` file and Vercel environment:
 # Existing variables (you should already have these)
 TENANT_ID=your-tenant-id
 MSAL_CLIENT_ID=your-client-id
-MSAL_CLIENT_SECRET=your-client-secret
+MICROSOFT_CLIENT_SECRET=your-client-secret
 DEFAULT_SITE_URL=https://yourtenant.sharepoint.com/sites/work
 DEFAULT_LIBRARY=Documents/Cornerstone Jobs
 
@@ -149,7 +149,7 @@ Modify the data mapping in the `syncToFastField` function to include additional 
 1. **Authentication Errors:**
 
     - Check your Microsoft Graph permissions
-    - Verify `TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`
+    - Verify `TENANT_ID`, `MSAL_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
 
 2. **FastField API Errors:**
 
