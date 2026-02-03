@@ -110,6 +110,29 @@ function resolveInlineMaxJobs(req) {
     return 25;
 }
 
+function resolveRetryDelayMs(req) {
+    const raw = req.query?.retryDelayMs;
+    const fromQuery = typeof raw === "string" ? Number(raw) : null;
+    if (Number.isFinite(fromQuery) && fromQuery >= 0) return Math.floor(fromQuery);
+    const env = Number(process.env.BC_WEBHOOK_RETRY_DELAY_MS);
+    if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+    return 10000;
+}
+
+function resolveRetryCount(req) {
+    const raw = req.query?.retryCount;
+    const fromQuery = typeof raw === "string" ? Number(raw) : null;
+    if (Number.isFinite(fromQuery) && fromQuery >= 0) return Math.floor(fromQuery);
+    const env = Number(process.env.BC_WEBHOOK_RETRY_COUNT);
+    if (Number.isFinite(env) && env >= 0) return Math.floor(env);
+    return 2;
+}
+
+async function waitMs(ms) {
+    if (!ms || ms <= 0) return;
+    await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export default async function handler(req, res) {
     const requestId = Math.random().toString(36).slice(2, 12);
     const validationToken = req.query?.validationToken;
@@ -230,15 +253,27 @@ export default async function handler(req, res) {
     let processed = null;
     let processSkipped = null;
     if (processInline) {
-        const lock = await acquireBcJobLock();
-        if (!lock) {
-            processSkipped = "locked";
-        } else {
+        const maxJobs = resolveInlineMaxJobs(req);
+        const retryDelayMs = resolveRetryDelayMs(req);
+        const retryCount = resolveRetryCount(req);
+        let attempts = 0;
+        while (attempts <= retryCount) {
+            const lock = await acquireBcJobLock();
+            if (!lock) {
+                processSkipped = "locked";
+                attempts += 1;
+                if (attempts > retryCount) break;
+                await waitMs(retryDelayMs);
+                continue;
+            }
             try {
-                processed = await processBcJobQueue({ maxJobs: resolveInlineMaxJobs(req), requestId });
+                processed = await processBcJobQueue({ maxJobs, requestId });
+                processSkipped = null;
+                break;
             } catch (error) {
                 logger.error("BC webhook inline processing failed", { requestId, error: error?.message || String(error) });
                 processSkipped = "error";
+                break;
             } finally {
                 await releaseBcJobLock(lock);
             }
