@@ -17,11 +17,11 @@ function readBoolEnv(name: string, defaultValue: boolean) {
 
 export function getBcConfig() {
     return {
-        tenantId: readEnv("BC_TENANT_ID", true) as string,
+        tenantId: readEnv("TENANT_ID", true) as string,
         environment: readEnv("BC_ENVIRONMENT", true) as string,
         companyId: readEnv("BC_COMPANY_ID", true) as string,
         clientId: readEnv("BC_CLIENT_ID", true) as string,
-        clientSecret: readEnv("BC_CLIENT_SECRET", true) as string,
+        clientSecret: readEnv("MICROSOFT_CLIENT_SECRET", true) as string,
         apiBase: readEnv("BC_API_BASE") || "https://api.businesscentral.dynamics.com/v2.0",
         publisher: readEnv("BC_API_PUBLISHER") || "cornerstone",
         group: readEnv("BC_API_GROUP") || "plannerSync",

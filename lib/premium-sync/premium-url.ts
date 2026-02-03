@@ -4,7 +4,7 @@ export type PremiumProjectUrlContext = {
 };
 
 export function getTenantIdForUrl() {
-    return process.env.GRAPH_TENANT_ID || process.env.DATAVERSE_TENANT_ID || process.env.TENANT_ID || "";
+    return process.env.TENANT_ID || "";
 }
 
 export function getPremiumProjectUrlTemplate(context: PremiumProjectUrlContext = {}) {

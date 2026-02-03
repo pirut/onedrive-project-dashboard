@@ -35,12 +35,11 @@ Create a `.env` and fill in values (file is ignored by git):
 
 ```
 VITE_AZURE_AD_CLIENT_ID=YOUR_AZURE_AD_APP_CLIENT_ID
-VITE_AZURE_AD_TENANT_ID=common  # or your tenant id, e.g. contoso.onmicrosoft.com
 
 # Webhook server (Node 18+)
 TENANT_ID=your-tenant-id-or-domain
 MSAL_CLIENT_ID=your-server-app-client-id
-MSAL_CLIENT_SECRET=your-server-app-client-secret
+MICROSOFT_CLIENT_SECRET=your-server-app-client-secret
 MS_GRAPH_SCOPE=https://graph.microsoft.com/.default
 DEFAULT_SITE_URL=https://YOURTENANT.sharepoint.com/sites/work
 DEFAULT_LIBRARY=Documents/Cornerstone Jobs
@@ -62,7 +61,7 @@ npm run webhook
 ```
 TENANT_ID=your-tenant-id-or-domain
 MSAL_CLIENT_ID=your-server-app-client-id
-MSAL_CLIENT_SECRET=your-server-app-client-secret
+MICROSOFT_CLIENT_SECRET=your-server-app-client-secret
 MS_GRAPH_SCOPE=https://graph.microsoft.com/.default
 DEFAULT_SITE_URL=https://YOURTENANT.sharepoint.com/sites/work
 DEFAULT_LIBRARY=Documents/Cornerstone Jobs
@@ -109,7 +108,7 @@ Open the printed local URL (usually `http://localhost:5173`). Click **Sign in**,
 ### Production (Vercel)
 
 - Only serverless functions are deployed. `vercel.json` builds `api/*`.
-- Set envs in Vercel: `TENANT_ID`, `MSAL_CLIENT_ID`, `MSAL_CLIENT_SECRET`, `MS_GRAPH_SCOPE`, `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`, `CORS_ORIGIN`.
+- Set envs in Vercel: `TENANT_ID`, `MSAL_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MS_GRAPH_SCOPE`, `DEFAULT_SITE_URL`, `DEFAULT_LIBRARY`, `CORS_ORIGIN`.
 - Test: `GET /api/health`, `POST /api/upload`.
 
 ## Planner Premium Sync
@@ -119,12 +118,14 @@ Bi-directional sync between Business Central Project Tasks and Planner Premium (
 ### Environment variables
 
 ```
+# Shared tenant + secret (Graph/BC/Dataverse)
+TENANT_ID=
+MICROSOFT_CLIENT_SECRET=
+
 # Business Central
-BC_TENANT_ID=
 BC_ENVIRONMENT=
 BC_COMPANY_ID=
 BC_CLIENT_ID=
-BC_CLIENT_SECRET=
 BC_API_BASE=https://api.businesscentral.dynamics.com/v2.0
 BC_API_PUBLISHER=cornerstone
 BC_API_GROUP=plannerSync
@@ -134,15 +135,12 @@ BC_PROJECT_CHANGES_ENTITY_SET=projectChanges
 # Dataverse (Planner Premium)
 DATAVERSE_BASE_URL=https://yourorg.api.crm.dynamics.com
 DATAVERSE_API_VERSION=v9.2
-DATAVERSE_TENANT_ID=
 DATAVERSE_CLIENT_ID=
-DATAVERSE_CLIENT_SECRET=
 DATAVERSE_RESOURCE_SCOPE=https://yourorg.api.crm.dynamics.com/.default
 DATAVERSE_NOTIFICATION_URL=
 DATAVERSE_WEBHOOK_SECRET=
 DATAVERSE_AUTH_MODE=client_credentials
 DATAVERSE_AUTH_CLIENT_ID=
-DATAVERSE_AUTH_CLIENT_SECRET=
 DATAVERSE_AUTH_SCOPES=https://yourorg.api.crm.dynamics.com/user_impersonation offline_access
 DATAVERSE_AUTH_REDIRECT_URI=
 DATAVERSE_AUTH_STATE_SECRET=
@@ -218,12 +216,12 @@ Planner Premium schedule updates require a licensed user context. Set `DATAVERSE
    - `https://<your-domain>/api/auth/dataverse/callback` (prod)
    - `http://localhost:3000/api/auth/dataverse/callback` (local)
 2) Set env vars:
-   - `DATAVERSE_AUTH_CLIENT_ID`, `DATAVERSE_AUTH_CLIENT_SECRET`
+   - `DATAVERSE_AUTH_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
    - `DATAVERSE_AUTH_REDIRECT_URI` (must match the redirect above)
    - `DATAVERSE_AUTH_SCOPES` (default: `<baseUrl>/user_impersonation offline_access`)
    - `DATAVERSE_AUTH_STATE_SECRET` (recommended for state validation)
    - `DATAVERSE_TOKEN_ENCRYPTION_SECRET` (optional, encrypts refresh token at rest)
-3) If your app is **public client** (no secret), leave `DATAVERSE_AUTH_CLIENT_SECRET` empty.
+3) If your app is **public client** (no secret), `MICROSOFT_CLIENT_SECRET` can be empty (Graph/BC app-only features require a secret).
 
 4) Visit:
    - `GET /api/auth/dataverse/login`

@@ -68,9 +68,9 @@ export function verifyDataverseAuthState(state: string, secret: string, maxAgeMs
 
 export function getDataverseOAuthConfig(origin?: string): DataverseOAuthConfig {
     const baseUrl = normalizeBaseUrl(readEnv("DATAVERSE_BASE_URL", true) as string);
-    const tenantId = readEnv("DATAVERSE_TENANT_ID", true) as string;
+    const tenantId = readEnv("TENANT_ID", true) as string;
     const clientId = (readEnv("DATAVERSE_AUTH_CLIENT_ID") || readEnv("DATAVERSE_CLIENT_ID", true)) as string;
-    const clientSecret = (readEnv("DATAVERSE_AUTH_CLIENT_SECRET") || "") as string;
+    const clientSecret = (readEnv("MICROSOFT_CLIENT_SECRET") || "") as string;
     const redirectUri = readEnv("DATAVERSE_AUTH_REDIRECT_URI") || (origin ? new URL("/api/auth/dataverse/callback", origin).toString() : "");
     if (!redirectUri) {
         throw new Error("Missing DATAVERSE_AUTH_REDIRECT_URI");

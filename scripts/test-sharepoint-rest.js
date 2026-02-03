@@ -17,7 +17,7 @@ async function main() {
 
     const TENANT_ID = readEnv("TENANT_ID", true);
     const MSAL_CLIENT_ID = readEnv("MSAL_CLIENT_ID", true);
-    const MSAL_CLIENT_SECRET = readEnv("MSAL_CLIENT_SECRET", true);
+    const MICROSOFT_CLIENT_SECRET = readEnv("MICROSOFT_CLIENT_SECRET", true);
     const DEFAULT_SITE_URL = readEnv("DEFAULT_SITE_URL", true);
 
     console.log(`Testing access to: ${DEFAULT_SITE_URL}\n`);
@@ -32,7 +32,7 @@ async function main() {
             body: new URLSearchParams({
                 grant_type: "client_credentials",
                 client_id: MSAL_CLIENT_ID,
-                client_secret: MSAL_CLIENT_SECRET,
+                client_secret: MICROSOFT_CLIENT_SECRET,
                 scope: "https://cornerstonecompaniesflc.sharepoint.com/.default",
             }),
         });

@@ -32,13 +32,13 @@ async function main() {
 
     const TENANT_ID = readEnv("TENANT_ID", true);
     const MSAL_CLIENT_ID = readEnv("MSAL_CLIENT_ID", true);
-    const MSAL_CLIENT_SECRET = readEnv("MSAL_CLIENT_SECRET", true);
+    const MICROSOFT_CLIENT_SECRET = readEnv("MICROSOFT_CLIENT_SECRET", true);
 
     const msalApp = new ConfidentialClientApplication({
         auth: {
             authority: `https://login.microsoftonline.com/${TENANT_ID}`,
             clientId: MSAL_CLIENT_ID,
-            clientSecret: MSAL_CLIENT_SECRET,
+            clientSecret: MICROSOFT_CLIENT_SECRET,
         },
     });
 

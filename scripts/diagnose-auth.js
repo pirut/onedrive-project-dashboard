@@ -21,7 +21,7 @@ async function main() {
     const envVars = {
         TENANT_ID: readEnv("TENANT_ID"),
         MSAL_CLIENT_ID: readEnv("MSAL_CLIENT_ID"),
-        MSAL_CLIENT_SECRET: readEnv("MSAL_CLIENT_SECRET"),
+        MICROSOFT_CLIENT_SECRET: readEnv("MICROSOFT_CLIENT_SECRET"),
         DEFAULT_SITE_URL: readEnv("DEFAULT_SITE_URL"),
         DEFAULT_LIBRARY: readEnv("DEFAULT_LIBRARY"),
     };
@@ -42,7 +42,7 @@ async function main() {
             auth: {
                 authority: `https://login.microsoftonline.com/${envVars.TENANT_ID}`,
                 clientId: envVars.MSAL_CLIENT_ID,
-                clientSecret: envVars.MSAL_CLIENT_SECRET,
+                clientSecret: envVars.MICROSOFT_CLIENT_SECRET,
             },
         });
 
@@ -112,7 +112,7 @@ async function main() {
         console.error("   ❌ Authentication failed:", error.message);
         console.log();
         console.log("🔧 Troubleshooting tips:");
-        console.log("   1. Check your TENANT_ID, MSAL_CLIENT_ID, and MSAL_CLIENT_SECRET");
+        console.log("   1. Check your TENANT_ID, MSAL_CLIENT_ID, and MICROSOFT_CLIENT_SECRET");
         console.log("   2. Verify the app has the correct Microsoft Graph permissions");
         console.log("   3. Ensure admin consent has been granted for the app");
         console.log("   4. Check if the app is configured for app-only authentication");

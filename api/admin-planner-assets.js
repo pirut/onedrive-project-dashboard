@@ -85,9 +85,9 @@ function readJsonBody(req) {
 }
 
 function getGraphConfig() {
-    const tenantId = process.env.GRAPH_TENANT_ID || process.env.TENANT_ID || "";
+    const tenantId = process.env.TENANT_ID || "";
     const clientId = process.env.GRAPH_CLIENT_ID || process.env.MSAL_CLIENT_ID || "";
-    const clientSecret = process.env.GRAPH_CLIENT_SECRET || process.env.MSAL_CLIENT_SECRET || "";
+    const clientSecret = process.env.MICROSOFT_CLIENT_SECRET || "";
     const scope = process.env.MS_GRAPH_SCOPE || "https://graph.microsoft.com/.default";
     const groupId = process.env.PLANNER_GROUP_ID || "";
     return { tenantId, clientId, clientSecret, scope, groupId };
