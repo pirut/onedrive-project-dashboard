@@ -233,7 +233,7 @@ Planner Premium schedule updates require a licensed user context. Set `DATAVERSE
 Preferred path is Dataverse change tracking (delta links). Optionally register Dataverse webhooks on the task entity for real-time triggers.
 
 - Delta polling endpoint: `POST /api/sync/premium-to-bc` (legacy: `POST /api/sync/premium-change/poll`)
-- Webhook receiver: `POST /api/webhooks/dataverse` (runs auto sync decision; set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
+- Webhook receiver: `POST /api/webhooks/dataverse` (syncs only tasks referenced by the webhook payload; set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
 - If using webhooks, configure your Dataverse service endpoint to send notifications to the webhook URL and include the shared secret header (`x-dataverse-secret`) matching `DATAVERSE_WEBHOOK_SECRET`.
 - Optional team auto-add: set `PLANNER_GROUP_RESOURCE_IDS` (comma-separated bookable resource IDs) or `PLANNER_GROUP_ID` (AAD group id, if supported by your Dataverse schema).
 

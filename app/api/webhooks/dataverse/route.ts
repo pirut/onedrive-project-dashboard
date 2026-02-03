@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { appendPremiumWebhookLog, runPremiumSyncDecision } from "../../../../lib/premium-sync";
+import { appendPremiumWebhookLog, syncPremiumTaskIds } from "../../../../lib/premium-sync";
 import { logger } from "../../../../lib/planner-sync/logger";
 
 function safeEqual(a: string, b: string) {
@@ -40,10 +40,16 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+    const requestId = crypto.randomUUID();
     const expectedSecret = (process.env.DATAVERSE_WEBHOOK_SECRET || "").trim();
     if (expectedSecret) {
-        const provided = request.headers.get("x-dataverse-secret") || request.headers.get("x-webhook-secret") || "";
+        const provided =
+            request.headers.get("x-dataverse-secret") ||
+            request.headers.get("x-webhook-secret") ||
+            request.headers.get("x-ms-dynamics-webhook-key") ||
+            "";
         if (!safeEqual(provided, expectedSecret)) {
+            await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "unauthorized" });
             return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }, null, 2), {
                 status: 401,
                 headers: { "Content-Type": "application/json" },
@@ -51,7 +57,6 @@ export async function POST(request: Request) {
         }
     }
 
-    const requestId = crypto.randomUUID();
     let payload: Record<string, unknown> | null = null;
     try {
         payload = (await request.json()) as Record<string, unknown>;
@@ -76,9 +81,17 @@ export async function POST(request: Request) {
         taskIds,
     });
 
+    if (!taskIds.length) {
+        await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "skipped", reason: "no_task_ids" });
+        return new Response(JSON.stringify({ ok: true, skipped: true, reason: "no_task_ids" }, null, 2), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        });
+    }
+
     try {
-        const { decision, result } = await runPremiumSyncDecision({ requestId });
-        return new Response(JSON.stringify({ ok: true, decision, result }, null, 2), {
+        const result = await syncPremiumTaskIds(taskIds, { requestId });
+        return new Response(JSON.stringify({ ok: true, taskIds, result }, null, 2), {
             status: 200,
             headers: { "Content-Type": "application/json" },
         });

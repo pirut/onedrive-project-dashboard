@@ -50,7 +50,7 @@ Admin dashboard (UI)
 Dataverse notes
 - Planner Premium data is stored in Dataverse (`msdyn_projects`, `msdyn_projecttasks` by default).
 - Change tracking uses `Prefer: odata.track-changes` and delta links stored in KV or `DATAVERSE_DELTA_FILE`.
-- Optional Dataverse webhooks should target `/api/webhooks/dataverse` and include `x-dataverse-secret` if configured.
+- Optional Dataverse webhooks should target `/api/webhooks/dataverse` and include `x-dataverse-secret` if configured; webhook processing is task-scoped based on payload IDs.
 
 BC notes
 - Custom API is `cornerstone/plannerSync/v1.0` with entity sets `projects` and `projectTasks`.

@@ -1,6 +1,7 @@
 export {
     syncBcToPremium,
     syncPremiumChanges,
+    syncPremiumTaskIds,
     runPremiumChangePoll,
     previewBcChanges,
     previewPremiumChanges,

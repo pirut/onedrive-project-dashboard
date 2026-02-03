@@ -1661,6 +1661,126 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
     return summary;
 }
 
+export async function syncPremiumTaskIds(
+    taskIds: string[],
+    options: { requestId?: string } = {}
+) {
+    const requestId = options.requestId || "";
+    const syncConfig = getPremiumSyncConfig();
+    const mapping = getDataverseMappingConfig();
+    const bcClient = new BusinessCentralClient();
+    const dataverse = new DataverseClient();
+    const projectCache = new Map<string, string | null>();
+    const uniqueIds = Array.from(
+        new Set((taskIds || []).map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean))
+    );
+
+    const selectFields = [
+        mapping.taskIdField,
+        mapping.taskTitleField,
+        mapping.taskPercentField,
+        mapping.taskStartField,
+        mapping.taskFinishField,
+        mapping.taskBcNoField,
+        mapping.taskProjectIdField,
+        mapping.taskModifiedField,
+    ].filter(Boolean) as string[];
+
+    const summary = {
+        changed: uniqueIds.length,
+        updated: 0,
+        skipped: 0,
+        cleared: 0,
+        deleted: 0,
+        errors: 0,
+        taskIds: uniqueIds,
+    };
+
+    for (const taskId of uniqueIds) {
+        let item: DataverseEntity | null = null;
+        try {
+            item = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, selectFields);
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            if (message.includes("-> 404")) {
+                if (syncConfig.deleteBehavior === "ignore") {
+                    summary.skipped += 1;
+                    continue;
+                }
+                const bcTask = await bcClient.findProjectTaskByPlannerTaskId(taskId);
+                if (bcTask && bcTask.systemId) {
+                    try {
+                        await updateBcTaskWithSyncLock(bcClient, bcTask, {
+                            plannerTaskId: "",
+                            plannerPlanId: "",
+                            plannerBucket: "",
+                            lastPlannerEtag: "",
+                            lastSyncAt: new Date().toISOString(),
+                        });
+                        summary.cleared += 1;
+                    } catch (clearError) {
+                        summary.errors += 1;
+                        logger.warn("Failed clearing BC link for deleted premium task", {
+                            requestId,
+                            taskId,
+                            error: (clearError as Error)?.message,
+                        });
+                    }
+                } else {
+                    summary.skipped += 1;
+                }
+                continue;
+            }
+            summary.errors += 1;
+            logger.warn("Premium -> BC task lookup failed", { requestId, taskId, error: message });
+            continue;
+        }
+
+        if (!item) {
+            summary.skipped += 1;
+            continue;
+        }
+
+        const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
+        if (!bcTask) {
+            summary.skipped += 1;
+            continue;
+        }
+
+        const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, bcTask, syncConfig.syncLockTimeoutMinutes);
+        if (cleanTask.syncLock) {
+            summary.skipped += 1;
+            continue;
+        }
+
+        if (syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
+            summary.skipped += 1;
+            continue;
+        }
+
+        try {
+            const updates = buildBcUpdateFromPremium(cleanTask, item, mapping);
+            const planId = item[mapping.taskProjectIdField];
+            const finalUpdates = {
+                ...updates,
+                plannerTaskId: taskId,
+                plannerPlanId: typeof planId === "string" ? planId : cleanTask.plannerPlanId,
+            };
+            await updateBcTaskWithSyncLock(bcClient, cleanTask, finalUpdates);
+            summary.updated += 1;
+        } catch (error) {
+            summary.errors += 1;
+            logger.warn("Premium -> BC task update failed", {
+                requestId,
+                taskId,
+                error: (error as Error)?.message,
+            });
+        }
+    }
+
+    return summary;
+}
+
 export async function runPremiumChangePoll(options: { requestId?: string } = {}) {
     return syncPremiumChanges(options);
 }

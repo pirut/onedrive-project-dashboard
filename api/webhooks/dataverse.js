@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { appendPremiumWebhookLog, runPremiumSyncDecision } from "../../lib/premium-sync/index.js";
+import { appendPremiumWebhookLog, syncPremiumTaskIds } from "../../lib/premium-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 function readEnv(name) {
@@ -95,9 +95,16 @@ export default async function handler(req, res) {
     });
     logger.info("Dataverse webhook notification", { requestId, taskIds, notificationCount: 1 });
 
+    if (!taskIds.length) {
+        logger.warn("Dataverse webhook missing task ids", { requestId });
+        await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "skipped", reason: "no_task_ids" });
+        res.status(200).json({ ok: true, skipped: true, reason: "no_task_ids" });
+        return;
+    }
+
     try {
-        const { decision, result } = await runPremiumSyncDecision({ requestId });
-        res.status(200).json({ ok: true, decision, result });
+        const result = await syncPremiumTaskIds(taskIds, { requestId });
+        res.status(200).json({ ok: true, taskIds, result });
     } catch (error) {
         logger.error("Dataverse webhook processing failed", { requestId, error: error?.message || String(error) });
         await appendPremiumWebhookLog({
