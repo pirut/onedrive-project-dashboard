@@ -142,6 +142,41 @@ async function listAsyncJobs(dataverse, stepId, { since, limit }) {
     return res.value || [];
 }
 
+async function listAsyncJobsUnfiltered(dataverse, { since, limit }) {
+    const filters = [];
+    if (since) {
+        filters.push(`createdon ge ${since}`);
+    }
+    const res = await dataverse.list("asyncoperations", {
+        filter: filters.join(" and "),
+        orderBy: "createdon desc",
+        top: limit,
+    });
+    return res.value || [];
+}
+
+function summarizeAsyncJob(job) {
+    const stepKeys = Object.keys(job || {}).filter((key) =>
+        key.toLowerCase().includes("processingstep")
+    );
+    const related = {};
+    for (const key of stepKeys) {
+        related[key] = job[key];
+    }
+    return {
+        id: job.asyncoperationid || null,
+        name: job.name || null,
+        operationtype: job.operationtype,
+        statecode: job.statecode,
+        statuscode: job.statuscode,
+        message: job.message || null,
+        createdon: job.createdon || null,
+        startedon: job.startedon || null,
+        completedon: job.completedon || null,
+        related: Object.keys(related).length ? related : null,
+    };
+}
+
 export default async function handler(req, res) {
     if (req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
@@ -168,6 +203,7 @@ export default async function handler(req, res) {
         const messageCache = new Map();
         const filterCache = new Map();
         const detailed = [];
+        let stepFilterUnsupported = false;
 
         for (const endpoint of endpoints) {
             const id = endpoint.serviceendpointid || endpoint.serviceEndpointId || endpoint.serviceendpointId;
@@ -180,7 +216,19 @@ export default async function handler(req, res) {
                 const filterId = step._sdkmessagefilterid_value || step.sdkmessagefilterid;
                 const messageName = await resolveMessageName(dataverse, messageId, messageCache);
                 const primaryEntity = await resolveFilterEntity(dataverse, filterId, filterCache);
-                const jobs = stepId ? await listAsyncJobs(dataverse, stepId, { since, limit: perStepLimit }) : [];
+                let jobs = [];
+                if (stepId && !stepFilterUnsupported) {
+                    try {
+                        jobs = await listAsyncJobs(dataverse, stepId, { since, limit: perStepLimit });
+                    } catch (error) {
+                        const message = error?.message || String(error);
+                        if (message.includes("_sdkmessageprocessingstepid_value")) {
+                            stepFilterUnsupported = true;
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
                 enriched.push({
                     id: stepId || null,
                     name: step.name || null,
@@ -194,7 +242,7 @@ export default async function handler(req, res) {
                     messageName,
                     filterId,
                     primaryEntity,
-                    jobs,
+                    jobs: jobs.map(summarizeAsyncJob),
                 });
             }
             detailed.push({
@@ -209,6 +257,12 @@ export default async function handler(req, res) {
             });
         }
 
+        let unfilteredJobs = null;
+        if (stepFilterUnsupported) {
+            const rawJobs = await listAsyncJobsUnfiltered(dataverse, { since, limit });
+            unfilteredJobs = rawJobs.map(summarizeAsyncJob);
+        }
+
         res.status(200).json({
             ok: true,
             webhookUrl,
@@ -216,6 +270,10 @@ export default async function handler(req, res) {
             minutes,
             limit,
             since,
+            note: stepFilterUnsupported
+                ? "asyncoperation does not expose _sdkmessageprocessingstepid_value; returning unfiltered jobs"
+                : null,
+            unfilteredJobs,
             endpoints: detailed,
         });
     } catch (error) {

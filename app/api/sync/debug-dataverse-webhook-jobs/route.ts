@@ -139,6 +139,41 @@ async function listAsyncJobs(dataverse: DataverseClient, stepId: string, { since
     return res.value || [];
 }
 
+async function listAsyncJobsUnfiltered(dataverse: DataverseClient, { since, limit }: { since: string | null; limit: number }) {
+    const filters = [] as string[];
+    if (since) {
+        filters.push(`createdon ge ${since}`);
+    }
+    const res = await dataverse.list("asyncoperations", {
+        filter: filters.join(" and "),
+        orderBy: "createdon desc",
+        top: limit,
+    });
+    return res.value || [];
+}
+
+function summarizeAsyncJob(job: Record<string, unknown>) {
+    const stepKeys = Object.keys(job || {}).filter((key) =>
+        key.toLowerCase().includes("processingstep")
+    );
+    const related: Record<string, unknown> = {};
+    for (const key of stepKeys) {
+        related[key] = job[key];
+    }
+    return {
+        id: job.asyncoperationid || null,
+        name: job.name || null,
+        operationtype: job.operationtype,
+        statecode: job.statecode,
+        statuscode: job.statuscode,
+        message: job.message || null,
+        createdon: job.createdon || null,
+        startedon: job.startedon || null,
+        completedon: job.completedon || null,
+        related: Object.keys(related).length ? related : null,
+    };
+}
+
 export async function GET(request: Request) {
     if (!resolveSecret(request)) {
         return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }, null, 2), {
@@ -161,6 +196,7 @@ export async function GET(request: Request) {
         const messageCache = new Map<string, string | null>();
         const filterCache = new Map<string, string | null>();
         const detailed: Array<Record<string, unknown>> = [];
+        let stepFilterUnsupported = false;
 
         for (const endpoint of endpoints) {
             const id = (endpoint as { serviceendpointid?: string }).serviceendpointid;
@@ -173,7 +209,19 @@ export async function GET(request: Request) {
                 const filterId = step._sdkmessagefilterid_value as string | undefined;
                 const messageName = await resolveMessageName(dataverse, messageId || "", messageCache);
                 const primaryEntity = await resolveFilterEntity(dataverse, filterId || "", filterCache);
-                const jobs = stepId ? await listAsyncJobs(dataverse, stepId, { since, limit: perStepLimit }) : [];
+                let jobs: Array<Record<string, unknown>> = [];
+                if (stepId && !stepFilterUnsupported) {
+                    try {
+                        jobs = await listAsyncJobs(dataverse, stepId, { since, limit: perStepLimit });
+                    } catch (error) {
+                        const message = (error as Error)?.message || String(error);
+                        if (message.includes("_sdkmessageprocessingstepid_value")) {
+                            stepFilterUnsupported = true;
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
                 enriched.push({
                     id: stepId || null,
                     name: step.name || null,
@@ -187,7 +235,7 @@ export async function GET(request: Request) {
                     messageName,
                     filterId,
                     primaryEntity,
-                    jobs,
+                    jobs: jobs.map(summarizeAsyncJob),
                 });
             }
             detailed.push({
@@ -202,6 +250,12 @@ export async function GET(request: Request) {
             });
         }
 
+        let unfilteredJobs: Array<Record<string, unknown>> | null = null;
+        if (stepFilterUnsupported) {
+            const rawJobs = await listAsyncJobsUnfiltered(dataverse, { since, limit });
+            unfilteredJobs = rawJobs.map((job) => summarizeAsyncJob(job as Record<string, unknown>));
+        }
+
         return new Response(JSON.stringify({
             ok: true,
             webhookUrl,
@@ -209,6 +263,10 @@ export async function GET(request: Request) {
             minutes,
             limit,
             since,
+            note: stepFilterUnsupported
+                ? "asyncoperation does not expose _sdkmessageprocessingstepid_value; returning unfiltered jobs"
+                : null,
+            unfilteredJobs,
             endpoints: detailed,
         }, null, 2), {
             status: 200,
