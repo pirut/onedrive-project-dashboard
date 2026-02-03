@@ -329,8 +329,21 @@ export class BusinessCentralClient {
         return Array.isArray(data?.value) ? data?.value || [] : [];
     }
 
-    async renewWebhookSubscription(subscriptionId: string, expirationDateTime: string) {
+    normalizeWebhookSubscriptionId(subscriptionId: string) {
         const trimmed = (subscriptionId || "").trim();
+        if (!trimmed) return "";
+        const compact = trimmed.replace(/[^0-9a-fA-F]/g, "");
+        if (compact.length === 32) {
+            return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(
+                16,
+                20
+            )}-${compact.slice(20)}`;
+        }
+        return trimmed;
+    }
+
+    async renewWebhookSubscription(subscriptionId: string, expirationDateTime: string) {
+        const trimmed = this.normalizeWebhookSubscriptionId(subscriptionId);
         if (!trimmed) throw new Error("BC webhook subscription id is required");
         const url = `${this.apiRootUrl()}/subscriptions(${trimmed})`;
         const res = await this.request(url, {
@@ -341,10 +354,10 @@ export class BusinessCentralClient {
     }
 
     async deleteWebhookSubscription(subscriptionId: string) {
-        const trimmed = (subscriptionId || "").trim();
+        const trimmed = this.normalizeWebhookSubscriptionId(subscriptionId);
         if (!trimmed) return;
         const url = `${this.apiRootUrl()}/subscriptions(${trimmed})`;
-        await this.request(url, { method: "DELETE" });
+        await this.request(url, { method: "DELETE", headers: { "If-Match": "*" } });
     }
 
     async listProjectChangesSince(lastSeq: number | null) {
