@@ -122,18 +122,44 @@ export async function POST(request: Request) {
                     clientState,
                 });
 
+                let resolved = subscription;
+                let resolvedId = pickSubscriptionId(resolved as { id?: string });
+                if (!resolvedId) {
+                    const expectedNotification = normalizeValue(notificationUrl);
+                    try {
+                        const list = await bcClient.listWebhookSubscriptions();
+                        const match = list.find((item) => {
+                            const resource = normalizeValue(item?.resource as string | undefined);
+                            const notify = normalizeValue(item?.notificationUrl as string | undefined);
+                            if (!matchesResource(resource, normalized)) return false;
+                            if (!notify) return true;
+                            return notify === expectedNotification;
+                        });
+                        if (match) {
+                            resolved = match as typeof subscription;
+                            resolvedId = pickSubscriptionId(match as { id?: string });
+                        }
+                    } catch (error) {
+                        logger.warn("BC subscription create fallback lookup failed", {
+                            requestId,
+                            entitySet: normalized,
+                            error: error instanceof Error ? error.message : String(error),
+                        });
+                    }
+                }
+
                 created.push({
                     entitySet: normalized,
-                    id: subscription?.id,
-                    resource: subscription?.resource,
-                    expirationDateTime: subscription?.expirationDateTime,
+                    id: resolvedId || undefined,
+                    resource: resolved?.resource,
+                    expirationDateTime: resolved?.expirationDateTime,
                 });
 
                 await saveBcSubscription(normalized, {
-                    id: subscription?.id || "",
+                    id: resolvedId || "",
                     entitySet: normalized,
-                    resource: subscription?.resource,
-                    expirationDateTime: subscription?.expirationDateTime,
+                    resource: resolved?.resource,
+                    expirationDateTime: resolved?.expirationDateTime,
                     createdAt: new Date().toISOString(),
                     notificationUrl,
                     clientState,
