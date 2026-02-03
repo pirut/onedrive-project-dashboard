@@ -315,14 +315,14 @@ curl -i http://localhost:3000/api/webhooks/dataverse
 
 ### Business Central Webhooks (Vercel)
 
-BC webhooks let Business Central changes enqueue targeted BC → Premium sync jobs instead of relying on polling.
+BC webhooks let Business Central changes enqueue targeted BC → Premium sync jobs instead of relying on polling. When processing inline, only the changed task systemIds from the webhook are synced.
 
 1) Set env vars:
 - `BC_WEBHOOK_NOTIFICATION_URL` (optional) to force the webhook URL (defaults to your deployment URL + `/api/webhooks/bc`).
 - `BC_WEBHOOK_SHARED_SECRET` (optional) is sent as `clientState` and validated on receipt.
 - `BC_WEBHOOK_PROCESS_INLINE=true` (optional) to process jobs immediately in the webhook (no cron required).
 - `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, default 25) to cap inline processing.
-- `CRON_SECRET` (only required if you use Vercel cron for renewals or `/api/sync/bc-jobs/process`).
+- `CRON_SECRET` (only required if you use Vercel cron for renewals).
 - Ensure KV/Upstash (`KV_REST_API_URL`/`KV_REST_API_TOKEN`) is configured for durable queues.
 
 2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.

@@ -1209,7 +1209,22 @@ async function syncTaskToDataverse(
     }
 }
 
-export async function syncBcToPremium(projectNo?: string, options: { requestId?: string; projectNos?: string[] } = {}) {
+function normalizeTaskSystemId(raw: string) {
+    let value = (raw || "").trim();
+    if (!value) return "";
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+        value = value.slice(1, -1);
+    }
+    if (value.startsWith("{") && value.endsWith("}")) {
+        value = value.slice(1, -1);
+    }
+    return value.trim();
+}
+
+export async function syncBcToPremium(
+    projectNo?: string,
+    options: { requestId?: string; projectNos?: string[]; taskSystemIds?: string[] } = {}
+) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
     const mapping = getDataverseMappingConfig();
@@ -1226,6 +1241,9 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
     let projectNos: string[] = [];
     if (projectNo) projectNos = [projectNo];
     if (options.projectNos && options.projectNos.length) projectNos = options.projectNos;
+    const taskSystemIdSet = options.taskSystemIds?.length
+        ? new Set(options.taskSystemIds.map((value) => normalizeTaskSystemId(value)).filter(Boolean))
+        : null;
 
     if (!projectNos.length) {
         try {
@@ -1391,45 +1409,51 @@ export async function syncBcToPremium(projectNo?: string, options: { requestId?:
                 continue;
             }
 
-            for (const task of sorted) {
-                result.tasks += 1;
-                const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
-                if (cleanTask.syncLock) {
-                    result.skipped += 1;
-                    continue;
-                }
-                if (shouldSkipTaskForSection(cleanTask, currentSection)) {
-                    result.skipped += 1;
-                    continue;
-                }
-                try {
-                    const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                        useScheduleApi,
-                        operationSetId: useScheduleApi ? operationSetId : undefined,
-                        bucketCache,
-                        resourceCache,
-                        teamCache,
-                        assignmentCache,
-                        touchOperationSet: () => {
-                            operationSetTouched = true;
-                        },
-                    });
-                    if (res.action === "created") result.created += 1;
-                    else if (res.action === "updated") result.updated += 1;
-                    else result.skipped += 1;
-                    if (res.pendingUpdate) {
-                        pendingUpdates.push(res.pendingUpdate);
-                    }
-                } catch (error) {
-                    logger.warn("Premium task sync failed", {
-                        requestId,
-                        projectNo: projNo,
-                        taskNo: cleanTask.taskNo,
-                        error: (error as Error)?.message,
-                    });
-                    result.errors += 1;
-                }
+        for (const task of sorted) {
+            const skipForSection = shouldSkipTaskForSection(task, currentSection);
+            const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
+            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+            if (!isTarget) {
+                continue;
             }
+            result.tasks += 1;
+            if (skipForSection) {
+                result.skipped += 1;
+                continue;
+            }
+            const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
+            if (cleanTask.syncLock) {
+                result.skipped += 1;
+                continue;
+            }
+            try {
+                const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                    useScheduleApi,
+                    operationSetId: useScheduleApi ? operationSetId : undefined,
+                    bucketCache,
+                    resourceCache,
+                    teamCache,
+                    assignmentCache,
+                    touchOperationSet: () => {
+                        operationSetTouched = true;
+                    },
+                });
+                if (res.action === "created") result.created += 1;
+                else if (res.action === "updated") result.updated += 1;
+                else result.skipped += 1;
+                if (res.pendingUpdate) {
+                    pendingUpdates.push(res.pendingUpdate);
+                }
+            } catch (error) {
+                logger.warn("Premium task sync failed", {
+                    requestId,
+                    projectNo: projNo,
+                    taskNo: cleanTask.taskNo,
+                    error: (error as Error)?.message,
+                });
+                result.errors += 1;
+            }
+        }
 
             if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
                 try {

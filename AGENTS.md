@@ -69,7 +69,7 @@ Environment variables (Premium/BC)
 - Sync: `SYNC_PREFER_BC`, `SYNC_BC_MODIFIED_GRACE_MS`, `SYNC_LOCK_TIMEOUT_MINUTES`, `SYNC_MAX_PROJECTS_PER_RUN`,
   `PLANNER_GROUP_ID`, `PLANNER_GROUP_RESOURCE_IDS`
 - Webhooks: `DATAVERSE_NOTIFICATION_URL`, `DATAVERSE_WEBHOOK_SECRET`, `BC_WEBHOOK_NOTIFICATION_URL`, `BC_WEBHOOK_SHARED_SECRET`, `CRON_SECRET`
-- BC webhook processing: `BC_WEBHOOK_PROCESS_INLINE`, `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, skip cron)
+- BC webhook processing: `BC_WEBHOOK_PROCESS_INLINE`, `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, skip cron; processes only changed task systemIds)
 
 Recent changes to remember
 - Added Dataverse client + premium sync layer in `lib/premium-sync/`.
