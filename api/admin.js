@@ -118,13 +118,12 @@ async function buildDashboardData(req) {
 
     const graphEnvOk = ["TENANT_ID", "MSAL_CLIENT_ID", "MSAL_CLIENT_SECRET", "DEFAULT_SITE_URL", "DEFAULT_LIBRARY"].every(envPresence);
     const plannerEnvRequired = [
-        "BC_TENANT_ID",
+        "TENANT_ID",
         "BC_ENVIRONMENT",
         "BC_COMPANY_ID",
         "BC_CLIENT_ID",
         "BC_CLIENT_SECRET",
         "DATAVERSE_BASE_URL",
-        "DATAVERSE_TENANT_ID",
         "DATAVERSE_CLIENT_ID",
         "DATAVERSE_CLIENT_SECRET",
     ];

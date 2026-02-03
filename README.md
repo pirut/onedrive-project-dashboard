@@ -35,7 +35,6 @@ Create a `.env` and fill in values (file is ignored by git):
 
 ```
 VITE_AZURE_AD_CLIENT_ID=YOUR_AZURE_AD_APP_CLIENT_ID
-VITE_AZURE_AD_TENANT_ID=common  # or your tenant id, e.g. contoso.onmicrosoft.com
 
 # Webhook server (Node 18+)
 TENANT_ID=your-tenant-id-or-domain
@@ -119,8 +118,10 @@ Bi-directional sync between Business Central Project Tasks and Planner Premium (
 ### Environment variables
 
 ```
+# Shared tenant (Graph/BC/Dataverse)
+TENANT_ID=
+
 # Business Central
-BC_TENANT_ID=
 BC_ENVIRONMENT=
 BC_COMPANY_ID=
 BC_CLIENT_ID=
@@ -134,7 +135,6 @@ BC_PROJECT_CHANGES_ENTITY_SET=projectChanges
 # Dataverse (Planner Premium)
 DATAVERSE_BASE_URL=https://yourorg.api.crm.dynamics.com
 DATAVERSE_API_VERSION=v9.2
-DATAVERSE_TENANT_ID=
 DATAVERSE_CLIENT_ID=
 DATAVERSE_CLIENT_SECRET=
 DATAVERSE_RESOURCE_SCOPE=https://yourorg.api.crm.dynamics.com/.default

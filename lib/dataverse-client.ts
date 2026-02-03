@@ -54,7 +54,7 @@ function normalizeAuthScopes(scopes: string, baseUrl: string) {
 export function getDataverseConfig(): DataverseConfig {
     const baseUrl = normalizeBaseUrl(readEnv("DATAVERSE_BASE_URL", true) as string);
     const apiVersion = readEnv("DATAVERSE_API_VERSION") || "v9.2";
-    const tenantId = readEnv("DATAVERSE_TENANT_ID", true) as string;
+    const tenantId = readEnv("TENANT_ID", true) as string;
     const clientId = readEnv("DATAVERSE_CLIENT_ID", true) as string;
     const clientSecret = readEnv("DATAVERSE_CLIENT_SECRET", true) as string;
     const resourceScope = readEnv("DATAVERSE_RESOURCE_SCOPE") || `${baseUrl}/.default`;
