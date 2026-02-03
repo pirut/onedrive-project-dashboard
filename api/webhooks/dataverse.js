@@ -48,6 +48,7 @@ function extractTaskIds(payload) {
 export default async function handler(req, res) {
     if (req.method === "GET") {
         const requestId = crypto.randomUUID();
+        logger.info("Dataverse webhook ping", { requestId });
         await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "ping" });
         res.status(200).json({ ok: true, requestId });
         return;
@@ -70,6 +71,7 @@ export default async function handler(req, res) {
     const requestId = crypto.randomUUID();
     const payload = await readJsonBody(req);
     if (!payload) {
+        logger.warn("Dataverse webhook invalid JSON", { requestId });
         await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "invalid_json" });
         res.status(400).json({ ok: false, error: "Invalid JSON" });
         return;
@@ -83,6 +85,7 @@ export default async function handler(req, res) {
         notificationCount: 1,
         taskIds,
     });
+    logger.info("Dataverse webhook notification", { requestId, taskIds, notificationCount: 1 });
 
     try {
         const { decision, result } = await runPremiumSyncDecision({ requestId });
