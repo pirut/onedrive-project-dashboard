@@ -85,6 +85,7 @@ export async function POST(request: Request) {
     const messages = normalizeMessages(body?.messages);
     const asyncMode = body?.asyncMode !== false;
     const stage = Number.isFinite(Number(body?.stage)) ? Number(body.stage) : 40;
+    const rankBase = Number.isFinite(Number(body?.rank)) ? Number(body.rank) : 1;
 
     try {
         const dataverse = new DataverseClient();
@@ -112,6 +113,7 @@ export async function POST(request: Request) {
         }
 
         const results: Array<Record<string, unknown>> = [];
+        let rank = rankBase;
         for (const messageName of messages) {
             const messageId = await getSdkMessageId(dataverse, messageName);
             if (!messageId) {
@@ -133,12 +135,14 @@ export async function POST(request: Request) {
                 asyncautodelete: true,
                 mode: asyncMode ? 1 : 0,
                 stage,
+                rank,
                 "eventhandler_serviceendpoint@odata.bind": `/serviceendpoints(${endpointId})`,
                 "sdkmessageid@odata.bind": `/sdkmessages(${messageId})`,
                 "sdkmessagefilterid@odata.bind": `/sdkmessagefilters(${filterId})`,
             };
             const createdStep = await dataverse.create("sdkmessageprocessingsteps", stepPayload);
             results.push({ message: messageName, ok: true, stepId: createdStep.entityId || null });
+            rank += 1;
         }
 
         return new Response(JSON.stringify({
