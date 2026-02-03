@@ -46,8 +46,8 @@ function extractTaskIds(payload) {
 }
 
 export default async function handler(req, res) {
+    const requestId = crypto.randomUUID();
     if (req.method === "GET") {
-        const requestId = crypto.randomUUID();
         logger.info("Dataverse webhook ping", { requestId });
         await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "ping" });
         res.status(200).json({ ok: true, requestId });
@@ -61,14 +61,22 @@ export default async function handler(req, res) {
 
     const expectedSecret = readEnv("DATAVERSE_WEBHOOK_SECRET");
     if (expectedSecret) {
-        const provided = String(req.headers["x-dataverse-secret"] || req.headers["x-webhook-secret"] || "");
+        const provided = String(
+            req.headers["x-dataverse-secret"] ||
+                req.headers["x-webhook-secret"] ||
+                req.headers["x-ms-dynamics-webhook-key"] ||
+                ""
+        );
         if (!safeEqual(provided, expectedSecret)) {
+            logger.warn("Dataverse webhook unauthorized", {
+                requestId,
+                headerKeys: Object.keys(req.headers || {}),
+            });
+            await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "unauthorized" });
             res.status(401).json({ ok: false, error: "Unauthorized" });
             return;
         }
     }
-
-    const requestId = crypto.randomUUID();
     const payload = await readJsonBody(req);
     if (!payload) {
         logger.warn("Dataverse webhook invalid JSON", { requestId });
