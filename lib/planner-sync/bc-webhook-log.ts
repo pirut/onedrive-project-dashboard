@@ -13,6 +13,8 @@ export type BcWebhookLogEntry = {
     skipped?: number;
     secretMismatch?: number;
     missingResource?: number;
+    processed?: number;
+    processSkipped?: string;
     items?: Array<{
         entitySet?: string;
         systemId?: string;

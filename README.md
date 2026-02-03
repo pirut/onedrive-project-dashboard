@@ -320,7 +320,9 @@ BC webhooks let Business Central changes enqueue targeted BC → Premium sync jo
 1) Set env vars:
 - `BC_WEBHOOK_NOTIFICATION_URL` (optional) to force the webhook URL (defaults to your deployment URL + `/api/webhooks/bc`).
 - `BC_WEBHOOK_SHARED_SECRET` (optional) is sent as `clientState` and validated on receipt.
-- `CRON_SECRET` (required) for scheduled renewals + job processing.
+- `BC_WEBHOOK_PROCESS_INLINE=true` (optional) to process jobs immediately in the webhook (no cron required).
+- `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, default 25) to cap inline processing.
+- `CRON_SECRET` (only required if you use Vercel cron for renewals or `/api/sync/bc-jobs/process`).
 - Ensure KV/Upstash (`KV_REST_API_URL`/`KV_REST_API_TOKEN`) is configured for durable queues.
 
 2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.

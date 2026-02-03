@@ -1,4 +1,5 @@
-import { enqueueBcJobs } from "../../lib/planner-sync/bc-webhook-store.js";
+import { acquireBcJobLock, enqueueBcJobs, releaseBcJobLock } from "../../lib/planner-sync/bc-webhook-store.js";
+import { processBcJobQueue } from "../../lib/planner-sync/bc-job-processor.js";
 import { appendBcWebhookLog } from "../../lib/planner-sync/bc-webhook-log.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
@@ -84,6 +85,29 @@ async function readJsonBody(req) {
     } catch {
         return { payload: null, raw: text };
     }
+}
+
+function resolveInlineProcessing(req) {
+    if (typeof req.query?.process === "string") {
+        const flag = req.query.process.trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(flag)) return true;
+        if (["0", "false", "no", "off"].includes(flag)) return false;
+    }
+    if (process.env.BC_WEBHOOK_PROCESS_INLINE) {
+        const flag = String(process.env.BC_WEBHOOK_PROCESS_INLINE).trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(flag)) return true;
+        if (["0", "false", "no", "off"].includes(flag)) return false;
+    }
+    return false;
+}
+
+function resolveInlineMaxJobs(req) {
+    const raw = req.query?.maxJobs;
+    const fromQuery = typeof raw === "string" ? Number(raw) : null;
+    if (Number.isFinite(fromQuery) && fromQuery > 0) return Math.floor(fromQuery);
+    const env = Number(process.env.BC_WEBHOOK_INLINE_MAX_JOBS);
+    if (Number.isFinite(env) && env > 0) return Math.floor(env);
+    return 25;
 }
 
 export default async function handler(req, res) {
@@ -202,6 +226,24 @@ export default async function handler(req, res) {
     }
 
     const enqueueResult = await enqueueBcJobs(jobs);
+    const processInline = resolveInlineProcessing(req);
+    let processed = null;
+    let processSkipped = null;
+    if (processInline) {
+        const lock = await acquireBcJobLock();
+        if (!lock) {
+            processSkipped = "locked";
+        } else {
+            try {
+                processed = await processBcJobQueue({ maxJobs: resolveInlineMaxJobs(req), requestId });
+            } catch (error) {
+                logger.error("BC webhook inline processing failed", { requestId, error: error?.message || String(error) });
+                processSkipped = "error";
+            } finally {
+                await releaseBcJobLock(lock);
+            }
+        }
+    }
     await appendBcWebhookLog({
         ts: new Date().toISOString(),
         requestId,
@@ -213,6 +255,8 @@ export default async function handler(req, res) {
         secretMismatch,
         missingResource,
         items: buildLogItems(notifications),
+        processed: processed ? processed.processed : 0,
+        processSkipped,
     });
 
     res.status(202).json({
@@ -223,5 +267,7 @@ export default async function handler(req, res) {
         skipped: enqueueResult.skipped,
         secretMismatch,
         missingResource,
+        processed: processed ? processed.processed : 0,
+        processSkipped,
     });
 }
