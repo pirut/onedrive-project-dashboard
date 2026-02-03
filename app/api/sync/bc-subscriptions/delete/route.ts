@@ -33,6 +33,35 @@ function resolveNotificationUrl(request: Request, body?: { notificationUrl?: str
     return `${proto}://${host}/api/webhooks/bc`;
 }
 
+function extractODataId(item: { [key: string]: unknown }) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item: {
+    id?: string;
+    Id?: string;
+    ID?: string;
+    subscriptionId?: string;
+    subscriptionid?: string;
+    subscriptionID?: string;
+    systemId?: string;
+}) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item as { [key: string]: unknown }) ||
+        null
+    );
+}
+
 export async function POST(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
@@ -81,7 +110,8 @@ export async function POST(request: Request) {
                         if (!normalizedNotificationUrl) return true;
                         return normalizeValue(item?.notificationUrl) === normalizedNotificationUrl;
                     });
-                    if (match?.id) subscriptionId = match.id as string;
+                    const matchedId = pickSubscriptionId(match as { id?: string });
+                    if (matchedId) subscriptionId = matchedId;
                 } catch (error) {
                     logger.warn("Failed to list BC subscriptions for delete", {
                         requestId,

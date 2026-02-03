@@ -42,6 +42,35 @@ function resolveEntitySets(url: URL) {
     return DEFAULT_ENTITY_SETS;
 }
 
+function extractODataId(item: { [key: string]: unknown }) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item: {
+    id?: string;
+    Id?: string;
+    ID?: string;
+    subscriptionId?: string;
+    subscriptionid?: string;
+    subscriptionID?: string;
+    systemId?: string;
+}) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item as { [key: string]: unknown }) ||
+        null
+    );
+}
+
 export async function GET(request: Request) {
     const url = new URL(request.url);
     const entitySets = resolveEntitySets(url);
@@ -70,11 +99,12 @@ export async function GET(request: Request) {
                 ? normalizeValue(item?.notificationUrl) === normalizedNotificationUrl
                 : null;
             return {
-                id: (item as { id?: string })?.id || null,
+                id: pickSubscriptionId(item as { id?: string }),
                 resource: (item as { resource?: string })?.resource || null,
                 notificationUrl: (item as { notificationUrl?: string })?.notificationUrl || null,
                 clientState: (item as { clientState?: string })?.clientState || null,
                 expirationDateTime: (item as { expirationDateTime?: string })?.expirationDateTime || null,
+                odataId: (item as { [key: string]: unknown })?.["@odata.id"] || (item as { [key: string]: unknown })?.["@odata.editLink"] || null,
                 matches,
                 notificationMatch,
             };

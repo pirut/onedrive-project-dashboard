@@ -40,6 +40,27 @@ function resolveEntitySets(url) {
     return DEFAULT_ENTITY_SETS;
 }
 
+function extractODataId(item) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item) ||
+        null
+    );
+}
+
 export default async function handler(req, res) {
     if (req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
@@ -74,11 +95,12 @@ export default async function handler(req, res) {
                 ? normalizeValue(item?.notificationUrl) === normalizedNotificationUrl
                 : null;
             return {
-                id: item?.id || null,
+                id: pickSubscriptionId(item),
                 resource: item?.resource || null,
                 notificationUrl: item?.notificationUrl || null,
                 clientState: item?.clientState || null,
                 expirationDateTime: item?.expirationDateTime || null,
+                odataId: item?.["@odata.id"] || item?.["@odata.editLink"] || null,
                 matches,
                 notificationMatch,
             };

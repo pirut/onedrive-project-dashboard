@@ -33,6 +33,27 @@ function resolveBaseUrl(req) {
     return `${proto}://${host}`;
 }
 
+function extractODataId(item) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item) ||
+        null
+    );
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -122,12 +143,13 @@ export default async function handler(req, res) {
                     return notify === expectedNotification;
                 }) || (stored?.id ? stored : null);
 
-                if (!existing?.id) {
+                const existingId = pickSubscriptionId(existing);
+                if (!existingId) {
                     throw error;
                 }
 
                 await saveBcSubscription(normalized, {
-                    id: existing.id,
+                    id: existingId,
                     entitySet: normalized,
                     resource: existing.resource,
                     expirationDateTime: existing.expirationDateTime,
@@ -138,7 +160,7 @@ export default async function handler(req, res) {
 
                 created.push({
                     entitySet: normalized,
-                    id: existing.id,
+                    id: existingId,
                     resource: existing.resource,
                     expirationDateTime: existing.expirationDateTime,
                     existing: true,

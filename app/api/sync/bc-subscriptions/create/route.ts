@@ -36,6 +36,35 @@ function resolveBaseUrl(request: Request) {
     return `${proto}://${host}`;
 }
 
+function extractODataId(item: { [key: string]: unknown }) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item: {
+    id?: string;
+    Id?: string;
+    ID?: string;
+    subscriptionId?: string;
+    subscriptionid?: string;
+    subscriptionID?: string;
+    systemId?: string;
+}) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item as { [key: string]: unknown }) ||
+        null
+    );
+}
+
 export async function POST(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
@@ -125,12 +154,13 @@ export async function POST(request: Request) {
                     return notify === expectedNotification;
                 }) || (stored?.id ? stored : null);
 
-                if (!existing?.id) {
+                const existingId = pickSubscriptionId(existing as { id?: string });
+                if (!existingId) {
                     throw error;
                 }
 
                 await saveBcSubscription(normalized, {
-                    id: existing.id,
+                    id: existingId,
                     entitySet: normalized,
                     resource: existing.resource,
                     expirationDateTime: existing.expirationDateTime,
@@ -141,7 +171,7 @@ export async function POST(request: Request) {
 
                 created.push({
                     entitySet: normalized,
-                    id: existing.id,
+                    id: existingId,
                     resource: existing.resource,
                     expirationDateTime: existing.expirationDateTime,
                     existing: true,

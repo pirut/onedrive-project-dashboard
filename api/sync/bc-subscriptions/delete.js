@@ -31,6 +31,27 @@ function resolveNotificationUrl(req, body) {
     return `${proto}://${host}/api/webhooks/bc`;
 }
 
+function extractODataId(item) {
+    const raw = item?.["@odata.id"] || item?.["@odata.editLink"] || item?.odataId;
+    if (!raw) return null;
+    const match = String(raw).match(/subscriptions\(([^)]+)\)/i);
+    return match ? match[1] : null;
+}
+
+function pickSubscriptionId(item) {
+    return (
+        item?.id ||
+        item?.Id ||
+        item?.ID ||
+        item?.subscriptionId ||
+        item?.subscriptionid ||
+        item?.subscriptionID ||
+        item?.systemId ||
+        extractODataId(item) ||
+        null
+    );
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -83,7 +104,8 @@ export default async function handler(req, res) {
                         if (!normalizedNotificationUrl) return true;
                         return normalizeValue(item?.notificationUrl) === normalizedNotificationUrl;
                     });
-                    if (match?.id) subscriptionId = match.id;
+                    const matchedId = pickSubscriptionId(match);
+                    if (matchedId) subscriptionId = matchedId;
                 } catch (error) {
                     logger.warn("Failed to list BC subscriptions for delete", {
                         requestId,

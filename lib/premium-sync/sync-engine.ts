@@ -854,18 +854,24 @@ function buildBcUpdateFromPremium(
     }
 
     const start = dataverseTask[mapping.taskStartField];
-    if (typeof start === "string") {
-        const bcDate = toBcDate(start);
-        if (bcDate) {
-            updates.manualStartDate = bcDate;
+    if (Object.prototype.hasOwnProperty.call(dataverseTask, mapping.taskStartField)) {
+        if (typeof start === "string") {
+            const trimmed = start.trim();
+            const bcDate = toBcDate(trimmed);
+            updates.manualStartDate = bcDate || null;
+        } else if (start == null) {
+            updates.manualStartDate = null;
         }
     }
 
     const finish = dataverseTask[mapping.taskFinishField];
-    if (typeof finish === "string") {
-        const bcDate = toBcDate(finish);
-        if (bcDate) {
-            updates.manualEndDate = bcDate;
+    if (Object.prototype.hasOwnProperty.call(dataverseTask, mapping.taskFinishField)) {
+        if (typeof finish === "string") {
+            const trimmed = finish.trim();
+            const bcDate = toBcDate(trimmed);
+            updates.manualEndDate = bcDate || null;
+        } else if (finish == null) {
+            updates.manualEndDate = null;
         }
     }
 
