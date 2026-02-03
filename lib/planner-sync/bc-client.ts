@@ -356,8 +356,41 @@ export class BusinessCentralClient {
     async deleteWebhookSubscription(subscriptionId: string) {
         const trimmed = this.normalizeWebhookSubscriptionId(subscriptionId);
         if (!trimmed) return;
-        const url = `${this.apiRootUrl()}/subscriptions(${trimmed})`;
-        await this.request(url, { method: "DELETE", headers: { "If-Match": "*" } });
+        const raw = (subscriptionId || "").trim();
+        const escapedRaw = raw.replace(/'/g, "''");
+        const escapedGuid = trimmed.replace(/'/g, "''");
+        const candidates: string[] = [];
+
+        const add = (path: string | null) => {
+            if (!path) return;
+            if (!candidates.includes(path)) candidates.push(path);
+        };
+
+        add(`/subscriptions(${trimmed})`);
+        add(`/subscriptions(id=${trimmed})`);
+        add(`/subscriptions(subscriptionId=${trimmed})`);
+        add(`/subscriptions(id='${escapedRaw}')`);
+        add(`/subscriptions(subscriptionId='${escapedRaw}')`);
+        if (escapedGuid !== escapedRaw) {
+            add(`/subscriptions(id='${escapedGuid}')`);
+            add(`/subscriptions(subscriptionId='${escapedGuid}')`);
+        }
+
+        let lastError: unknown = null;
+        for (const path of candidates) {
+            try {
+                const url = `${this.apiRootUrl()}${path}`;
+                await this.request(url, { method: "DELETE", headers: { "If-Match": "*" } });
+                return;
+            } catch (error) {
+                lastError = error;
+                const message = (error as Error)?.message || String(error || "");
+                if (message.includes("Error in query syntax") || message.includes("expected")) {
+                    continue;
+                }
+            }
+        }
+        if (lastError) throw lastError;
     }
 
     async listProjectChangesSince(lastSeq: number | null) {
