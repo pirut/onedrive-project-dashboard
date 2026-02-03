@@ -234,6 +234,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 
 - Delta polling endpoint: `POST /api/sync/premium-to-bc` (legacy: `POST /api/sync/premium-change/poll`)
 - Webhook receiver: `POST /api/webhooks/dataverse` (syncs only tasks referenced by the webhook payload; set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
+- Webhook log storage: set `PREMIUM_WEBHOOK_LOG_TO_KV=false` to disable KV writes, or `PREMIUM_WEBHOOK_LOG_TYPES=error,invalid_json,unauthorized` to persist only specific log types.
 - If using webhooks, configure your Dataverse service endpoint to send notifications to the webhook URL and include the shared secret header (`x-dataverse-secret`) matching `DATAVERSE_WEBHOOK_SECRET`.
 - Optional team auto-add: set `PLANNER_GROUP_RESOURCE_IDS` (comma-separated bookable resource IDs) or `PLANNER_GROUP_ID` (AAD group id, if supported by your Dataverse schema).
 
