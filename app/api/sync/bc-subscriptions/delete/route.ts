@@ -24,6 +24,15 @@ function matchesResource(resource: string | undefined | null, entitySet: string)
     return false;
 }
 
+function resolveNotificationUrl(request: Request, body?: { notificationUrl?: string } | null) {
+    const configured = (process.env.BC_WEBHOOK_NOTIFICATION_URL || "").trim();
+    if (body?.notificationUrl) return String(body.notificationUrl).trim();
+    if (configured) return configured;
+    const proto = request.headers.get("x-forwarded-proto") || "https";
+    const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "localhost";
+    return `${proto}://${host}/api/webhooks/bc`;
+}
+
 export async function POST(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
@@ -50,10 +59,13 @@ export async function POST(request: Request) {
             : body?.entitySet
             ? [body.entitySet]
             : DEFAULT_ENTITY_SETS;
+        const notificationUrl = resolveNotificationUrl(request, body);
+        const normalizedNotificationUrl = normalizeValue(notificationUrl);
 
         const bcClient = new BusinessCentralClient();
         const deleted: string[] = [];
         const skipped: string[] = [];
+        let listCount: number | null = null;
 
         for (const entitySet of entitySets) {
             const normalized = (entitySet || "").trim();
@@ -63,7 +75,12 @@ export async function POST(request: Request) {
             if (!subscriptionId) {
                 try {
                     const list = await bcClient.listWebhookSubscriptions();
-                    const match = list.find((item) => matchesResource(item?.resource, normalized));
+                    listCount = list.length;
+                    const match = list.find((item) => {
+                        if (!matchesResource(item?.resource, normalized)) return false;
+                        if (!normalizedNotificationUrl) return true;
+                        return normalizeValue(item?.notificationUrl) === normalizedNotificationUrl;
+                    });
                     if (match?.id) subscriptionId = match.id as string;
                 } catch (error) {
                     logger.warn("Failed to list BC subscriptions for delete", {
@@ -94,7 +111,17 @@ export async function POST(request: Request) {
         }
 
         const duration = Date.now() - startTime;
-        return new Response(JSON.stringify({ ok: true, deleted, skipped, requestId, duration }), {
+        return new Response(
+            JSON.stringify({
+                ok: true,
+                deleted,
+                skipped,
+                notificationUrl,
+                listCount,
+                requestId,
+                duration,
+            }),
+            {
             status: 200,
             headers: { "Content-Type": "application/json", "X-Request-ID": requestId },
         });

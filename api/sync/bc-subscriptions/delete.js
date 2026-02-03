@@ -22,6 +22,15 @@ function matchesResource(resource, entitySet) {
     return false;
 }
 
+function resolveNotificationUrl(req, body) {
+    const configured = (process.env.BC_WEBHOOK_NOTIFICATION_URL || "").trim();
+    if (body?.notificationUrl) return String(body.notificationUrl).trim();
+    if (configured) return configured;
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    return `${proto}://${host}/api/webhooks/bc`;
+}
+
 async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -52,10 +61,13 @@ export default async function handler(req, res) {
             : body?.entitySet
             ? [body.entitySet]
             : DEFAULT_ENTITY_SETS;
+        const notificationUrl = resolveNotificationUrl(req, body);
+        const normalizedNotificationUrl = normalizeValue(notificationUrl);
 
         const bcClient = new BusinessCentralClient();
         const deleted = [];
         const skipped = [];
+        let listCount = null;
 
         for (const entitySet of entitySets) {
             const normalized = (entitySet || "").trim();
@@ -65,7 +77,12 @@ export default async function handler(req, res) {
             if (!subscriptionId) {
                 try {
                     const list = await bcClient.listWebhookSubscriptions();
-                    const match = list.find((item) => matchesResource(item?.resource, normalized));
+                    listCount = list.length;
+                    const match = list.find((item) => {
+                        if (!matchesResource(item?.resource, normalized)) return false;
+                        if (!normalizedNotificationUrl) return true;
+                        return normalizeValue(item?.notificationUrl) === normalizedNotificationUrl;
+                    });
                     if (match?.id) subscriptionId = match.id;
                 } catch (error) {
                     logger.warn("Failed to list BC subscriptions for delete", {
@@ -96,7 +113,15 @@ export default async function handler(req, res) {
         }
 
         const duration = Date.now() - startTime;
-        res.status(200).json({ ok: true, deleted, skipped, requestId, duration });
+        res.status(200).json({
+            ok: true,
+            deleted,
+            skipped,
+            notificationUrl,
+            listCount,
+            requestId,
+            duration,
+        });
     } catch (error) {
         const duration = Date.now() - startTime;
         const errorMessage = error?.message || String(error);

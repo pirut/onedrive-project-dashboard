@@ -1,51 +1,100 @@
 import { BusinessCentralClient } from "../../../lib/planner-sync/bc-client.js";
 import { getBcSubscription } from "../../../lib/planner-sync/bc-webhook-store.js";
+import { getBcConfig } from "../../../lib/planner-sync/config.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = ["projectTasks"];
 
-function parseEntitySets(raw) {
-    if (!raw) return [];
-    return String(raw)
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
+function normalizeValue(value) {
+    return (value || "").trim().replace(/^\/+/, "").toLowerCase();
+}
+
+function matchesResource(resource, entitySet) {
+    const normalized = normalizeValue(resource);
+    if (!normalized) return false;
+    const { publisher, group, version, companyId } = getBcConfig();
+    const expected = normalizeValue(`api/${publisher}/${group}/${version}/companies(${companyId})/${entitySet}`);
+    if (normalized === expected) return true;
+    const entityLower = normalizeValue(entitySet);
+    const companyToken = normalizeValue(`companies(${companyId})/${entityLower}`);
+    if (companyToken && normalized.includes(companyToken)) return true;
+    if (entityLower && normalized.endsWith(`/${entityLower}`)) return true;
+    return false;
+}
+
+function resolveNotificationUrl(req, url) {
+    const configured = (process.env.BC_WEBHOOK_NOTIFICATION_URL || "").trim();
+    const fromQuery = (url?.searchParams?.get("notificationUrl") || "").trim();
+    if (fromQuery) return fromQuery;
+    if (configured) return configured;
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    return `${proto}://${host}/api/webhooks/bc`;
+}
+
+function resolveEntitySets(url) {
+    const multi = url.searchParams.getAll("entitySet");
+    if (multi.length) return multi.filter(Boolean);
+    const csv = (url.searchParams.get("entitySets") || "").trim();
+    if (csv) return csv.split(",").map((item) => item.trim()).filter(Boolean);
+    return DEFAULT_ENTITY_SETS;
 }
 
 export default async function handler(req, res) {
-    const startTime = Date.now();
-    const requestId = Math.random().toString(36).slice(2, 12);
-
     if (req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
         return;
     }
 
+    const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host || "localhost"}`;
+    const url = new URL(req.url || "", origin);
+    const entitySets = resolveEntitySets(url);
+    const notificationUrl = resolveNotificationUrl(req, url);
+    const normalizedNotificationUrl = normalizeValue(notificationUrl);
+
     try {
-        const entitySets = parseEntitySets(req.query?.entitySets);
-        const targets = entitySets.length ? entitySets : DEFAULT_ENTITY_SETS;
-        const stored = [];
-        for (const entitySet of targets) {
-            stored.push({ entitySet, subscription: await getBcSubscription(entitySet) });
-        }
-
         const bcClient = new BusinessCentralClient();
-        let live = [];
-        try {
-            live = await bcClient.listWebhookSubscriptions();
-        } catch (error) {
-            logger.warn("BC subscription list failed", {
-                requestId,
-                error: error?.message || String(error),
+        const list = await bcClient.listWebhookSubscriptions();
+        const stored = [];
+        for (const entitySet of entitySets) {
+            const normalized = (entitySet || "").trim();
+            if (!normalized) continue;
+            const entry = await getBcSubscription(normalized);
+            stored.push({
+                entitySet: normalized,
+                storedId: entry?.id || null,
+                storedResource: entry?.resource || null,
+                storedExpiration: entry?.expirationDateTime || null,
             });
-            live = { error: error?.message || String(error) };
         }
 
-        const duration = Date.now() - startTime;
-        res.status(200).json({ ok: true, stored, live, requestId, duration });
+        const items = list.map((item) => {
+            const matches = entitySets.filter((entitySet) => matchesResource(item?.resource, entitySet));
+            const notificationMatch = normalizedNotificationUrl
+                ? normalizeValue(item?.notificationUrl) === normalizedNotificationUrl
+                : null;
+            return {
+                id: item?.id || null,
+                resource: item?.resource || null,
+                notificationUrl: item?.notificationUrl || null,
+                clientState: item?.clientState || null,
+                expirationDateTime: item?.expirationDateTime || null,
+                matches,
+                notificationMatch,
+            };
+        });
+
+        res.status(200).json({
+            ok: true,
+            entitySets,
+            notificationUrl,
+            count: items.length,
+            stored,
+            items,
+        });
     } catch (error) {
-        const duration = Date.now() - startTime;
         const errorMessage = error?.message || String(error);
-        res.status(500).json({ ok: false, error: errorMessage, requestId, duration });
+        logger.error("GET /api/sync/bc-subscriptions/list - Failed", { error: errorMessage });
+        res.status(500).json({ ok: false, error: errorMessage });
     }
 }

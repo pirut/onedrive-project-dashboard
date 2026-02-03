@@ -72,6 +72,7 @@ export default async function handler(req, res) {
         "POST /api/sync/bc-subscriptions/create": "Create BC webhook subscription",
         "POST /api/sync/bc-subscriptions/renew": "Renew BC webhook subscription",
         "POST /api/sync/bc-subscriptions/delete": "Delete BC webhook subscription",
+        "GET /api/sync/bc-subscriptions/list": "List BC webhook subscriptions",
     };
 
     res.status(200).json({
