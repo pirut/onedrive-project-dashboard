@@ -13,6 +13,7 @@ export type BcWebhookLogEntry = {
     skipped?: number;
     secretMismatch?: number;
     missingResource?: number;
+    subscriptionMismatch?: number;
     processed?: number;
     processSkipped?: string;
     skipReasons?: Record<string, number>;

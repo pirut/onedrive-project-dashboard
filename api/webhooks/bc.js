@@ -1,4 +1,9 @@
-import { acquireBcJobLock, enqueueBcJobs, releaseBcJobLock } from "../../lib/planner-sync/bc-webhook-store.js";
+import {
+    acquireBcJobLock,
+    enqueueBcJobs,
+    getBcSubscription,
+    releaseBcJobLock,
+} from "../../lib/planner-sync/bc-webhook-store.js";
 import { processBcJobQueue } from "../../lib/planner-sync/bc-job-processor.js";
 import { appendBcWebhookLog } from "../../lib/planner-sync/bc-webhook-log.js";
 import { logger } from "../../lib/planner-sync/logger.js";
@@ -89,6 +94,18 @@ function buildDebugSamples(items) {
         changeType: item.changeType,
         subscriptionId: item.subscriptionId,
     }));
+}
+
+async function isSubscriptionAllowed(entitySet, subscriptionId, cache) {
+    if (!subscriptionId) return true;
+    if (cache.has(entitySet)) {
+        const storedId = cache.get(entitySet);
+        return !storedId || storedId === subscriptionId;
+    }
+    const stored = await getBcSubscription(entitySet);
+    const storedId = stored?.id || stored?.subscriptionId || null;
+    cache.set(entitySet, storedId);
+    return !storedId || storedId === subscriptionId;
 }
 
 async function readJsonBody(req) {
@@ -281,6 +298,8 @@ export default async function handler(req, res) {
     const jobs = [];
     let secretMismatch = 0;
     let missingResource = 0;
+    let subscriptionMismatch = 0;
+    const subscriptionCache = new Map();
 
     for (const notification of notifications) {
         if (sharedSecret) {
@@ -296,6 +315,11 @@ export default async function handler(req, res) {
         const entitySet = resourceInfo.entitySet;
         if (!entitySet || !systemId) {
             missingResource += 1;
+            continue;
+        }
+
+        if (!(await isSubscriptionAllowed(entitySet, notification.subscriptionId, subscriptionCache))) {
+            subscriptionMismatch += 1;
             continue;
         }
 
@@ -371,6 +395,7 @@ export default async function handler(req, res) {
         skipped: enqueueResult.skipped,
         secretMismatch,
         missingResource,
+        subscriptionMismatch,
         items: buildLogItems(notifications),
         processed: processed ? processed.processed : 0,
         processSkipped,
@@ -385,6 +410,7 @@ export default async function handler(req, res) {
         skipped: enqueueResult.skipped,
         secretMismatch,
         missingResource,
+        subscriptionMismatch,
         processed: processed ? processed.processed : 0,
         processSkipped,
         skipReasons: processed?.skipReasons,
