@@ -233,6 +233,14 @@ function parseDateMs(value?: string | null) {
     return Number.isNaN(parsed) ? null : parsed;
 }
 
+function resolveBcModifiedMs(task: BcProjectTask) {
+    const modified =
+        task.systemModifiedAt ||
+        task.lastModifiedDateTime ||
+        task.modifiedAt;
+    return parseDateMs(typeof modified === "string" ? modified : undefined);
+}
+
 function resolveDataverseModifiedMs(
     entity: DataverseEntity | null | undefined,
     mapping: ReturnType<typeof getDataverseMappingConfig>
@@ -1114,29 +1122,31 @@ async function syncTaskToDataverse(
 
     if (taskId) {
         if (options.preferPlanner) {
-            const lastSyncMs = parseDateMs(task.lastSyncAt);
-            if (lastSyncMs != null) {
-                try {
-                    const modifiedMs = await getDataverseTaskModifiedMs(dataverse, taskId, mapping);
-                    const graceMs = options.plannerModifiedGraceMs ?? 0;
-                    if (modifiedMs != null && modifiedMs - lastSyncMs > graceMs) {
-                        logger.info("BC -> Premium skipped (Planner newer)", {
-                            requestId: options.requestId,
-                            projectNo: task.projectNo,
-                            taskNo: task.taskNo,
-                            lastSyncAt: task.lastSyncAt,
-                            plannerModifiedAt: new Date(modifiedMs).toISOString(),
-                        });
-                        return { action: "skipped", taskId };
-                    }
-                } catch (error) {
-                    logger.warn("Dataverse modified check failed; proceeding with BC update", {
+            try {
+                const plannerModifiedMs = await getDataverseTaskModifiedMs(dataverse, taskId, mapping);
+                const bcModifiedMs = resolveBcModifiedMs(task);
+                const graceMs = options.plannerModifiedGraceMs ?? 0;
+                if (
+                    plannerModifiedMs != null &&
+                    bcModifiedMs != null &&
+                    plannerModifiedMs - bcModifiedMs > graceMs
+                ) {
+                    logger.info("BC -> Premium skipped (Planner newer)", {
                         requestId: options.requestId,
                         projectNo: task.projectNo,
                         taskNo: task.taskNo,
-                        error: (error as Error)?.message,
+                        plannerModifiedAt: new Date(plannerModifiedMs).toISOString(),
+                        bcModifiedAt: new Date(bcModifiedMs).toISOString(),
                     });
+                    return { action: "skipped", taskId };
                 }
+            } catch (error) {
+                logger.warn("Dataverse modified check failed; proceeding with BC update", {
+                    requestId: options.requestId,
+                    projectNo: task.projectNo,
+                    taskNo: task.taskNo,
+                    error: (error as Error)?.message,
+                });
             }
         }
 
