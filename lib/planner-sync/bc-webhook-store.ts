@@ -35,7 +35,7 @@ const SUBSCRIPTION_PREFIX = "bc:subscription:";
 const JOBS_KEY = "bc:jobs";
 const DEDUPE_PREFIX = "bc:job_dedupe:";
 const LOCK_KEY = "bc:jobs:lock";
-const DEDUPE_WINDOW_SECONDS = 300;
+const DEDUPE_WINDOW_SECONDS = 0;
 const LOCK_TTL_SECONDS = 60;
 
 function normalizeEntitySet(entitySet: string) {
@@ -75,6 +75,7 @@ async function writeFileStore(store: FileStore) {
 }
 
 function buildDedupeKey(job: BcWebhookJob, receivedMs: number) {
+    if (DEDUPE_WINDOW_SECONDS <= 0) return "";
     const bucket = Math.floor(receivedMs / (DEDUPE_WINDOW_SECONDS * 1000));
     const payload = `${job.entitySet}|${job.systemId}|${job.changeType || ""}|${bucket}`;
     const hash = crypto.createHash("sha1").update(payload).digest("hex");
@@ -167,6 +168,15 @@ export async function enqueueBcJobs(jobs: BcWebhookJob[]) {
                 skipped += 1;
                 continue;
             }
+            if (DEDUPE_WINDOW_SECONDS <= 0) {
+                try {
+                    await redis.lpush(JOBS_KEY, JSON.stringify(job));
+                    enqueued += 1;
+                } catch (error) {
+                    logger.warn("BC webhook enqueue failed", { error: (error as Error)?.message });
+                }
+                continue;
+            }
             const receivedMs = Date.parse(job.receivedAt) || Date.now();
             const dedupeKey = buildDedupeKey(job, receivedMs);
             let shouldEnqueue = true;
@@ -197,12 +207,19 @@ export async function enqueueBcJobs(jobs: BcWebhookJob[]) {
     const store = await readFileStore();
     const dedupe = store.dedupe || {};
     const now = Date.now();
-    purgeExpiredDedupe(dedupe, now);
+    if (DEDUPE_WINDOW_SECONDS > 0) {
+        purgeExpiredDedupe(dedupe, now);
+    }
     store.jobs = store.jobs || [];
     for (const raw of jobs) {
         const job = normalizeJob(raw);
         if (!job) {
             skipped += 1;
+            continue;
+        }
+        if (DEDUPE_WINDOW_SECONDS <= 0) {
+            store.jobs.push(job);
+            enqueued += 1;
             continue;
         }
         const receivedMs = Date.parse(job.receivedAt) || Date.now();
