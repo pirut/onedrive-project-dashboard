@@ -1229,7 +1229,7 @@ function normalizeTaskSystemId(raw: string) {
 
 export async function syncBcToPremium(
     projectNo?: string,
-    options: { requestId?: string; projectNos?: string[]; taskSystemIds?: string[] } = {}
+    options: { requestId?: string; projectNos?: string[]; taskSystemIds?: string[]; skipProjectAccess?: boolean } = {}
 ) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
@@ -1294,8 +1294,26 @@ export async function syncBcToPremium(
 
         let tasks: BcProjectTask[] = [];
         try {
-            const filter = `projectNo eq '${escapeODataString(projNo)}'`;
-            tasks = await bcClient.listProjectTasks(filter);
+            if (taskSystemIdSet) {
+                const resolved: BcProjectTask[] = [];
+                for (const systemId of taskSystemIdSet) {
+                    if (!systemId) continue;
+                    try {
+                        const task = await bcClient.getProjectTask(systemId);
+                        if (!task) continue;
+                        if ((task.projectNo || "").trim() !== projNo) continue;
+                        resolved.push(task);
+                    } catch (error) {
+                        const message = (error as Error)?.message || "";
+                        if (message.includes("-> 404")) continue;
+                        throw error;
+                    }
+                }
+                tasks = resolved;
+            } else {
+                const filter = `projectNo eq '${escapeODataString(projNo)}'`;
+                tasks = await bcClient.listProjectTasks(filter);
+            }
         } catch (error) {
             logger.warn("BC task load failed", { requestId, projectNo: projNo, error: (error as Error)?.message });
             result.errors += 1;
@@ -1365,46 +1383,48 @@ export async function syncBcToPremium(
         }
 
         try {
-            if (plannerGroupId) {
-                try {
-                    await ensureProjectGroupAccess(
-                        dataverse,
-                        projectId,
-                        useScheduleApi ? operationSetId : undefined,
-                        plannerGroupId,
-                        teamCache
-                    );
-                } catch (error) {
-                    logger.warn("Dataverse group share failed", {
-                        requestId,
-                        projectNo: projNo,
-                        error: (error as Error)?.message,
-                    });
-                }
-            }
-            if (plannerGroupResourceIds.length) {
-                for (const resourceId of plannerGroupResourceIds) {
+            if (!options.skipProjectAccess) {
+                if (plannerGroupId) {
                     try {
-                        const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
-                        if (!resource) {
-                            logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
-                            continue;
-                        }
-                        await ensureProjectResourceAccess(
+                        await ensureProjectGroupAccess(
                             dataverse,
                             projectId,
                             useScheduleApi ? operationSetId : undefined,
-                            resource.id,
-                            resource.name || "Planner Resource",
+                            plannerGroupId,
                             teamCache
                         );
                     } catch (error) {
-                        logger.warn("Dataverse resource share failed", {
+                        logger.warn("Dataverse group share failed", {
                             requestId,
                             projectNo: projNo,
-                            resourceId,
                             error: (error as Error)?.message,
                         });
+                    }
+                }
+                if (plannerGroupResourceIds.length) {
+                    for (const resourceId of plannerGroupResourceIds) {
+                        try {
+                            const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
+                            if (!resource) {
+                                logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
+                                continue;
+                            }
+                            await ensureProjectResourceAccess(
+                                dataverse,
+                                projectId,
+                                useScheduleApi ? operationSetId : undefined,
+                                resource.id,
+                                resource.name || "Planner Resource",
+                                teamCache
+                            );
+                        } catch (error) {
+                            logger.warn("Dataverse resource share failed", {
+                                requestId,
+                                projectNo: projNo,
+                                resourceId,
+                                error: (error as Error)?.message,
+                            });
+                        }
                     }
                 }
             }

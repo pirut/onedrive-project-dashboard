@@ -63,7 +63,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     const requestId = options.requestId || "";
     const jobs = await popBcJobs(maxJobs);
     const projectNos = new Set<string>();
-    const taskSystemIds = new Set<string>();
+    const taskIdsByProject = new Map<string, Set<string>>();
     let skipped = 0;
     let errors = 0;
 
@@ -79,8 +79,14 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
                 skipped += 1;
                 continue;
             }
-            if (result.projectNo) projectNos.add(result.projectNo);
-            if (result.systemId) taskSystemIds.add(result.systemId);
+            if (result.projectNo) {
+                projectNos.add(result.projectNo);
+                if (result.systemId) {
+                    const set = taskIdsByProject.get(result.projectNo) || new Set<string>();
+                    set.add(result.systemId);
+                    taskIdsByProject.set(result.projectNo, set);
+                }
+            }
         } catch (error) {
             errors += 1;
             logger.warn("BC webhook job resolution failed", {
@@ -92,21 +98,18 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
         }
     }
 
-    if (!taskSystemIds.size) {
-        return {
-            jobs: jobs.length,
-            projects: projectNos.size,
-            processed: 0,
-            skipped,
-            errors,
-            projectNos: Array.from(projectNos),
-        };
-    }
-
     let processed = 0;
     for (const projectNo of projectNos) {
+        const taskIds = taskIdsByProject.get(projectNo) || new Set<string>();
+        if (!taskIds.size) {
+            continue;
+        }
         try {
-            await syncBcToPremium(projectNo, { requestId, taskSystemIds: Array.from(taskSystemIds) });
+            await syncBcToPremium(projectNo, {
+                requestId,
+                taskSystemIds: Array.from(taskIds),
+                skipProjectAccess: true,
+            });
             processed += 1;
         } catch (error) {
             errors += 1;
