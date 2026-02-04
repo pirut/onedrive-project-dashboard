@@ -58,6 +58,7 @@ export default async function handler(req, res) {
         "GET /api/sync/list-bookable-resources": "List Dataverse bookable resources",
         "GET /api/sync/debug-project-team": "List Dataverse project team members",
         "GET /api/sync/debug-operation-sets": "List Dataverse operation sets (schedule API)",
+        "GET /api/sync/debug-pss-error-logs": "List Dataverse PSS error logs (schedule API)",
         "POST /api/sync/clear-operation-sets": "Delete Dataverse operation sets (schedule API)",
         "GET /api/sync/debug-dataverse-webhook": "List Dataverse webhook endpoints + steps",
         "GET /api/sync/debug-dataverse-webhook-jobs": "List Dataverse webhook async jobs",
