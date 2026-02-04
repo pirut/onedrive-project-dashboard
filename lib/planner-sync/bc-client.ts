@@ -288,7 +288,24 @@ export class BusinessCentralClient {
     }
 
     async listProjects(filter?: string) {
-        const path = filter ? `/projects?$filter=${encodeURIComponent(filter)}` : "/projects";
+        return this.listProjectsPaged({ filter });
+    }
+
+    async listProjectsPaged(options: {
+        filter?: string;
+        orderBy?: string;
+        top?: number;
+        skip?: number;
+        select?: string[];
+    } = {}) {
+        const params = new URLSearchParams();
+        if (options.filter) params.set("$filter", options.filter);
+        if (options.orderBy) params.set("$orderby", options.orderBy);
+        if (Number.isFinite(options.top)) params.set("$top", String(Math.floor(options.top || 0)));
+        if (Number.isFinite(options.skip)) params.set("$skip", String(Math.floor(options.skip || 0)));
+        if (options.select?.length) params.set("$select", options.select.join(","));
+        const qs = params.toString();
+        const path = qs ? `/projects?${qs}` : "/projects";
         const res = await this.request(path);
         const data = await readResponseJson<{ value: BcProject[] }>(res);
         return data?.value || [];

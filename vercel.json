@@ -4,6 +4,9 @@
     "functions": {
         "api/sync-folders-cron.js": {
             "maxDuration": 60
+        },
+        "api/sync/bc-audit.js": {
+            "maxDuration": 300
         }
     },
     "crons": [
@@ -14,6 +17,10 @@
         {
             "path": "/api/sync/bc-subscriptions/renew?cronSecret=YOUR_CRON_SECRET",
             "schedule": "0 7 * * *"
+        },
+        {
+            "path": "/api/sync/bc-audit?cronSecret=YOUR_CRON_SECRET",
+            "schedule": "0 8 * * *"
         },
         {
             "path": "/api/sync/auto?cronSecret=YOUR_CRON_SECRET",

@@ -1436,6 +1436,7 @@ export async function syncBcToPremium(
         taskSystemIds?: string[];
         skipProjectAccess?: boolean;
         taskOnly?: boolean;
+        preferPlanner?: boolean;
     } = {}
 ) {
     const requestId = options.requestId || "";
@@ -1672,7 +1673,7 @@ export async function syncBcToPremium(
                 touchOperationSet: () => {
                     operationSetTouched = true;
                 },
-                preferPlanner: !syncConfig.preferBc,
+                preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                 plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
             });
                 if (res.action === "created") result.created += 1;
