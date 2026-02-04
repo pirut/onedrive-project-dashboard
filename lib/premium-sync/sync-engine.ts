@@ -5,6 +5,7 @@ import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } 
 import { DataverseClient, DataverseEntity } from "../dataverse-client.js";
 import { getDataverseDeltaLink, saveDataverseDeltaLink } from "./delta-store.js";
 import { getDataverseMappingConfig, getPremiumSyncConfig } from "./config.js";
+import { markPremiumTaskIdsFromBc } from "./bc-write-store.js";
 import crypto from "crypto";
 
 const HEADING_TASK_SECTIONS = new Map<number, string | null>([
@@ -1000,6 +1001,7 @@ async function runScheduleUpdateFallback(options: {
     if (!operationSetId) {
         throw new Error("Dataverse schedule API unavailable for fallback update");
     }
+    await markPremiumTaskWrite(options.taskId, { projectNo: options.task.projectNo, taskNo: options.task.taskNo });
     try {
         const entity = buildScheduleTaskEntity({
             taskId: options.taskId,
@@ -1053,6 +1055,7 @@ async function runScheduleCreateFallback(options: {
     }
     try {
         const newTaskId = crypto.randomUUID();
+        await markPremiumTaskWrite(newTaskId, { projectNo: options.task.projectNo, taskNo: options.task.taskNo });
         const bucketId = await getProjectBucketId(options.dataverse, options.projectId, options.bucketCache);
         const entity = buildScheduleTaskEntity({
             taskId: newTaskId,
@@ -1234,6 +1237,7 @@ async function syncTaskToDataverse(
 
         if (options.useScheduleApi && options.operationSetId) {
             options.touchOperationSet?.();
+            await markPremiumTaskWrite(taskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
             const entity = buildScheduleTaskEntity({
                 taskId,
                 projectId,
@@ -1273,6 +1277,7 @@ async function syncTaskToDataverse(
 
         if (options.taskOnly) {
             const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
+            await markPremiumTaskWrite(taskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
             const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
             const updates = {
                 plannerTaskId: taskId,
@@ -1286,6 +1291,7 @@ async function syncTaskToDataverse(
 
         const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
         try {
+            await markPremiumTaskWrite(taskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
             const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
             const updates = {
                 plannerTaskId: taskId,
@@ -1331,6 +1337,7 @@ async function syncTaskToDataverse(
     if (options.useScheduleApi && options.operationSetId) {
         options.touchOperationSet?.();
         const newTaskId = crypto.randomUUID();
+        await markPremiumTaskWrite(newTaskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
         const bucketId = await getProjectBucketId(dataverse, projectId, options.bucketCache);
         const entity = buildScheduleTaskEntity({
             taskId: newTaskId,
@@ -1362,6 +1369,7 @@ async function syncTaskToDataverse(
         if (!created.entityId) {
             return { action: "error", taskId: "" };
         }
+        await markPremiumTaskWrite(created.entityId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
         await updateBcTaskWithSyncLock(bcClient, task, {
             plannerTaskId: created.entityId,
             plannerPlanId: projectId,
@@ -1409,6 +1417,15 @@ function normalizeTaskSystemId(raw: string) {
         value = value.slice(1, -1);
     }
     return value.trim();
+}
+
+async function markPremiumTaskWrite(taskId: string, meta: Record<string, unknown> = {}) {
+    if (!taskId) return;
+    try {
+        await markPremiumTaskIdsFromBc([taskId]);
+    } catch (error) {
+        logger.warn("Failed to mark premium task write", { taskId, ...meta, error: (error as Error)?.message });
+    }
 }
 
 export async function syncBcToPremium(

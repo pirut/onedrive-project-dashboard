@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { appendPremiumWebhookLog, syncPremiumTaskIds } from "../../lib/premium-sync/index.js";
+import { wasPremiumTaskIdUpdatedByBc } from "../../lib/premium-sync/bc-write-store.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 function readEnv(name) {
@@ -86,25 +87,45 @@ export default async function handler(req, res) {
     }
 
     const taskIds = extractTaskIds(payload);
+    const filtered = [];
+    const ignored = [];
+    if (taskIds.length) {
+        await Promise.all(
+            taskIds.map(async (id) => {
+                if (await wasPremiumTaskIdUpdatedByBc(id)) {
+                    ignored.push(id);
+                } else {
+                    filtered.push(id);
+                }
+            })
+        );
+    }
     await appendPremiumWebhookLog({
         ts: new Date().toISOString(),
         requestId,
         type: "notification",
         notificationCount: 1,
-        taskIds,
+        taskIds: filtered,
+        ignoredTaskIds: ignored,
     });
-    logger.info("Dataverse webhook notification", { requestId, taskIds, notificationCount: 1 });
+    logger.info("Dataverse webhook notification", {
+        requestId,
+        taskIds: filtered,
+        ignored: ignored.length,
+        notificationCount: 1,
+    });
 
-    if (!taskIds.length) {
+    if (!filtered.length) {
         logger.warn("Dataverse webhook missing task ids", { requestId });
-        await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "skipped", reason: "no_task_ids" });
-        res.status(200).json({ ok: true, skipped: true, reason: "no_task_ids" });
+        const reason = taskIds.length ? "bc_origin" : "no_task_ids";
+        await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "skipped", reason });
+        res.status(200).json({ ok: true, skipped: true, reason, ignored });
         return;
     }
 
     try {
-        const result = await syncPremiumTaskIds(taskIds, { requestId });
-        res.status(200).json({ ok: true, taskIds, result });
+        const result = await syncPremiumTaskIds(filtered, { requestId });
+        res.status(200).json({ ok: true, taskIds: filtered, ignored, result });
     } catch (error) {
         logger.error("Dataverse webhook processing failed", { requestId, error: error?.message || String(error) });
         await appendPremiumWebhookLog({
