@@ -869,10 +869,14 @@ function buildTaskPayload(
     const title = buildTaskTitle(task);
     payload[mapping.taskTitleField] = title;
 
-    const start = resolveTaskDate(task.manualStartDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || null);
+    const start = resolveTaskDate(task.manualStartDate || task.startDate || null);
+    const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
     if (start) payload[mapping.taskStartField] = start;
-    if (finish) payload[mapping.taskFinishField] = finish;
+    if (finish) {
+        if (!start || Date.parse(finish) >= Date.parse(start)) {
+            payload[mapping.taskFinishField] = finish;
+        }
+    }
 
     const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) payload[mapping.taskPercentField] = percent;

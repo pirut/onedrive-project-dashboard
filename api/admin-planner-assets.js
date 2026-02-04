@@ -385,10 +385,12 @@ export default async function handler(req, res) {
                     projectNos = projectNos.filter((projectNo) => !synced.has(projectNo));
                 }
                 const requestId = body?.requestId ? String(body.requestId) : undefined;
+                const skipProjectAccess = body?.skipProjectAccess === true;
                 const result = await syncBcToPremium(undefined, {
                     requestId,
                     projectNos,
                     forceProjectCreate: true,
+                    skipProjectAccess,
                 });
                 res.status(200).json({
                     ok: true,
