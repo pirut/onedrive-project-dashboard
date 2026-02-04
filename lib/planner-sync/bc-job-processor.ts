@@ -34,6 +34,16 @@ async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJ
             const task = await bcClient.getProjectTask(systemId);
             if (!task) return { projectNo: "", systemId: "", skipped: true };
             if (task.syncLock) return { projectNo: "", systemId: "", skipped: true };
+            const graceMs = Number(process.env.SYNC_BC_MODIFIED_GRACE_MS || 0);
+            if (graceMs > 0) {
+                const lastSyncMs = task.lastSyncAt ? Date.parse(task.lastSyncAt) : Number.NaN;
+                const modifiedMs = Date.parse(
+                    task.systemModifiedAt || task.lastModifiedDateTime || task.modifiedAt || ""
+                );
+                if (Number.isFinite(lastSyncMs) && Number.isFinite(modifiedMs) && modifiedMs - lastSyncMs <= graceMs) {
+                    return { projectNo: "", systemId: "", skipped: true };
+                }
+            }
             const projectNo = (task.projectNo || "").trim();
             return { projectNo, systemId: normalizeSystemId(task.systemId || systemId), skipped: !projectNo };
         } catch (error) {
@@ -109,6 +119,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
                 requestId,
                 taskSystemIds: Array.from(taskIds),
                 skipProjectAccess: true,
+                taskOnly: true,
             });
             processed += 1;
         } catch (error) {

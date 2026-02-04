@@ -1047,6 +1047,7 @@ async function syncTaskToDataverse(
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
         touchOperationSet?: () => void;
+        taskOnly?: boolean;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
@@ -1080,12 +1081,17 @@ async function syncTaskToDataverse(
         taskId = resolveTaskId(existingTask, mapping) || "";
     }
 
-    if (!taskId) {
+    if (!taskId && !options.taskOnly) {
         existingTask = await findDataverseTaskByTitle(dataverse, projectId, payload[mapping.taskTitleField] as string, mapping);
         taskId = resolveTaskId(existingTask, mapping) || "";
     }
 
     if (taskId) {
+        if (options.taskOnly) {
+            const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
+            const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
+            return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
+        }
         if (options.useScheduleApi && options.operationSetId) {
             options.touchOperationSet?.();
             const entity = buildScheduleTaskEntity({
@@ -1150,7 +1156,7 @@ async function syncTaskToDataverse(
         }
     }
 
-    if (!mapping.allowTaskCreate) {
+    if (!mapping.allowTaskCreate || options.taskOnly) {
         return { action: "skipped", taskId: "" };
     }
 
@@ -1239,7 +1245,13 @@ function normalizeTaskSystemId(raw: string) {
 
 export async function syncBcToPremium(
     projectNo?: string,
-    options: { requestId?: string; projectNos?: string[]; taskSystemIds?: string[]; skipProjectAccess?: boolean } = {}
+    options: {
+        requestId?: string;
+        projectNos?: string[];
+        taskSystemIds?: string[];
+        skipProjectAccess?: boolean;
+        taskOnly?: boolean;
+    } = {}
 ) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
@@ -1369,6 +1381,9 @@ export async function syncBcToPremium(
         let useScheduleApi = syncConfig.useScheduleApi;
         let operationSetId = "";
         let operationSetTouched = false;
+        if (options.taskOnly) {
+            useScheduleApi = false;
+        }
         if (useScheduleApi) {
             try {
                 operationSetId = await dataverse.createOperationSet(
@@ -1453,7 +1468,7 @@ export async function syncBcToPremium(
                 continue;
             }
             result.tasks += 1;
-            if (skipForSection) {
+            if (!options.taskOnly && skipForSection) {
                 result.skipped += 1;
                 continue;
             }
@@ -1470,6 +1485,7 @@ export async function syncBcToPremium(
                     resourceCache,
                     teamCache,
                     assignmentCache,
+                    taskOnly: options.taskOnly,
                     touchOperationSet: () => {
                         operationSetTouched = true;
                     },
