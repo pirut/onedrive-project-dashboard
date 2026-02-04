@@ -1089,6 +1089,12 @@ async function cleanupOperationSet(
     meta: Record<string, unknown> = {}
 ) {
     if (!operationSetId) return;
+    const cleanupFlag = String(process.env.DATAVERSE_CLEANUP_OPERATION_SETS || "")
+        .trim()
+        .toLowerCase();
+    if (!["1", "true", "yes", "y", "on"].includes(cleanupFlag)) {
+        return;
+    }
     try {
         await dataverse.delete("msdyn_operationsets", operationSetId);
     } catch (error) {
