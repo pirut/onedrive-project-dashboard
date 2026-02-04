@@ -103,6 +103,43 @@ async function readJsonBody(req) {
     }
 }
 
+function resolveForwardTargets() {
+    const raw = String(process.env.BC_WEBHOOK_FORWARD_URL || "").trim();
+    if (!raw) return [];
+    return raw
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+}
+
+async function forwardWebhookPayload({ payload, raw, requestId }) {
+    const targets = resolveForwardTargets();
+    if (!targets.length) return;
+    const body = raw || (payload ? JSON.stringify(payload) : "");
+    if (!body) return;
+    await Promise.all(
+        targets.map(async (target) => {
+            try {
+                await fetch(target, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Forwarded-By": "bc-webhook-forwarder",
+                        "X-Request-ID": requestId,
+                    },
+                    body,
+                });
+            } catch (error) {
+                logger.warn("BC webhook forward failed", {
+                    requestId,
+                    target,
+                    error: error?.message || String(error),
+                });
+            }
+        })
+    );
+}
+
 function resolveInlineProcessing(req) {
     if (typeof req.query?.process === "string") {
         const flag = req.query.process.trim().toLowerCase();
@@ -190,7 +227,7 @@ export default async function handler(req, res) {
         return;
     }
 
-    const { payload } = await readJsonBody(req);
+    const { payload, raw } = await readJsonBody(req);
     if (!payload) {
         await appendBcWebhookLog({
             ts: new Date().toISOString(),
@@ -218,6 +255,14 @@ export default async function handler(req, res) {
     }
 
     const notifications = payload?.value || [];
+    if (notifications.length) {
+        forwardWebhookPayload({ payload, raw, requestId }).catch((error) => {
+            logger.warn("BC webhook forward errored", {
+                requestId,
+                error: error?.message || String(error),
+            });
+        });
+    }
     if (!notifications.length) {
         await appendBcWebhookLog({
             ts: new Date().toISOString(),
