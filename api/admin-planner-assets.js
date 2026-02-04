@@ -1,9 +1,11 @@
 import "isomorphic-fetch";
 import crypto from "crypto";
 import { ConfidentialClientApplication } from "@azure/msal-node";
+import { BusinessCentralClient } from "../lib/planner-sync/bc-client.js";
 import { DataverseClient } from "../lib/dataverse-client.js";
 import { getDataverseMappingConfig } from "../lib/premium-sync/config.js";
 import { getPremiumProjectUrlTemplate, getTenantIdForUrl } from "../lib/premium-sync/premium-url.js";
+import { syncBcToPremium } from "../lib/premium-sync/index.js";
 import { logger } from "../lib/planner-sync/logger.js";
 
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || "";
@@ -341,6 +343,25 @@ export default async function handler(req, res) {
                     }
                 }
                 res.status(200).json({ ok: true, results });
+                return;
+            }
+
+            if (action === "recreate-all") {
+                const bcClient = new BusinessCentralClient();
+                let projectNos = Array.isArray(body?.projectNos)
+                    ? body.projectNos.map((value) => String(value || "").trim()).filter(Boolean)
+                    : [];
+                if (!projectNos.length) {
+                    const projects = await bcClient.listProjects();
+                    projectNos = projects.map((project) => String(project.projectNo || "").trim()).filter(Boolean);
+                }
+                const requestId = body?.requestId ? String(body.requestId) : undefined;
+                const result = await syncBcToPremium(undefined, {
+                    requestId,
+                    projectNos,
+                    forceProjectCreate: true,
+                });
+                res.status(200).json({ ok: true, projectNos, result });
                 return;
             }
 

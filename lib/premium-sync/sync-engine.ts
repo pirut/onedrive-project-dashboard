@@ -705,7 +705,8 @@ export async function resolveProjectFromBc(
     bcClient: BusinessCentralClient,
     dataverse: DataverseClient,
     projectNo: string,
-    mapping: ReturnType<typeof getDataverseMappingConfig>
+    mapping: ReturnType<typeof getDataverseMappingConfig>,
+    options: { forceCreate?: boolean } = {}
 ) {
     const normalized = (projectNo || "").trim();
     if (!normalized) return null;
@@ -740,7 +741,8 @@ export async function resolveProjectFromBc(
         }
     }
 
-    if (!mapping.allowProjectCreate) {
+    const allowCreate = Boolean(mapping.allowProjectCreate || options.forceCreate);
+    if (!allowCreate) {
         return null;
     }
 
@@ -1437,6 +1439,7 @@ export async function syncBcToPremium(
         skipProjectAccess?: boolean;
         taskOnly?: boolean;
         preferPlanner?: boolean;
+        forceProjectCreate?: boolean;
     } = {}
 ) {
     const requestId = options.requestId || "";
@@ -1549,7 +1552,9 @@ export async function syncBcToPremium(
             }
         }
         if (!projectId) {
-            const projectEntity = await resolveProjectFromBc(bcClient, dataverse, projNo, mapping);
+            const projectEntity = await resolveProjectFromBc(bcClient, dataverse, projNo, mapping, {
+                forceCreate: options.forceProjectCreate,
+            });
             projectId = resolveProjectId(projectEntity, mapping) || "";
         }
         if (!projectId) {
