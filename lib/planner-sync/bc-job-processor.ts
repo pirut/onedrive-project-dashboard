@@ -10,6 +10,14 @@ export type BcJobProcessSummary = {
     skipped: number;
     errors: number;
     projectNos: string[];
+    skipReasons?: Record<string, number>;
+};
+
+type ResolveResult = {
+    projectNo: string;
+    systemId: string;
+    skipped: boolean;
+    reason?: string;
 };
 
 function normalizeSystemId(raw: string) {
@@ -24,16 +32,16 @@ function normalizeSystemId(raw: string) {
     return value.trim();
 }
 
-async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJob) {
+async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJob): Promise<ResolveResult> {
     const entitySet = (job.entitySet || "").trim();
     const systemId = normalizeSystemId(job.systemId || "");
-    if (!entitySet || !systemId) return { projectNo: "", systemId: "", skipped: true };
+    if (!entitySet || !systemId) return { projectNo: "", systemId: "", skipped: true, reason: "missing_resource" };
 
     if (entitySet === "projectTasks") {
         try {
             const task = await bcClient.getProjectTask(systemId);
-            if (!task) return { projectNo: "", systemId: "", skipped: true };
-            if (task.syncLock) return { projectNo: "", systemId: "", skipped: true };
+            if (!task) return { projectNo: "", systemId: "", skipped: true, reason: "not_found" };
+            if (task.syncLock) return { projectNo: "", systemId: "", skipped: true, reason: "locked" };
             const graceMs = Number(process.env.SYNC_BC_MODIFIED_GRACE_MS || 0);
             if (graceMs > 0) {
                 const lastSyncMs = task.lastSyncAt ? Date.parse(task.lastSyncAt) : Number.NaN;
@@ -41,14 +49,21 @@ async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJ
                     task.systemModifiedAt || task.lastModifiedDateTime || task.modifiedAt || ""
                 );
                 if (Number.isFinite(lastSyncMs) && Number.isFinite(modifiedMs) && modifiedMs - lastSyncMs <= graceMs) {
-                    return { projectNo: "", systemId: "", skipped: true };
+                    return { projectNo: "", systemId: "", skipped: true, reason: "grace" };
                 }
             }
             const projectNo = (task.projectNo || "").trim();
-            return { projectNo, systemId: normalizeSystemId(task.systemId || systemId), skipped: !projectNo };
+            return {
+                projectNo,
+                systemId: normalizeSystemId(task.systemId || systemId),
+                skipped: !projectNo,
+                reason: projectNo ? undefined : "missing_project_no",
+            };
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("-> 404")) return { projectNo: "", systemId: "", skipped: true };
+            if (message.includes("-> 404")) {
+                return { projectNo: "", systemId: "", skipped: true, reason: "not_found" };
+            }
             throw error;
         }
     }
@@ -57,15 +72,22 @@ async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJ
         try {
             const project = await bcClient.getProject(systemId);
             const projectNo = (project?.projectNo || "").trim();
-            return { projectNo, systemId: "", skipped: !projectNo };
+            return {
+                projectNo,
+                systemId: "",
+                skipped: !projectNo,
+                reason: projectNo ? undefined : "missing_project_no",
+            };
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            if (message.includes("-> 404")) return { projectNo: "", systemId: "", skipped: true };
+            if (message.includes("-> 404")) {
+                return { projectNo: "", systemId: "", skipped: true, reason: "not_found" };
+            }
             throw error;
         }
     }
 
-    return { projectNo: "", systemId: "", skipped: true };
+    return { projectNo: "", systemId: "", skipped: true, reason: "unsupported_entity" };
 }
 
 export async function processBcJobQueue(options: { maxJobs?: number; requestId?: string } = {}): Promise<BcJobProcessSummary> {
@@ -76,9 +98,14 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     const taskIdsByProject = new Map<string, Set<string>>();
     let skipped = 0;
     let errors = 0;
+    const skipReasons: Record<string, number> = {};
+    const bumpReason = (reason?: string) => {
+        const key = reason || "skipped";
+        skipReasons[key] = (skipReasons[key] || 0) + 1;
+    };
 
     if (!jobs.length) {
-        return { jobs: 0, projects: 0, processed: 0, skipped: 0, errors: 0, projectNos: [] };
+        return { jobs: 0, projects: 0, processed: 0, skipped: 0, errors: 0, projectNos: [], skipReasons: {} };
     }
 
     const bcClient = new BusinessCentralClient();
@@ -87,6 +114,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
             const result = await resolveProjectNo(bcClient, job);
             if (result.skipped) {
                 skipped += 1;
+                bumpReason(result.reason);
                 continue;
             }
             if (result.projectNo) {
@@ -99,6 +127,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
             }
         } catch (error) {
             errors += 1;
+            bumpReason("error");
             logger.warn("BC webhook job resolution failed", {
                 requestId,
                 entitySet: job.entitySet,
@@ -139,5 +168,6 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
         skipped,
         errors,
         projectNos: Array.from(projectNos),
+        skipReasons,
     };
 }

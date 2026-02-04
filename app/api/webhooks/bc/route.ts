@@ -281,7 +281,7 @@ export async function POST(request: Request) {
 
         const enqueueResult = await enqueueBcJobs(jobs);
         const processInline = resolveInlineProcessing(url);
-        let processed: { processed?: number } | null = null;
+        let processed: { processed?: number; skipReasons?: Record<string, number> } | null = null;
         let processSkipped: string | null = null;
         if (shouldDebugLog()) {
             logger.info("BC webhook parsed notifications", {
@@ -344,6 +344,7 @@ export async function POST(request: Request) {
             items: buildLogItems(notifications),
             processed: processed?.processed || 0,
             processSkipped: processSkipped || undefined,
+            skipReasons: processed?.skipReasons,
         });
         const duration = Date.now() - startTime;
 
@@ -369,6 +370,7 @@ export async function POST(request: Request) {
                 missingResource,
                 processed: processed?.processed || 0,
                 processSkipped: processSkipped || undefined,
+                skipReasons: processed?.skipReasons,
                 requestId,
                 duration,
             }),

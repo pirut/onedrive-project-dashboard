@@ -15,6 +15,7 @@ export type BcWebhookLogEntry = {
     missingResource?: number;
     processed?: number;
     processSkipped?: string;
+    skipReasons?: Record<string, number>;
     items?: Array<{
         entitySet?: string;
         systemId?: string;

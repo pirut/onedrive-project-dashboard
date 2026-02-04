@@ -329,6 +329,7 @@ export default async function handler(req, res) {
         items: buildLogItems(notifications),
         processed: processed ? processed.processed : 0,
         processSkipped,
+        skipReasons: processed?.skipReasons,
     });
 
     res.status(202).json({
@@ -341,5 +342,6 @@ export default async function handler(req, res) {
         missingResource,
         processed: processed ? processed.processed : 0,
         processSkipped,
+        skipReasons: processed?.skipReasons,
     });
 }
