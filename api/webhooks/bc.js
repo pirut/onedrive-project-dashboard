@@ -59,6 +59,12 @@ function resolveClientState(notification) {
 }
 
 const LOG_SAMPLE_LIMIT = 10;
+const DEBUG_LOG_LIMIT = 10;
+
+function shouldDebugLog() {
+    const flag = String(process.env.BC_WEBHOOK_DEBUG_LOG || "").trim().toLowerCase();
+    return ["1", "true", "yes", "on"].includes(flag);
+}
 
 function buildLogItems(notifications) {
     if (!notifications?.length) return [];
@@ -73,6 +79,16 @@ function buildLogItems(notifications) {
             subscriptionId: notification.subscriptionId,
         };
     });
+}
+
+function buildDebugSamples(items) {
+    if (!items?.length) return [];
+    return items.slice(0, DEBUG_LOG_LIMIT).map((item) => ({
+        entitySet: item.entitySet,
+        systemId: item.systemId,
+        changeType: item.changeType,
+        subscriptionId: item.subscriptionId,
+    }));
 }
 
 async function readJsonBody(req) {
@@ -252,6 +268,16 @@ export default async function handler(req, res) {
     const processInline = resolveInlineProcessing(req);
     let processed = null;
     let processSkipped = null;
+    if (shouldDebugLog()) {
+        logger.info("BC webhook parsed notifications", {
+            requestId,
+            received: notifications.length,
+            accepted: jobs.length,
+            secretMismatch,
+            missingResource,
+            samples: buildDebugSamples(jobs),
+        });
+    }
     if (processInline) {
         const maxJobs = resolveInlineMaxJobs(req);
         const retryDelayMs = resolveRetryDelayMs(req);
@@ -278,6 +304,17 @@ export default async function handler(req, res) {
                 await releaseBcJobLock(lock);
             }
         }
+    }
+    if (shouldDebugLog()) {
+        logger.info("BC webhook enqueue/process summary", {
+            requestId,
+            processInline,
+            enqueued: enqueueResult.enqueued,
+            deduped: enqueueResult.deduped,
+            skipped: enqueueResult.skipped,
+            processed: processed ? processed.processed : 0,
+            processSkipped,
+        });
     }
     await appendBcWebhookLog({
         ts: new Date().toISOString(),

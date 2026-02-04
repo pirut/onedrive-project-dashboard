@@ -15,6 +15,12 @@ type BcNotification = {
 };
 
 const LOG_SAMPLE_LIMIT = 10;
+const DEBUG_LOG_LIMIT = 10;
+
+function shouldDebugLog() {
+    const flag = (process.env.BC_WEBHOOK_DEBUG_LOG || "").trim().toLowerCase();
+    return ["1", "true", "yes", "on"].includes(flag);
+}
 
 function normalizeSystemId(value: string | null | undefined) {
     let output = (value || "").trim();
@@ -85,6 +91,16 @@ function buildLogItems(notifications: BcNotification[]) {
             subscriptionId: notification.subscriptionId,
         };
     });
+}
+
+function buildDebugSamples(items: BcWebhookJob[]) {
+    if (!items?.length) return [];
+    return items.slice(0, DEBUG_LOG_LIMIT).map((item) => ({
+        entitySet: item.entitySet,
+        systemId: item.systemId,
+        changeType: item.changeType,
+        subscriptionId: item.subscriptionId,
+    }));
 }
 
 function resolveInlineProcessing(url: URL) {
@@ -267,6 +283,16 @@ export async function POST(request: Request) {
         const processInline = resolveInlineProcessing(url);
         let processed: { processed?: number } | null = null;
         let processSkipped: string | null = null;
+        if (shouldDebugLog()) {
+            logger.info("BC webhook parsed notifications", {
+                requestId,
+                received: notifications.length,
+                accepted: jobs.length,
+                secretMismatch,
+                missingResource,
+                samples: buildDebugSamples(jobs),
+            });
+        }
         if (processInline) {
             const maxJobs = resolveInlineMaxJobs(url);
             const retryDelayMs = resolveRetryDelayMs(url);
@@ -293,6 +319,17 @@ export async function POST(request: Request) {
                     await releaseBcJobLock(lock);
                 }
             }
+        }
+        if (shouldDebugLog()) {
+            logger.info("BC webhook enqueue/process summary", {
+                requestId,
+                processInline,
+                enqueued: enqueueResult.enqueued,
+                deduped: enqueueResult.deduped,
+                skipped: enqueueResult.skipped,
+                processed: processed?.processed || 0,
+                processSkipped: processSkipped || undefined,
+            });
         }
         await appendBcWebhookLog({
             ts: new Date().toISOString(),
