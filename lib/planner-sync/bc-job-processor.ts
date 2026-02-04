@@ -148,7 +148,7 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
                 requestId,
                 taskSystemIds: Array.from(taskIds),
                 skipProjectAccess: true,
-                taskOnly: true,
+                taskOnly: false,
             });
             processed += 1;
         } catch (error) {

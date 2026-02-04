@@ -1181,7 +1181,7 @@ async function syncTaskToDataverse(
         let percentOverride: number | null | undefined;
         let startOverride: string | null | undefined;
         let finishOverride: string | null | undefined;
-        if (options.taskOnly && options.useScheduleApi && (bcPercent == null || !bcStart || !bcFinish)) {
+        if (options.useScheduleApi && (bcPercent == null || !bcStart || !bcFinish)) {
             try {
                 const snapshot = await getDataverseTaskScheduleSnapshot(dataverse, taskId, mapping);
                 if (bcPercent == null) percentOverride = snapshot.percent ?? null;
