@@ -218,6 +218,15 @@ function fromDataversePercent(value: number | null | undefined, scale: number) {
     return value * scale;
 }
 
+function normalizeBcPercent(value: number | null) {
+    if (typeof value !== "number" || Number.isNaN(value)) return null;
+    if (!Number.isFinite(value)) return null;
+    const rounded = Math.round(value);
+    if (rounded < 0) return 0;
+    if (rounded > 100) return 100;
+    return rounded;
+}
+
 function parseDateMs(value?: string | null) {
     if (!value) return null;
     const parsed = Date.parse(value);
@@ -849,8 +858,9 @@ function buildBcUpdateFromPremium(
 
     const percentRaw = dataverseTask[mapping.taskPercentField];
     const percent = typeof percentRaw === "number" ? fromDataversePercent(percentRaw, mapping.percentScale) : null;
-    if (percent != null) {
-        updates.percentComplete = percent;
+    const bcPercent = normalizeBcPercent(percent);
+    if (bcPercent != null) {
+        updates.percentComplete = bcPercent;
     }
 
     const start = dataverseTask[mapping.taskStartField];
