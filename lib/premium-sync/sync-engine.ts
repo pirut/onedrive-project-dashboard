@@ -233,6 +233,29 @@ function parseDateMs(value?: string | null) {
     return Number.isNaN(parsed) ? null : parsed;
 }
 
+function resolveDataverseModifiedMs(
+    entity: DataverseEntity | null | undefined,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    if (!entity) return null;
+    const record = entity as Record<string, unknown>;
+    const modifiedField = mapping.taskModifiedField || "modifiedon";
+    const raw = record[modifiedField] ?? record.modifiedon ?? record.modifiedOn;
+    if (raw == null) return null;
+    const text = typeof raw === "string" ? raw : String(raw);
+    return parseDateMs(text);
+}
+
+async function getDataverseTaskModifiedMs(
+    dataverse: DataverseClient,
+    taskId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    const selectFields = [mapping.taskModifiedField, "modifiedon"].filter(Boolean) as string[];
+    const entity = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, Array.from(new Set(selectFields)));
+    return resolveDataverseModifiedMs(entity, mapping);
+}
+
 function resolveTaskDate(value?: string | null) {
     if (!value) return null;
     const trimmed = value.trim();
@@ -1040,6 +1063,7 @@ async function syncTaskToDataverse(
     projectId: string,
     mapping: ReturnType<typeof getDataverseMappingConfig>,
     options: {
+        requestId?: string;
         useScheduleApi: boolean;
         operationSetId?: string;
         bucketCache: Map<string, string | null>;
@@ -1048,6 +1072,8 @@ async function syncTaskToDataverse(
         assignmentCache: Set<string>;
         touchOperationSet?: () => void;
         taskOnly?: boolean;
+        preferPlanner?: boolean;
+        plannerModifiedGraceMs?: number;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
@@ -1087,6 +1113,33 @@ async function syncTaskToDataverse(
     }
 
     if (taskId) {
+        if (options.preferPlanner) {
+            const lastSyncMs = parseDateMs(task.lastSyncAt);
+            if (lastSyncMs != null) {
+                try {
+                    const modifiedMs = await getDataverseTaskModifiedMs(dataverse, taskId, mapping);
+                    const graceMs = options.plannerModifiedGraceMs ?? 0;
+                    if (modifiedMs != null && modifiedMs - lastSyncMs > graceMs) {
+                        logger.info("BC -> Premium skipped (Planner newer)", {
+                            requestId: options.requestId,
+                            projectNo: task.projectNo,
+                            taskNo: task.taskNo,
+                            lastSyncAt: task.lastSyncAt,
+                            plannerModifiedAt: new Date(modifiedMs).toISOString(),
+                        });
+                        return { action: "skipped", taskId };
+                    }
+                } catch (error) {
+                    logger.warn("Dataverse modified check failed; proceeding with BC update", {
+                        requestId: options.requestId,
+                        projectNo: task.projectNo,
+                        taskNo: task.taskNo,
+                        error: (error as Error)?.message,
+                    });
+                }
+            }
+        }
+
         if (options.useScheduleApi && options.operationSetId) {
             options.touchOperationSet?.();
             const entity = buildScheduleTaskEntity({
@@ -1114,12 +1167,25 @@ async function syncTaskToDataverse(
                 };
                 return { action: "updated", taskId, pendingUpdate: { task, updates } };
             }
-            return { action: "updated", taskId };
+            const updates = {
+                plannerTaskId: taskId,
+                plannerPlanId: projectId,
+                lastPlannerEtag: task.lastPlannerEtag || "",
+                lastSyncAt: new Date().toISOString(),
+            };
+            return { action: "updated", taskId, pendingUpdate: { task, updates } };
         }
 
         if (options.taskOnly) {
             const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
             const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
+            const updates = {
+                plannerTaskId: taskId,
+                plannerPlanId: projectId,
+                lastPlannerEtag: updateResult.etag || task.lastPlannerEtag || "",
+                lastSyncAt: new Date().toISOString(),
+            };
+            await updateBcTaskWithSyncLock(bcClient, task, updates);
             return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
         }
 
@@ -1479,18 +1545,21 @@ export async function syncBcToPremium(
                 continue;
             }
             try {
-                const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                    useScheduleApi,
-                    operationSetId: useScheduleApi ? operationSetId : undefined,
-                    bucketCache,
-                    resourceCache,
-                    teamCache,
-                    assignmentCache,
-                    taskOnly: options.taskOnly,
-                    touchOperationSet: () => {
-                        operationSetTouched = true;
-                    },
-                });
+            const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                requestId,
+                useScheduleApi,
+                operationSetId: useScheduleApi ? operationSetId : undefined,
+                bucketCache,
+                resourceCache,
+                teamCache,
+                assignmentCache,
+                taskOnly: options.taskOnly,
+                touchOperationSet: () => {
+                    operationSetTouched = true;
+                },
+                preferPlanner: !syncConfig.preferBc,
+                plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+            });
                 if (res.action === "created") result.created += 1;
                 else if (res.action === "updated") result.updated += 1;
                 else result.skipped += 1;

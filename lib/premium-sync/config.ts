@@ -37,6 +37,7 @@ export function getPremiumSyncConfig() {
     return {
         preferBc: readBoolEnv("SYNC_PREFER_BC", true),
         bcModifiedGraceMs: readNumberEnv("SYNC_BC_MODIFIED_GRACE_MS", 2000),
+        premiumModifiedGraceMs: readNumberEnv("SYNC_PREMIUM_MODIFIED_GRACE_MS", 2000),
         syncLockTimeoutMinutes: readNumberEnv("SYNC_LOCK_TIMEOUT_MINUTES", 30),
         deleteBehavior: (readEnv("PREMIUM_DELETE_BEHAVIOR") || "clearLink") as PremiumDeleteBehavior,
         maxProjectsPerRun: Math.max(0, Math.floor(readNumberEnv("SYNC_MAX_PROJECTS_PER_RUN", 0))),
