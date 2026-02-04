@@ -19,7 +19,7 @@
             "schedule": "0 7 * * *"
         },
         {
-            "path": "/api/sync/bc-audit?cronSecret=YOUR_CRON_SECRET",
+            "path": "/api/sync/bc-audit",
             "schedule": "0 8 * * *"
         },
         {
