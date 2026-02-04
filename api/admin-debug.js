@@ -155,6 +155,18 @@ async function debugView(req) {
     <pre id="debug-output" class="log"></pre>
   </div>
 
+  <div class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <div>
+        <div style="font-weight:600">Operation Set Logs</div>
+        <div class="small muted">Dataverse schedule API operation sets</div>
+      </div>
+      <button type="button" id="load-operation-sets">Load</button>
+    </div>
+    <pre id="operation-sets-output" class="log"></pre>
+    <div id="operation-sets-status" class="small muted">Idle</div>
+  </div>
+
   <script>
     (function(){
       function byId(id){ return document.getElementById(id); }
@@ -187,6 +199,8 @@ async function debugView(req) {
       var validationStatus = byId('validation-status');
       var validationOutput = byId('validation-output');
       var feedSource = null;
+      var operationSetsOutput = byId('operation-sets-output');
+      var operationSetsStatus = byId('operation-sets-status');
 
       async function loadDebug(){
         setStatus(debugStatus, 'Loading...', 'muted');
@@ -207,6 +221,13 @@ async function debugView(req) {
         var res = await fetchJson('/api/sync/webhook-log?limit=50', { headers: { 'cache-control': 'no-cache' }});
         renderJson(webhookOutput, res.payload);
         setStatus(webhookStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
+      }
+
+      async function loadOperationSets(){
+        setStatus(operationSetsStatus, 'Loading...', 'muted');
+        var res = await fetchJson('/api/sync/debug-operation-sets', { headers: { 'cache-control': 'no-cache' }});
+        renderJson(operationSetsOutput, res.payload);
+        setStatus(operationSetsStatus, res.ok ? 'Loaded' : 'Error', res.ok ? 'ok' : 'bad');
       }
 
       function startFeed(){
@@ -245,6 +266,7 @@ async function debugView(req) {
         loadDebug();
         loadPremiumTest();
         loadWebhookSnapshot();
+        loadOperationSets();
       });
       byId('premium-test-btn')?.addEventListener('click', loadPremiumTest);
       byId('webhook-snapshot-btn')?.addEventListener('click', loadWebhookSnapshot);
@@ -252,10 +274,12 @@ async function debugView(req) {
       byId('webhook-feed-stop')?.addEventListener('click', stopFeed);
       byId('webhook-feed-clear')?.addEventListener('click', clearFeed);
       byId('ping-webhook')?.addEventListener('click', pingWebhook);
+      byId('load-operation-sets')?.addEventListener('click', loadOperationSets);
 
       loadDebug();
       loadPremiumTest();
       loadWebhookSnapshot();
+      loadOperationSets();
     })();
   </script>
   `;
