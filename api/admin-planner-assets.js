@@ -169,6 +169,14 @@ function escapeODataString(value) {
     return String(value).replace(/'/g, "''");
 }
 
+function isGuid(value) {
+    if (!value) return false;
+    const trimmed = String(value).trim().replace(/^\{/, "").replace(/\}$/, "");
+    return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+        trimmed
+    );
+}
+
 function extractBcProjectNo(title) {
     if (!title) return "";
     const raw = String(title).trim();
@@ -179,6 +187,20 @@ function extractBcProjectNo(title) {
     }
     const match = raw.match(/[A-Za-z]{2}\d{3,}/);
     return match ? match[0].toUpperCase() : "";
+}
+
+async function buildSyncedProjectSet(bcClient) {
+    const tasks = await bcClient.listProjectTasks();
+    const synced = new Set();
+    for (const task of tasks || []) {
+        const projectNo = (task?.projectNo || "").trim();
+        if (!projectNo) continue;
+        const planId = (task?.plannerPlanId || "").trim();
+        if (planId && isGuid(planId)) {
+            synced.add(projectNo);
+        }
+    }
+    return synced;
 }
 
 
@@ -355,13 +377,26 @@ export default async function handler(req, res) {
                     const projects = await bcClient.listProjects();
                     projectNos = projects.map((project) => String(project.projectNo || "").trim()).filter(Boolean);
                 }
+                const skipSynced = body?.skipSynced !== false;
+                let skipped = [];
+                if (skipSynced) {
+                    const synced = await buildSyncedProjectSet(bcClient);
+                    skipped = projectNos.filter((projectNo) => synced.has(projectNo));
+                    projectNos = projectNos.filter((projectNo) => !synced.has(projectNo));
+                }
                 const requestId = body?.requestId ? String(body.requestId) : undefined;
                 const result = await syncBcToPremium(undefined, {
                     requestId,
                     projectNos,
                     forceProjectCreate: true,
                 });
-                res.status(200).json({ ok: true, projectNos, result });
+                res.status(200).json({
+                    ok: true,
+                    projectNos,
+                    skippedAlreadySynced: skipped,
+                    skippedCount: skipped.length,
+                    result,
+                });
                 return;
             }
 
