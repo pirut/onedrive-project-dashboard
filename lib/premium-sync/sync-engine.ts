@@ -279,6 +279,28 @@ async function getDataverseTaskPercent(
     return Number.isFinite(parsed) ? parsed : null;
 }
 
+async function getDataverseTaskScheduleSnapshot(
+    dataverse: DataverseClient,
+    taskId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    const fields = [mapping.taskPercentField, mapping.taskStartField, mapping.taskFinishField].filter(Boolean) as string[];
+    const entity = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, Array.from(new Set(fields)));
+    const record = entity as Record<string, unknown>;
+    const percentRaw = mapping.taskPercentField ? record[mapping.taskPercentField] : null;
+    const percent =
+        typeof percentRaw === "number" ? percentRaw : percentRaw == null ? null : Number(percentRaw);
+    const startRaw = mapping.taskStartField ? record[mapping.taskStartField] : null;
+    const finishRaw = mapping.taskFinishField ? record[mapping.taskFinishField] : null;
+    const start = typeof startRaw === "string" ? startRaw.trim() || null : null;
+    const finish = typeof finishRaw === "string" ? finishRaw.trim() || null : null;
+    return {
+        percent: Number.isFinite(percent as number) ? (percent as number) : null,
+        start,
+        finish,
+    };
+}
+
 function resolveTaskDate(value?: string | null) {
     if (!value) return null;
     const trimmed = value.trim();
@@ -317,8 +339,11 @@ function buildScheduleTaskEntity(params: {
     dataverse: DataverseClient;
     mode?: "create" | "update";
     percentOverride?: number | null;
+    startOverride?: string | null;
+    finishOverride?: string | null;
 }) {
-    const { taskId, projectId, bucketId, task, mapping, dataverse, mode, percentOverride } = params;
+    const { taskId, projectId, bucketId, task, mapping, dataverse, mode, percentOverride, startOverride, finishOverride } =
+        params;
     const isCreate = mode === "create";
     const entity: DataverseEntity = {
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
@@ -332,8 +357,8 @@ function buildScheduleTaskEntity(params: {
         entity[mapping.taskBcNoField] = String(task.taskNo).trim();
     }
 
-    const start = resolveTaskDate(task.manualStartDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || null);
+    const start = startOverride ?? resolveTaskDate(task.manualStartDate || task.startDate || null);
+    const finish = finishOverride ?? resolveTaskDate(task.manualEndDate || task.endDate || null);
     if (start) {
         entity[mapping.taskStartField] = start;
     }
@@ -965,6 +990,8 @@ async function runScheduleUpdateFallback(options: {
     teamCache: Map<string, string | null>;
     assignmentCache: Set<string>;
     percentOverride?: number | null;
+    startOverride?: string | null;
+    finishOverride?: string | null;
 }) {
     const operationSetId = await options.dataverse.createOperationSet(
         options.projectId,
@@ -983,6 +1010,8 @@ async function runScheduleUpdateFallback(options: {
             dataverse: options.dataverse,
             mode: "update",
             percentOverride: options.percentOverride ?? undefined,
+            startOverride: options.startOverride ?? undefined,
+            finishOverride: options.finishOverride ?? undefined,
         });
         await options.dataverse.pssUpdate(entity, operationSetId);
         await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
@@ -1147,12 +1176,19 @@ async function syncTaskToDataverse(
             mapping.percentMin,
             mapping.percentMax
         );
+        const bcStart = resolveTaskDate(task.manualStartDate || task.startDate || null);
+        const bcFinish = resolveTaskDate(task.manualEndDate || task.endDate || null);
         let percentOverride: number | null | undefined;
-        if (options.taskOnly && options.useScheduleApi && bcPercent == null) {
+        let startOverride: string | null | undefined;
+        let finishOverride: string | null | undefined;
+        if (options.taskOnly && options.useScheduleApi && (bcPercent == null || !bcStart || !bcFinish)) {
             try {
-                percentOverride = await getDataverseTaskPercent(dataverse, taskId, mapping);
+                const snapshot = await getDataverseTaskScheduleSnapshot(dataverse, taskId, mapping);
+                if (bcPercent == null) percentOverride = snapshot.percent ?? null;
+                if (!bcStart) startOverride = snapshot.start ?? null;
+                if (!bcFinish) finishOverride = snapshot.finish ?? null;
             } catch (error) {
-                logger.warn("Dataverse percent lookup failed; proceeding with BC update", {
+                logger.warn("Dataverse schedule snapshot lookup failed; proceeding with BC update", {
                     requestId: options.requestId,
                     projectNo: task.projectNo,
                     taskNo: task.taskNo,
@@ -1201,6 +1237,8 @@ async function syncTaskToDataverse(
                 dataverse,
                 mode: "update",
                 percentOverride: percentOverride ?? bcPercent ?? undefined,
+                startOverride: startOverride ?? undefined,
+                finishOverride: finishOverride ?? undefined,
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
             if (!options.taskOnly) {
@@ -1265,6 +1303,8 @@ async function syncTaskToDataverse(
                         teamCache: options.teamCache,
                         assignmentCache: options.assignmentCache,
                         percentOverride: percentOverride ?? bcPercent ?? undefined,
+                        startOverride: startOverride ?? undefined,
+                        finishOverride: finishOverride ?? undefined,
                     });
                 } catch (fallbackError) {
                     logger.warn("Schedule update fallback failed", {
