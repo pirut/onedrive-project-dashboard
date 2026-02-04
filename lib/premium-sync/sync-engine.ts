@@ -264,6 +264,21 @@ async function getDataverseTaskModifiedMs(
     return resolveDataverseModifiedMs(entity, mapping);
 }
 
+async function getDataverseTaskPercent(
+    dataverse: DataverseClient,
+    taskId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    const field = mapping.taskPercentField;
+    if (!field) return null;
+    const entity = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, [field]);
+    const raw = (entity as Record<string, unknown> | null)?.[field];
+    if (typeof raw === "number") return raw;
+    if (raw == null) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+}
+
 function resolveTaskDate(value?: string | null) {
     if (!value) return null;
     const trimmed = value.trim();
@@ -301,8 +316,9 @@ function buildScheduleTaskEntity(params: {
     mapping: ReturnType<typeof getDataverseMappingConfig>;
     dataverse: DataverseClient;
     mode?: "create" | "update";
+    percentOverride?: number | null;
 }) {
-    const { taskId, projectId, bucketId, task, mapping, dataverse, mode } = params;
+    const { taskId, projectId, bucketId, task, mapping, dataverse, mode, percentOverride } = params;
     const isCreate = mode === "create";
     const entity: DataverseEntity = {
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
@@ -327,7 +343,9 @@ function buildScheduleTaskEntity(params: {
         }
     }
 
-    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
+    const percent =
+        percentOverride ??
+        toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) entity[mapping.taskPercentField] = percent;
 
     if (mapping.taskDescriptionField && task.description) {
@@ -946,6 +964,7 @@ async function runScheduleUpdateFallback(options: {
     resourceCache: Map<string, string | null>;
     teamCache: Map<string, string | null>;
     assignmentCache: Set<string>;
+    percentOverride?: number | null;
 }) {
     const operationSetId = await options.dataverse.createOperationSet(
         options.projectId,
@@ -963,6 +982,7 @@ async function runScheduleUpdateFallback(options: {
             mapping: options.mapping,
             dataverse: options.dataverse,
             mode: "update",
+            percentOverride: options.percentOverride ?? undefined,
         });
         await options.dataverse.pssUpdate(entity, operationSetId);
         await ensureAssignmentForTask(options.dataverse, options.task, options.projectId, options.taskId, {
@@ -1121,6 +1141,26 @@ async function syncTaskToDataverse(
     }
 
     if (taskId) {
+        const bcPercent = toDataversePercent(
+            task.percentComplete ?? null,
+            mapping.percentScale,
+            mapping.percentMin,
+            mapping.percentMax
+        );
+        let percentOverride: number | null | undefined;
+        if (options.taskOnly && options.useScheduleApi && bcPercent == null) {
+            try {
+                percentOverride = await getDataverseTaskPercent(dataverse, taskId, mapping);
+            } catch (error) {
+                logger.warn("Dataverse percent lookup failed; proceeding with BC update", {
+                    requestId: options.requestId,
+                    projectNo: task.projectNo,
+                    taskNo: task.taskNo,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+
         if (options.preferPlanner) {
             try {
                 const plannerModifiedMs = await getDataverseTaskModifiedMs(dataverse, taskId, mapping);
@@ -1160,6 +1200,7 @@ async function syncTaskToDataverse(
                 mapping,
                 dataverse,
                 mode: "update",
+                percentOverride: percentOverride ?? bcPercent ?? undefined,
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
             if (!options.taskOnly) {
@@ -1223,6 +1264,7 @@ async function syncTaskToDataverse(
                         resourceCache: options.resourceCache,
                         teamCache: options.teamCache,
                         assignmentCache: options.assignmentCache,
+                        percentOverride: percentOverride ?? bcPercent ?? undefined,
                     });
                 } catch (fallbackError) {
                     logger.warn("Schedule update fallback failed", {
