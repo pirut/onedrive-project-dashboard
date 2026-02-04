@@ -1087,11 +1087,6 @@ async function syncTaskToDataverse(
     }
 
     if (taskId) {
-        if (options.taskOnly) {
-            const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
-            const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
-            return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
-        }
         if (options.useScheduleApi && options.operationSetId) {
             options.touchOperationSet?.();
             const entity = buildScheduleTaskEntity({
@@ -1104,19 +1099,28 @@ async function syncTaskToDataverse(
                 mode: "update",
             });
             await dataverse.pssUpdate(entity, options.operationSetId);
-            await ensureAssignmentForTask(dataverse, task, projectId, taskId, {
-                operationSetId: options.operationSetId,
-                resourceCache: options.resourceCache,
-                teamCache: options.teamCache,
-                assignmentCache: options.assignmentCache,
-            });
-            const updates = {
-                plannerTaskId: taskId,
-                plannerPlanId: projectId,
-                lastPlannerEtag: task.lastPlannerEtag || "",
-                lastSyncAt: new Date().toISOString(),
-            };
-            return { action: "updated", taskId, pendingUpdate: { task, updates } };
+            if (!options.taskOnly) {
+                await ensureAssignmentForTask(dataverse, task, projectId, taskId, {
+                    operationSetId: options.operationSetId,
+                    resourceCache: options.resourceCache,
+                    teamCache: options.teamCache,
+                    assignmentCache: options.assignmentCache,
+                });
+                const updates = {
+                    plannerTaskId: taskId,
+                    plannerPlanId: projectId,
+                    lastPlannerEtag: task.lastPlannerEtag || "",
+                    lastSyncAt: new Date().toISOString(),
+                };
+                return { action: "updated", taskId, pendingUpdate: { task, updates } };
+            }
+            return { action: "updated", taskId };
+        }
+
+        if (options.taskOnly) {
+            const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
+            const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
+            return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
         }
 
         const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
@@ -1381,9 +1385,6 @@ export async function syncBcToPremium(
         let useScheduleApi = syncConfig.useScheduleApi;
         let operationSetId = "";
         let operationSetTouched = false;
-        if (options.taskOnly) {
-            useScheduleApi = false;
-        }
         if (useScheduleApi) {
             try {
                 operationSetId = await dataverse.createOperationSet(
