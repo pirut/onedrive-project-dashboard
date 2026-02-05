@@ -18,6 +18,10 @@ const HEADING_TASK_SECTIONS = new Map<number, string | null>([
 const warnedNonGuidPlanProjects = new Set<string>();
 const warnedNonGuidTaskProjects = new Set<string>();
 const warnedDefaultBucketProjects = new Set<string>();
+const defaultBucketFieldCache = { value: undefined as string | null | undefined };
+const warnedDefaultBucketFields = new Set<string>();
+
+const DEFAULT_BUCKET_FIELD_CANDIDATES = ["msdyn_defaultbucket", "msdyn_defaultbucketid"];
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -199,23 +203,44 @@ function isInvalidDefaultBucketError(error: unknown) {
 
 async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId: string, bucketId: string) {
     if (!projectId || !bucketId) return false;
-    const field = (await resolveLookupField(dataverse, "msdyn_project", "msdyn_projectbucket")) || "msdyn_defaultbucket";
     const binding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
     if (!binding) return false;
-    try {
-        await dataverse.update("msdyn_projects", projectId, { [`${field}@odata.bind`]: binding });
-        return true;
-    } catch (error) {
-        if (!warnedDefaultBucketProjects.has(projectId)) {
-            warnedDefaultBucketProjects.add(projectId);
-            logger.warn("Dataverse default bucket update failed", {
-                projectId,
-                field,
-                error: (error as Error)?.message,
-            });
-        }
-        return false;
+    if (defaultBucketFieldCache.value === undefined) {
+        defaultBucketFieldCache.value = (await resolveLookupField(dataverse, "msdyn_project", "msdyn_projectbucket")) || null;
     }
+    const candidates = [];
+    if (defaultBucketFieldCache.value) candidates.push(defaultBucketFieldCache.value);
+    for (const candidate of DEFAULT_BUCKET_FIELD_CANDIDATES) {
+        if (!candidates.includes(candidate)) candidates.push(candidate);
+    }
+    let lastError: string | null = null;
+    for (const field of candidates) {
+        try {
+            await dataverse.update("msdyn_projects", projectId, { [`${field}@odata.bind`]: binding });
+            defaultBucketFieldCache.value = field;
+            return true;
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            lastError = message;
+            if (message.toLowerCase().includes("undeclared property")) {
+                continue;
+            }
+            if (!warnedDefaultBucketFields.has(field)) {
+                warnedDefaultBucketFields.add(field);
+                logger.warn("Dataverse default bucket update failed", { projectId, field, error: message });
+            }
+            return false;
+        }
+    }
+    if (!warnedDefaultBucketProjects.has(projectId)) {
+        warnedDefaultBucketProjects.add(projectId);
+        logger.warn("Dataverse default bucket update failed (no valid field)", {
+            projectId,
+            tried: candidates,
+            error: lastError || "Unknown error",
+        });
+    }
+    return false;
 }
 
 function isStaleSyncLock(task: BcProjectTask, timeoutMinutes: number) {
