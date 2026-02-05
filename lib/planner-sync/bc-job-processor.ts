@@ -18,6 +18,8 @@ type ResolveResult = {
     systemId: string;
     skipped: boolean;
     reason?: string;
+    queueEntryId?: string;
+    forceFullSync?: boolean;
 };
 
 function normalizeSystemId(raw: string) {
@@ -32,10 +34,50 @@ function normalizeSystemId(raw: string) {
     return value.trim();
 }
 
+function parseBool(raw: string | undefined | null, fallback: boolean) {
+    if (raw == null || raw === "") return fallback;
+    const normalized = String(raw).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return fallback;
+}
+
+const QUEUE_ENTITY_SET = (process.env.BC_SYNC_QUEUE_ENTITY_SET || "premiumSyncQueue").trim();
+const QUEUE_PROJECT_NO_FIELD = (process.env.BC_SYNC_QUEUE_PROJECTNO_FIELD || "projectNo").trim();
+const QUEUE_TASK_SYSTEM_ID_FIELD = (process.env.BC_SYNC_QUEUE_TASKSYSTEMID_FIELD || "projectTaskSystemId").trim();
+const QUEUE_DELETE_AFTER = parseBool(process.env.BC_SYNC_QUEUE_DELETE_AFTER, true);
+
 async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJob): Promise<ResolveResult> {
     const entitySet = (job.entitySet || "").trim();
     const systemId = normalizeSystemId(job.systemId || "");
     if (!entitySet || !systemId) return { projectNo: "", systemId: "", skipped: true, reason: "missing_resource" };
+
+    if (QUEUE_ENTITY_SET && entitySet.toLowerCase() === QUEUE_ENTITY_SET.toLowerCase()) {
+        try {
+            const record = await bcClient.getEntity(QUEUE_ENTITY_SET, systemId);
+            if (!record) return { projectNo: "", systemId: "", skipped: true, reason: "not_found" };
+            const projectNoRaw = record?.[QUEUE_PROJECT_NO_FIELD];
+            const projectNo = typeof projectNoRaw === "string" ? projectNoRaw.trim() : String(projectNoRaw || "").trim();
+            const taskSystemRaw = record?.[QUEUE_TASK_SYSTEM_ID_FIELD];
+            const taskSystemId = normalizeSystemId(
+                typeof taskSystemRaw === "string" ? taskSystemRaw : String(taskSystemRaw || "")
+            );
+            return {
+                projectNo,
+                systemId: taskSystemId,
+                skipped: !projectNo,
+                reason: projectNo ? undefined : "queue_missing_project_no",
+                queueEntryId: systemId,
+                forceFullSync: !taskSystemId,
+            };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes("-> 404")) {
+                return { projectNo: "", systemId: "", skipped: true, reason: "not_found" };
+            }
+            throw error;
+        }
+    }
 
     if (entitySet === "projectTasks") {
         try {
@@ -77,6 +119,7 @@ async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJ
                 systemId: "",
                 skipped: !projectNo,
                 reason: projectNo ? undefined : "missing_project_no",
+                forceFullSync: Boolean(projectNo),
             };
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -96,6 +139,8 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     const jobs = await popBcJobs(maxJobs);
     const projectNos = new Set<string>();
     const taskIdsByProject = new Map<string, Set<string>>();
+    const fullSyncProjects = new Set<string>();
+    const queueEntryIdsByProject = new Map<string, Set<string>>();
     let skipped = 0;
     let errors = 0;
     const skipReasons: Record<string, number> = {};
@@ -119,10 +164,18 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
             }
             if (result.projectNo) {
                 projectNos.add(result.projectNo);
+                if (result.forceFullSync) {
+                    fullSyncProjects.add(result.projectNo);
+                }
                 if (result.systemId) {
                     const set = taskIdsByProject.get(result.projectNo) || new Set<string>();
                     set.add(result.systemId);
                     taskIdsByProject.set(result.projectNo, set);
+                }
+                if (result.queueEntryId) {
+                    const set = queueEntryIdsByProject.get(result.projectNo) || new Set<string>();
+                    set.add(result.queueEntryId);
+                    queueEntryIdsByProject.set(result.projectNo, set);
                 }
             }
         } catch (error) {
@@ -140,16 +193,34 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     let processed = 0;
     for (const projectNo of projectNos) {
         const taskIds = taskIdsByProject.get(projectNo) || new Set<string>();
-        if (!taskIds.size) {
+        const forceFullSync = fullSyncProjects.has(projectNo);
+        if (!taskIds.size && !forceFullSync) {
             continue;
         }
         try {
             await syncBcToPremium(projectNo, {
                 requestId,
-                taskSystemIds: Array.from(taskIds),
+                taskSystemIds: taskIds.size && !forceFullSync ? Array.from(taskIds) : undefined,
                 skipProjectAccess: true,
                 taskOnly: false,
             });
+            if (QUEUE_DELETE_AFTER) {
+                const queueEntries = queueEntryIdsByProject.get(projectNo);
+                if (queueEntries?.size) {
+                    for (const entryId of queueEntries) {
+                        try {
+                            await bcClient.deleteEntity(QUEUE_ENTITY_SET, entryId);
+                        } catch (error) {
+                            logger.warn("BC queue entry delete failed", {
+                                requestId,
+                                projectNo,
+                                entryId,
+                                error: (error as Error)?.message,
+                            });
+                        }
+                    }
+                }
+            }
             processed += 1;
         } catch (error) {
             errors += 1;

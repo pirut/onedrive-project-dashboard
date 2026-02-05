@@ -2,7 +2,9 @@ import { BusinessCentralClient } from "../../../lib/planner-sync/bc-client.js";
 import { getBcSubscription, saveBcSubscription } from "../../../lib/planner-sync/bc-webhook-store.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
-const DEFAULT_ENTITY_SETS = ["projectTasks"];
+const DEFAULT_ENTITY_SETS = [
+    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "projectTasks",
+].filter(Boolean);
 const SUBSCRIPTION_TTL_HOURS = 48;
 const RENEWAL_BUFFER_HOURS = 6;
 

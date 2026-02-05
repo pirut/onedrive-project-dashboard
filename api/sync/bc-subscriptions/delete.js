@@ -3,7 +3,9 @@ import { deleteBcSubscription, getBcSubscription } from "../../../lib/planner-sy
 import { getBcConfig } from "../../../lib/planner-sync/config.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
-const DEFAULT_ENTITY_SETS = ["projectTasks"];
+const DEFAULT_ENTITY_SETS = [
+    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "projectTasks",
+].filter(Boolean);
 
 function normalizeValue(value) {
     return (value || "").trim().replace(/^\/+/, "").toLowerCase();
