@@ -15,6 +15,9 @@ const HEADING_TASK_SECTIONS = new Map<number, string | null>([
     [4000, "Change Orders"],
 ]);
 
+const warnedNonGuidPlanProjects = new Set<string>();
+const warnedNonGuidTaskProjects = new Set<string>();
+
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
 }
@@ -162,6 +165,35 @@ function isAllowedSyncTaskNo(taskNo: string | number | null | undefined, allowli
     const taskNumber = parseTaskNumber(taskNo);
     if (!Number.isFinite(taskNumber)) return false;
     return allowlist.has(taskNumber);
+}
+
+function warnNonGuidPlannerPlanId(projectNo: string | undefined, projectId: string) {
+    const key = (projectNo || "").trim() || projectId;
+    if (!key) return;
+    if (warnedNonGuidPlanProjects.has(key)) return;
+    warnedNonGuidPlanProjects.add(key);
+    logger.warn("Ignoring non-GUID plannerPlanId; will resolve project by BC data", {
+        projectNo,
+        projectId,
+    });
+}
+
+function warnNonGuidPlannerTaskId(projectNo: string | undefined, taskNo: string | undefined, taskId: string) {
+    const key = (projectNo || "").trim() || taskId || (taskNo || "").trim();
+    if (!key) return;
+    if (warnedNonGuidTaskProjects.has(key)) return;
+    warnedNonGuidTaskProjects.add(key);
+    logger.warn("Ignoring non-GUID plannerTaskId; will resolve by BC keys", {
+        projectNo,
+        taskNo,
+        taskId,
+    });
+}
+
+function isInvalidDefaultBucketError(error: unknown) {
+    const message = (error as Error)?.message || String(error || "");
+    const normalized = message.toLowerCase();
+    return normalized.includes("e_invaliddefaultbucket") || normalized.includes("invalid default bucket");
 }
 
 function isStaleSyncLock(task: BcProjectTask, timeoutMinutes: number) {
@@ -1159,17 +1191,14 @@ async function syncTaskToDataverse(
         taskOnly?: boolean;
         preferPlanner?: boolean;
         plannerModifiedGraceMs?: number;
+        skipCreate?: boolean;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
     const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
     let taskId = existingId || "";
     if (taskId && !isGuid(taskId)) {
-        logger.warn("Ignoring non-GUID plannerTaskId; will resolve by BC keys", {
-            projectNo: task.projectNo,
-            taskNo: task.taskNo,
-            taskId,
-        });
+        warnNonGuidPlannerTaskId(task.projectNo, task.taskNo, taskId);
         taskId = "";
     }
 
@@ -1349,7 +1378,7 @@ async function syncTaskToDataverse(
         }
     }
 
-    if (!mapping.allowTaskCreate || options.taskOnly) {
+    if (!mapping.allowTaskCreate || options.taskOnly || options.skipCreate) {
         return { action: "skipped", taskId: "" };
     }
 
@@ -1554,11 +1583,7 @@ export async function syncBcToPremium(
 
         let projectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
         if (projectId && !isGuid(projectId)) {
-            logger.warn("Ignoring non-GUID plannerPlanId; will resolve project by BC data", {
-                requestId,
-                projectNo: projNo,
-                projectId,
-            });
+            warnNonGuidPlannerPlanId(projNo, projectId);
             projectId = "";
         }
         if (projectId) {
@@ -1758,6 +1783,13 @@ export async function syncBcToPremium(
                         projectNo: projNo,
                         error: (error as Error)?.message,
                     });
+                    const skipCreate = isInvalidDefaultBucketError(error);
+                    if (skipCreate) {
+                        logger.warn("Dataverse default bucket invalid; skipping task creates during retry", {
+                            requestId,
+                            projectNo: projNo,
+                        });
+                    }
                     if (scheduleTasks.length) {
                         logger.warn("Retrying tasks via direct Dataverse API", {
                             requestId,
@@ -1778,6 +1810,7 @@ export async function syncBcToPremium(
                                     touchOperationSet: undefined,
                                     preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                                     plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                                    skipCreate,
                                 });
                                 if (res.action === "created") result.created += 1;
                                 else if (res.action === "updated") result.updated += 1;
