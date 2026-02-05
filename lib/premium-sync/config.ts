@@ -33,6 +33,15 @@ function readListEnv(name: string) {
         .filter(Boolean);
 }
 
+function readNumberListEnv(name: string, fallback: number[]) {
+    const values = readListEnv(name);
+    if (!values.length) return fallback;
+    const parsed = values.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+    return parsed.length ? parsed : fallback;
+}
+
+const DEFAULT_SYNC_TASK_NUMBERS = [1100, 1200, 1300, 1400, 1500, 2100, 2200, 2300, 2400];
+
 export function getPremiumSyncConfig() {
     return {
         preferBc: readBoolEnv("SYNC_PREFER_BC", true),
@@ -46,6 +55,7 @@ export function getPremiumSyncConfig() {
         useScheduleApi: readBoolEnv("DATAVERSE_USE_SCHEDULE_API", true),
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
+        allowedTaskNumbers: readNumberListEnv("SYNC_TASK_NO_ALLOWLIST", DEFAULT_SYNC_TASK_NUMBERS),
     };
 }
 

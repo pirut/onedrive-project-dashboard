@@ -151,6 +151,19 @@ function parseTaskNumber(taskNo?: string | number | null) {
     return Number(match[0]);
 }
 
+function buildAllowedTaskNumberSet(syncConfig: ReturnType<typeof getPremiumSyncConfig>) {
+    const values = Array.isArray(syncConfig.allowedTaskNumbers) ? syncConfig.allowedTaskNumbers : [];
+    const cleaned = values.filter((value) => Number.isFinite(value));
+    return new Set(cleaned);
+}
+
+function isAllowedSyncTaskNo(taskNo: string | number | null | undefined, allowlist: Set<number>) {
+    if (!allowlist.size) return true;
+    const taskNumber = parseTaskNumber(taskNo);
+    if (!Number.isFinite(taskNumber)) return false;
+    return allowlist.has(taskNumber);
+}
+
 function isStaleSyncLock(task: BcProjectTask, timeoutMinutes: number) {
     if (!task.syncLock) return false;
     if (timeoutMinutes <= 0) return false;
@@ -1448,6 +1461,7 @@ export async function syncBcToPremium(
 ) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
+    const allowedTaskNumbers = buildAllowedTaskNumberSet(syncConfig);
     const mapping = getDataverseMappingConfig();
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
@@ -1677,6 +1691,10 @@ export async function syncBcToPremium(
                     result.skipped += 1;
                     continue;
                 }
+                if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) {
+                    result.skipped += 1;
+                    continue;
+                }
                 const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
                 if (cleanTask.syncLock) {
                     result.skipped += 1;
@@ -1847,6 +1865,7 @@ async function resolveBcTaskFromDataverse(
 export async function syncPremiumChanges(options: { requestId?: string; deltaLink?: string | null } = {}) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
+    const allowedTaskNumbers = buildAllowedTaskNumberSet(syncConfig);
     const mapping = getDataverseMappingConfig();
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
@@ -1894,6 +1913,10 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
             if (typeof taskId === "string" && taskId.trim()) {
                 const bcTask = await bcClient.findProjectTaskByPlannerTaskId(taskId.trim());
                 if (bcTask && bcTask.systemId) {
+                    if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
+                        summary.skipped += 1;
+                        continue;
+                    }
                     try {
                         await updateBcTaskWithSyncLock(bcClient, bcTask, {
                             plannerTaskId: "",
@@ -1929,6 +1952,17 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                     taskId: item[mapping.taskIdField],
                     taskNo: mapping.taskBcNoField ? item[mapping.taskBcNoField] : null,
                     projectId: item[mapping.taskProjectIdField],
+                });
+            }
+            continue;
+        }
+        if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
+            summary.skipped += 1;
+            if (requestId) {
+                logger.warn("Premium -> BC skipped (taskNo not in allowlist)", {
+                    requestId,
+                    projectNo: bcTask.projectNo,
+                    taskNo: bcTask.taskNo,
                 });
             }
             continue;
@@ -1998,6 +2032,7 @@ export async function syncPremiumTaskIds(
 ) {
     const requestId = options.requestId || "";
     const syncConfig = getPremiumSyncConfig();
+    const allowedTaskNumbers = buildAllowedTaskNumberSet(syncConfig);
     const mapping = getDataverseMappingConfig();
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
@@ -2040,6 +2075,10 @@ export async function syncPremiumTaskIds(
                 }
                 const bcTask = await bcClient.findProjectTaskByPlannerTaskId(taskId);
                 if (bcTask && bcTask.systemId) {
+                    if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
+                        summary.skipped += 1;
+                        continue;
+                    }
                     try {
                         await updateBcTaskWithSyncLock(bcClient, bcTask, {
                             plannerTaskId: "",
@@ -2074,6 +2113,10 @@ export async function syncPremiumTaskIds(
 
         const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
         if (!bcTask) {
+            summary.skipped += 1;
+            continue;
+        }
+        if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
             summary.skipped += 1;
             continue;
         }

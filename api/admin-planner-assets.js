@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { BusinessCentralClient } from "../lib/planner-sync/bc-client.js";
 import { DataverseClient } from "../lib/dataverse-client.js";
-import { getDataverseMappingConfig } from "../lib/premium-sync/config.js";
+import { getDataverseMappingConfig, getPremiumSyncConfig } from "../lib/premium-sync/config.js";
 import { getPremiumProjectUrlTemplate, getTenantIdForUrl } from "../lib/premium-sync/premium-url.js";
 import { syncBcToPremium } from "../lib/premium-sync/index.js";
 import { logger } from "../lib/planner-sync/logger.js";
@@ -94,6 +94,20 @@ function getGraphConfig() {
     const scope = process.env.MS_GRAPH_SCOPE || "https://graph.microsoft.com/.default";
     const groupId = process.env.PLANNER_GROUP_ID || "";
     return { tenantId, clientId, clientSecret, scope, groupId };
+}
+
+function parseTaskNumber(taskNo) {
+    const raw = String(taskNo || "");
+    const match = raw.match(/\d+/);
+    if (!match) return Number.NaN;
+    return Number(match[0]);
+}
+
+function isAllowedSyncTaskNo(taskNo, allowlist) {
+    if (!allowlist.size) return true;
+    const taskNumber = parseTaskNumber(taskNo);
+    if (!Number.isFinite(taskNumber)) return false;
+    return allowlist.has(taskNumber);
 }
 
 
@@ -257,6 +271,12 @@ export default async function handler(req, res) {
         try {
             const dataverse = new DataverseClient();
             const mapping = getDataverseMappingConfig();
+            const syncConfig = getPremiumSyncConfig();
+            const allowedTaskNumbers = new Set(
+                Array.isArray(syncConfig.allowedTaskNumbers)
+                    ? syncConfig.allowedTaskNumbers.filter((value) => Number.isFinite(value))
+                    : []
+            );
             const graphConfig = getGraphConfig();
             const msalApp = createGraphClient(graphConfig);
             const graphEnabled = Boolean(msalApp && graphConfig.groupId);
@@ -294,6 +314,7 @@ export default async function handler(req, res) {
             for (const task of bcTasks || []) {
                 const projectNo = (task?.projectNo || "").trim();
                 if (!projectNo) continue;
+                if (!isAllowedSyncTaskNo(task?.taskNo, allowedTaskNumbers)) continue;
                 const key = normalizeProjectNo(projectNo);
                 const entry = taskStats.get(key) || { projectNo, total: 0, linked: 0, lastSyncAt: "" };
                 entry.total += 1;
