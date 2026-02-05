@@ -743,11 +743,18 @@ async function getProjectTeamMemberId(
     }
 }
 
+function isDuplicateTeamMemberError(error: unknown) {
+    const message = (error as Error)?.message || String(error || "");
+    const normalized = message.toLowerCase();
+    return normalized.includes("duplicate resource") || normalized.includes("already a member");
+}
+
 async function createProjectTeamMember(
     dataverse: DataverseClient,
     projectId: string,
     resourceId: string,
-    name: string
+    name: string,
+    teamCache?: Map<string, string | null>
 ) {
     const lookups = await getProjectTeamLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
@@ -764,6 +771,14 @@ async function createProjectTeamMember(
         const created = await dataverse.create("msdyn_projectteams", entity);
         return created.entityId || null;
     } catch (error) {
+        if (isDuplicateTeamMemberError(error)) {
+            const existing = await getProjectTeamMemberId(dataverse, projectId, resourceId, teamCache || new Map());
+            if (existing) {
+                return existing;
+            }
+            logger.debug("Dataverse project team already exists", { projectId, resourceId });
+            return null;
+        }
         logger.warn("Dataverse project team create failed", { projectId, resourceId, error: (error as Error)?.message });
         return null;
     }
@@ -790,7 +805,7 @@ async function ensureAssignmentForTask(
     }
     let teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, options.teamCache);
     if (!teamId) {
-        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee);
+        teamId = await createProjectTeamMember(dataverse, projectId, resourceId, assignee, options.teamCache);
         if (teamId) {
             options.teamCache.set(`${projectId}:${resourceId}`, teamId);
         }
@@ -862,7 +877,8 @@ async function ensureProjectGroupAccess(
         dataverse,
         projectId,
         groupResource.id,
-        groupResource.name || "Planner Group"
+        groupResource.name || "Planner Group",
+        teamCache
     );
     return Boolean(created);
 }
@@ -882,7 +898,8 @@ async function ensureProjectResourceAccess(
         dataverse,
         projectId,
         resourceId,
-        resourceName || "Planner Resource"
+        resourceName || "Planner Resource",
+        teamCache
     );
     if (created) {
         teamCache.set(`${projectId}:${resourceId}`, created);
