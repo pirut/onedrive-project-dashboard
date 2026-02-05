@@ -341,6 +341,7 @@ export default async function handler(req, res) {
                 const total = stats.total || 0;
                 const linked = stats.linked || 0;
                 const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
                     projectNo,
                     description: project?.description || "",
@@ -350,7 +351,7 @@ export default async function handler(req, res) {
                     tasksLinked: linked,
                     lastSyncAt: stats.lastSyncAt || "",
                     syncState,
-                    hasPremiumProject: premiumProjectSet.has(key),
+                    hasPremiumProject,
                 });
             }
             for (const [key, stats] of taskStats.entries()) {
@@ -358,6 +359,7 @@ export default async function handler(req, res) {
                 const total = stats.total || 0;
                 const linked = stats.linked || 0;
                 const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
                     projectNo: stats.projectNo || key,
                     description: "",
@@ -367,7 +369,7 @@ export default async function handler(req, res) {
                     tasksLinked: linked,
                     lastSyncAt: stats.lastSyncAt || "",
                     syncState,
-                    hasPremiumProject: premiumProjectSet.has(key),
+                    hasPremiumProject,
                 });
             }
             const orgId = who && who.OrganizationId ? String(who.OrganizationId) : "";
