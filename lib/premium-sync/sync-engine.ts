@@ -17,6 +17,7 @@ const HEADING_TASK_SECTIONS = new Map<number, string | null>([
 
 const warnedNonGuidPlanProjects = new Set<string>();
 const warnedNonGuidTaskProjects = new Set<string>();
+const warnedDefaultBucketProjects = new Set<string>();
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
@@ -194,6 +195,27 @@ function isInvalidDefaultBucketError(error: unknown) {
     const message = (error as Error)?.message || String(error || "");
     const normalized = message.toLowerCase();
     return normalized.includes("e_invaliddefaultbucket") || normalized.includes("invalid default bucket");
+}
+
+async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId: string, bucketId: string) {
+    if (!projectId || !bucketId) return false;
+    const field = (await resolveLookupField(dataverse, "msdyn_project", "msdyn_projectbucket")) || "msdyn_defaultbucket";
+    const binding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
+    if (!binding) return false;
+    try {
+        await dataverse.update("msdyn_projects", projectId, { [`${field}@odata.bind`]: binding });
+        return true;
+    } catch (error) {
+        if (!warnedDefaultBucketProjects.has(projectId)) {
+            warnedDefaultBucketProjects.add(projectId);
+            logger.warn("Dataverse default bucket update failed", {
+                projectId,
+                field,
+                error: (error as Error)?.message,
+            });
+        }
+        return false;
+    }
 }
 
 function isStaleSyncLock(task: BcProjectTask, timeoutMinutes: number) {
@@ -474,10 +496,14 @@ async function getProjectBucketId(
         const bucketId = result.value[0]?.msdyn_projectbucketid;
         const resolved = typeof bucketId === "string" && bucketId.trim() ? bucketId.trim() : null;
         if (resolved) {
+            await ensureProjectDefaultBucket(dataverse, projectId, resolved);
             cache.set(projectId, resolved);
             return resolved;
         }
         const created = await createProjectBucket(dataverse, projectId, "General");
+        if (created) {
+            await ensureProjectDefaultBucket(dataverse, projectId, created);
+        }
         cache.set(projectId, created);
         return created;
     } catch (error) {
@@ -784,11 +810,6 @@ export async function resolveProjectFromBc(
             const match = result.value[0];
             return match;
         }
-    }
-
-    const allowCreate = Boolean(mapping.allowProjectCreate || options.forceCreate);
-    if (!allowCreate) {
-        return null;
     }
 
     let bcProject: BcProject | null = null;
