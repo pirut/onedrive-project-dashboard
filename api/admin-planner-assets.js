@@ -221,12 +221,16 @@ async function buildSyncedProjectSet(bcClient) {
 
 async function listDataverseProjects(dataverse, mapping) {
     const select = [mapping.projectIdField, mapping.projectTitleField, mapping.projectBcNoField, "modifiedon"].filter(Boolean);
-    const res = await dataverse.list(mapping.projectEntitySet, { select, top: 200 });
-    const items = Array.isArray(res.value) ? res.value : [];
-    if (!res.nextLink) return items;
-    let next = res.nextLink;
+    const params = new URLSearchParams();
+    if (select.length) params.set("$select", select.join(","));
+    const items = [];
+    let next = `/${mapping.projectEntitySet}${params.toString() ? `?${params.toString()}` : ""}`;
     while (next) {
-        const pageRes = await dataverse.request(next);
+        const pageRes = await dataverse.requestRaw(next, {
+            headers: {
+                Prefer: "odata.maxpagesize=200",
+            },
+        });
         const data = await pageRes.json();
         if (Array.isArray(data?.value)) items.push(...data.value);
         next = data?.["@odata.nextLink"] || null;
