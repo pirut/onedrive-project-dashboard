@@ -21,6 +21,12 @@ const warnedDefaultBucketProjects = new Set<string>();
 const defaultBucketFieldCache = { value: undefined as string | null | undefined };
 const warnedDefaultBucketFields = new Set<string>();
 
+type TaskIndex = {
+    byId: Set<string>;
+    byTaskNo: Map<string, string>;
+    byTitle: Map<string, string>;
+};
+
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
 }
@@ -197,6 +203,73 @@ function isInvalidDefaultBucketError(error: unknown) {
     const message = (error as Error)?.message || String(error || "");
     const normalized = message.toLowerCase();
     return normalized.includes("e_invaliddefaultbucket") || normalized.includes("invalid default bucket");
+}
+
+function createEmptyTaskIndex(): TaskIndex {
+    return { byId: new Set(), byTaskNo: new Map(), byTitle: new Map() };
+}
+
+function addToTaskIndex(index: TaskIndex | null | undefined, taskId: string, task: BcProjectTask, title?: string) {
+    if (!index || !taskId) return;
+    index.byId.add(taskId);
+    const taskNo = task.taskNo ? String(task.taskNo).trim() : "";
+    if (taskNo) {
+        index.byTaskNo.set(taskNo, taskId);
+    }
+    const safeTitle = title ? String(title).trim() : "";
+    if (safeTitle) {
+        index.byTitle.set(safeTitle.toLowerCase(), taskId);
+    }
+}
+
+async function loadProjectTaskIndex(
+    dataverse: DataverseClient,
+    projectId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+): Promise<TaskIndex> {
+    const index = createEmptyTaskIndex();
+    if (!projectId) return index;
+    const projectFilterField = mapping.taskProjectIdField || `${mapping.taskProjectLookupField}/${mapping.projectIdField}`;
+    if (!projectFilterField) return index;
+    const select = [mapping.taskIdField, mapping.taskBcNoField, mapping.taskTitleField].filter(Boolean) as string[];
+    const params = new URLSearchParams();
+    if (select.length) params.set("$select", select.join(","));
+    params.set("$filter", `${projectFilterField} eq ${formatODataGuid(projectId)}`);
+    try {
+        let next: string | null = `/${mapping.taskEntitySet}${params.toString() ? `?${params.toString()}` : ""}`;
+        while (next) {
+            const res = await dataverse.requestRaw(next, {
+                headers: {
+                    Prefer: "odata.maxpagesize=200",
+                },
+            });
+            const data = (await res.json()) as { value?: DataverseEntity[]; "@odata.nextLink"?: string };
+            const rows = Array.isArray(data?.value) ? data.value : [];
+            for (const row of rows) {
+                const id = row?.[mapping.taskIdField];
+                if (typeof id !== "string" || !id.trim()) continue;
+                const taskId = id.trim();
+                index.byId.add(taskId);
+                if (mapping.taskBcNoField) {
+                    const bcNo = row?.[mapping.taskBcNoField];
+                    if (typeof bcNo === "string" && bcNo.trim()) {
+                        index.byTaskNo.set(bcNo.trim(), taskId);
+                    }
+                }
+                const title = row?.[mapping.taskTitleField];
+                if (typeof title === "string" && title.trim()) {
+                    index.byTitle.set(title.trim().toLowerCase(), taskId);
+                }
+            }
+            next = data?.["@odata.nextLink"] || null;
+        }
+    } catch (error) {
+        logger.debug("Dataverse task index load failed; continuing without cache", {
+            projectId,
+            error: (error as Error)?.message,
+        });
+    }
+    return index;
 }
 
 async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId: string, bucketId: string) {
@@ -562,7 +635,7 @@ async function getBookableResourceIdByName(
         cache.set(key, resolved);
         return resolved;
     } catch (error) {
-        logger.warn("Dataverse resource lookup failed", { name, error: (error as Error)?.message });
+        logger.debug("Dataverse resource lookup failed", { name, error: (error as Error)?.message });
         cache.set(key, null);
         return null;
     }
@@ -592,7 +665,7 @@ async function findBookableResourceByAadObjectId(dataverse: DataverseClient, aad
             if (message.includes("Could not find a property named")) {
                 continue;
             }
-            logger.warn("Dataverse bookable resource lookup failed", { field, error: message });
+            logger.debug("Dataverse bookable resource lookup failed", { field, error: message });
         }
     }
     return null;
@@ -614,7 +687,7 @@ async function getBookableResourceById(
         cache.set(trimmed, record);
         return record;
     } catch (error) {
-        logger.warn("Dataverse resource lookup failed", { resourceId: trimmed, error: (error as Error)?.message });
+        logger.debug("Dataverse resource lookup failed", { resourceId: trimmed, error: (error as Error)?.message });
         cache.set(trimmed, null);
         return null;
     }
@@ -643,7 +716,7 @@ async function getProjectTeamMemberId(
         cache.set(key, resolved);
         return resolved;
     } catch (error) {
-        logger.warn("Dataverse project team lookup failed", { projectId, resourceId, error: (error as Error)?.message });
+        logger.debug("Dataverse project team lookup failed", { projectId, resourceId, error: (error as Error)?.message });
         cache.set(key, null);
         return null;
     }
@@ -691,7 +764,7 @@ async function ensureAssignmentForTask(
     if (!assignee) return;
     const resourceId = await getBookableResourceIdByName(dataverse, assignee, options.resourceCache);
     if (!resourceId) {
-        logger.warn("Dataverse resource not found for assignee", { projectId, taskId, assignee });
+        logger.debug("Dataverse resource not found for assignee", { projectId, taskId, assignee });
         return;
     }
     let teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, options.teamCache);
@@ -702,7 +775,7 @@ async function ensureAssignmentForTask(
         }
     }
     if (!teamId) {
-        logger.warn("Dataverse project team member missing for assignment", { projectId, taskId, assignee });
+        logger.debug("Dataverse project team member missing for assignment", { projectId, taskId, assignee });
         return;
     }
     const assignmentKey = `${taskId}:${teamId}`;
@@ -722,7 +795,7 @@ async function ensureAssignmentForTask(
             return;
         }
     } catch (error) {
-        logger.warn("Dataverse assignment lookup failed", { projectId, taskId, assignee, error: (error as Error)?.message });
+        logger.debug("Dataverse assignment lookup failed", { projectId, taskId, assignee, error: (error as Error)?.message });
     }
     const lookups = await getAssignmentLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
@@ -1245,9 +1318,12 @@ async function syncTaskToDataverse(
         preferPlanner?: boolean;
         plannerModifiedGraceMs?: number;
         skipCreate?: boolean;
+        taskIndex?: TaskIndex;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
+    const payloadTitle = payload[mapping.taskTitleField];
+    const titleKey = typeof payloadTitle === "string" && payloadTitle.trim() ? payloadTitle.trim().toLowerCase() : "";
     const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
     let taskId = existingId || "";
     if (taskId && !isGuid(taskId)) {
@@ -1255,7 +1331,9 @@ async function syncTaskToDataverse(
         taskId = "";
     }
 
-    if (taskId) {
+    if (taskId && options.taskIndex?.byId?.has(taskId)) {
+        // task already known for project
+    } else if (taskId) {
         const valid = await validateTaskIdForProject(dataverse, taskId, projectId, mapping);
         if (!valid) {
             logger.warn("Planner taskId invalid for project; will recreate", {
@@ -1270,13 +1348,22 @@ async function syncTaskToDataverse(
 
     let existingTask: DataverseEntity | null = null;
     if (!taskId && task.taskNo) {
-        existingTask = await findDataverseTaskByBcNo(dataverse, projectId, String(task.taskNo), mapping);
-        taskId = resolveTaskId(existingTask, mapping) || "";
+        const indexed = options.taskIndex?.byTaskNo?.get(String(task.taskNo).trim());
+        if (indexed) {
+            taskId = indexed;
+        } else {
+            existingTask = await findDataverseTaskByBcNo(dataverse, projectId, String(task.taskNo), mapping);
+            taskId = resolveTaskId(existingTask, mapping) || "";
+        }
     }
 
     if (!taskId && !options.taskOnly) {
-        existingTask = await findDataverseTaskByTitle(dataverse, projectId, payload[mapping.taskTitleField] as string, mapping);
-        taskId = resolveTaskId(existingTask, mapping) || "";
+        if (titleKey && options.taskIndex?.byTitle?.has(titleKey)) {
+            taskId = options.taskIndex.byTitle.get(titleKey) || "";
+        } else {
+            existingTask = await findDataverseTaskByTitle(dataverse, projectId, payload[mapping.taskTitleField] as string, mapping);
+            taskId = resolveTaskId(existingTask, mapping) || "";
+        }
     }
 
     if (taskId) {
@@ -1298,7 +1385,7 @@ async function syncTaskToDataverse(
                 if (!bcStart) startOverride = snapshot.start ?? null;
                 if (!bcFinish) finishOverride = snapshot.finish ?? null;
             } catch (error) {
-                logger.warn("Dataverse schedule snapshot lookup failed; proceeding with BC update", {
+                logger.debug("Dataverse schedule snapshot lookup failed; proceeding with BC update", {
                     requestId: options.requestId,
                     projectNo: task.projectNo,
                     taskNo: task.taskNo,
@@ -1327,7 +1414,7 @@ async function syncTaskToDataverse(
                     return { action: "skipped", taskId };
                 }
             } catch (error) {
-                logger.warn("Dataverse modified check failed; proceeding with BC update", {
+                logger.debug("Dataverse modified check failed; proceeding with BC update", {
                     requestId: options.requestId,
                     projectNo: task.projectNo,
                     taskNo: task.taskNo,
@@ -1365,30 +1452,33 @@ async function syncTaskToDataverse(
                     lastPlannerEtag: task.lastPlannerEtag || "",
                     lastSyncAt: new Date().toISOString(),
                 };
-                return { action: "updated", taskId, pendingUpdate: { task, updates } };
-            }
-            const updates = {
-                plannerTaskId: taskId,
-                plannerPlanId: projectId,
-                lastPlannerEtag: task.lastPlannerEtag || "",
-                lastSyncAt: new Date().toISOString(),
-            };
+            addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
             return { action: "updated", taskId, pendingUpdate: { task, updates } };
         }
+        const updates = {
+            plannerTaskId: taskId,
+            plannerPlanId: projectId,
+            lastPlannerEtag: task.lastPlannerEtag || "",
+            lastSyncAt: new Date().toISOString(),
+        };
+        addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
+        return { action: "updated", taskId, pendingUpdate: { task, updates } };
+    }
 
         if (options.taskOnly) {
             const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
             await markPremiumTaskWrite(taskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
             const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
-            const updates = {
-                plannerTaskId: taskId,
-                plannerPlanId: projectId,
-                lastPlannerEtag: updateResult.etag || task.lastPlannerEtag || "",
-                lastSyncAt: new Date().toISOString(),
-            };
-            await updateBcTaskWithSyncLock(bcClient, task, updates);
-            return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
-        }
+        const updates = {
+            plannerTaskId: taskId,
+            plannerPlanId: projectId,
+            lastPlannerEtag: updateResult.etag || task.lastPlannerEtag || "",
+            lastSyncAt: new Date().toISOString(),
+        };
+        await updateBcTaskWithSyncLock(bcClient, task, updates);
+        addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
+        return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
+    }
 
         const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
         try {
@@ -1401,6 +1491,7 @@ async function syncTaskToDataverse(
                 lastSyncAt: new Date().toISOString(),
             };
             await updateBcTaskWithSyncLock(bcClient, task, updates);
+            addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
             return { action: "updated", taskId };
         } catch (error) {
             if (isDirectTaskWriteBlocked(error)) {
@@ -1462,6 +1553,7 @@ async function syncTaskToDataverse(
             lastPlannerEtag: "",
             lastSyncAt: new Date().toISOString(),
         };
+        addToTaskIndex(options.taskIndex, newTaskId, task, payloadTitle as string);
         return { action: "created", taskId: newTaskId, pendingUpdate: { task, updates } };
     }
 
@@ -1477,6 +1569,7 @@ async function syncTaskToDataverse(
             lastPlannerEtag: created.etag,
             lastSyncAt: new Date().toISOString(),
         });
+        addToTaskIndex(options.taskIndex, created.entityId, task, payloadTitle as string);
         await ensureAssignmentForTask(dataverse, task, projectId, created.entityId, {
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
@@ -1576,7 +1669,7 @@ export async function syncBcToPremium(
                 await saveBcProjectChangeCursor("premium", lastSeq);
             }
         } catch (error) {
-            logger.warn("BC change feed unavailable; falling back to project list", { error: (error as Error)?.message });
+            logger.debug("BC change feed unavailable; falling back to project list", { error: (error as Error)?.message });
         }
     }
 
@@ -1643,7 +1736,7 @@ export async function syncBcToPremium(
             try {
                 await dataverse.getById(mapping.projectEntitySet, projectId, [mapping.projectIdField]);
             } catch (error) {
-                logger.warn("Cached Dataverse project lookup failed", { requestId, projectNo: projNo, projectId, error: (error as Error)?.message });
+                logger.debug("Cached Dataverse project lookup failed", { requestId, projectNo: projNo, projectId, error: (error as Error)?.message });
                 projectId = "";
             }
         }
@@ -1658,6 +1751,8 @@ export async function syncBcToPremium(
             result.errors += 1;
             continue;
         }
+
+        const taskIndex = await loadProjectTaskIndex(dataverse, projectId, mapping);
 
         const pendingUpdates: Array<{ task: BcProjectTask; updates: Record<string, unknown> }> = [];
         const bucketCache = new Map<string, string | null>();
@@ -1797,6 +1892,7 @@ export async function syncBcToPremium(
                         },
                         preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                         plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                        taskIndex,
                     });
                     if (usingOperationSet) {
                         if (res.action === "created") scheduleCounts.created += 1;
@@ -1824,8 +1920,10 @@ export async function syncBcToPremium(
             if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
                 try {
                     await dataverse.executeOperationSet(operationSetId);
-                    for (const entry of pendingUpdates) {
-                        await updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates);
+                    if (pendingUpdates.length) {
+                        await Promise.all(
+                            pendingUpdates.map((entry) => updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates))
+                        );
                     }
                     result.created += scheduleCounts.created;
                     result.updated += scheduleCounts.updated;
@@ -1864,6 +1962,7 @@ export async function syncBcToPremium(
                                     preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                                     plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
                                     skipCreate,
+                                    taskIndex,
                                 });
                                 if (res.action === "created") result.created += 1;
                                 else if (res.action === "updated") result.updated += 1;
