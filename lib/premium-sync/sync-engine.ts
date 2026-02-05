@@ -849,14 +849,22 @@ export async function resolveProjectFromBc(
     const payload: Record<string, unknown> = {
         [mapping.projectTitleField]: title,
     };
-    if (mapping.projectBcNoField) {
-        payload[mapping.projectBcNoField] = normalized;
-    }
 
-    const created = await dataverse.create(mapping.projectEntitySet, payload);
-    if (!created.entityId) return null;
+    const created = await dataverse.createProjectV1(payload);
+    if (!created.projectId) return null;
+    if (mapping.projectBcNoField) {
+        try {
+            await dataverse.update(mapping.projectEntitySet, created.projectId, { [mapping.projectBcNoField]: normalized });
+        } catch (error) {
+            logger.warn("Dataverse project BC No update failed", {
+                projectNo: normalized,
+                projectId: created.projectId,
+                error: (error as Error)?.message,
+            });
+        }
+    }
     return {
-        [mapping.projectIdField]: created.entityId,
+        [mapping.projectIdField]: created.projectId,
         [mapping.projectTitleField]: title,
         ...(mapping.projectBcNoField ? { [mapping.projectBcNoField]: normalized } : {}),
     } as DataverseEntity;
