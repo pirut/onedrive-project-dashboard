@@ -208,6 +208,7 @@ function renderPage() {
       </div>
       <div class="row" style="margin-top:8px">
         <button class="btn" id="bc-projects-sync">Sync selected (BC → Premium)</button>
+        <button class="btn-danger" id="bc-projects-unlink">Unlink selected</button>
         <button class="btn-ghost" id="bc-projects-select-all">Select all (filtered)</button>
         <button class="btn-ghost" id="bc-projects-clear">Clear</button>
         <span class="small muted" id="bc-projects-count">0 selected</span>

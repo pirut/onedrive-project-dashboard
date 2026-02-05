@@ -500,6 +500,74 @@ export default async function handler(req, res) {
                 return;
             }
 
+            if (action === "clear-bc-links") {
+                const projectNos = Array.isArray(body?.projectNos)
+                    ? body.projectNos.map((value) => String(value || "").trim()).filter(Boolean)
+                    : [];
+                if (!projectNos.length) {
+                    res.status(400).json({ ok: false, error: "projectNos required" });
+                    return;
+                }
+                const bcClient = new BusinessCentralClient();
+                const results = [];
+                let total = 0;
+                let cleared = 0;
+                let skipped = 0;
+                let errors = 0;
+                for (const projectNo of projectNos) {
+                    const summary = { projectNo, total: 0, cleared: 0, skipped: 0, errors: 0 };
+                    try {
+                        const filter = `projectNo eq '${escapeODataString(projectNo)}'`;
+                        const tasks = await bcClient.listProjectTasks(filter);
+                        for (const task of tasks || []) {
+                            summary.total += 1;
+                            total += 1;
+                            const hasLink = Boolean(
+                                (task?.plannerPlanId || "").trim() ||
+                                (task?.plannerTaskId || "").trim() ||
+                                (task?.plannerBucket || "").trim() ||
+                                (task?.lastPlannerEtag || "").trim()
+                            );
+                            if (!hasLink) {
+                                summary.skipped += 1;
+                                skipped += 1;
+                                continue;
+                            }
+                            if (!task?.systemId) {
+                                summary.errors += 1;
+                                errors += 1;
+                                continue;
+                            }
+                            try {
+                                await bcClient.patchProjectTask(task.systemId, {
+                                    plannerTaskId: "",
+                                    plannerPlanId: "",
+                                    plannerBucket: "",
+                                    lastPlannerEtag: "",
+                                    syncLock: false,
+                                });
+                                summary.cleared += 1;
+                                cleared += 1;
+                            } catch (error) {
+                                summary.errors += 1;
+                                errors += 1;
+                            }
+                        }
+                    } catch (error) {
+                        summary.errors += 1;
+                        errors += 1;
+                    }
+                    results.push(summary);
+                }
+                res.status(200).json({
+                    ok: true,
+                    projectNos,
+                    totals: { total, cleared, skipped, errors },
+                    results,
+                });
+                return;
+            }
+
             if (action === "recreate-all") {
                 const bcClient = new BusinessCentralClient();
                 let projectNos = Array.isArray(body?.projectNos)
