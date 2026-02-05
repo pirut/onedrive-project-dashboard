@@ -21,7 +21,7 @@ const warnedDefaultBucketProjects = new Set<string>();
 const defaultBucketFieldCache = { value: undefined as string | null | undefined };
 const warnedDefaultBucketFields = new Set<string>();
 
-const DEFAULT_BUCKET_FIELD_CANDIDATES = ["msdyn_defaultbucket", "msdyn_defaultbucketid"];
+const DEFAULT_BUCKET_FIELD_CANDIDATES = ["msdyn_projectbucket", "msdyn_defaultbucket", "msdyn_defaultbucketid"];
 
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
