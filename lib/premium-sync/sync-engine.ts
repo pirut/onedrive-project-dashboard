@@ -21,8 +21,6 @@ const warnedDefaultBucketProjects = new Set<string>();
 const defaultBucketFieldCache = { value: undefined as string | null | undefined };
 const warnedDefaultBucketFields = new Set<string>();
 
-const DEFAULT_BUCKET_FIELD_CANDIDATES = ["msdyn_projectbucket", "msdyn_defaultbucket", "msdyn_defaultbucketid"];
-
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
 }
@@ -205,13 +203,17 @@ async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId:
     if (!projectId || !bucketId) return false;
     const binding = dataverse.buildLookupBinding("msdyn_projectbuckets", bucketId);
     if (!binding) return false;
-    if (defaultBucketFieldCache.value === undefined) {
+    const override = (process.env.DATAVERSE_DEFAULT_BUCKET_FIELD || "").trim();
+    if (defaultBucketFieldCache.value === undefined && !override) {
         defaultBucketFieldCache.value = (await resolveLookupField(dataverse, "msdyn_project", "msdyn_projectbucket")) || null;
     }
     const candidates = [];
-    if (defaultBucketFieldCache.value) candidates.push(defaultBucketFieldCache.value);
-    for (const candidate of DEFAULT_BUCKET_FIELD_CANDIDATES) {
-        if (!candidates.includes(candidate)) candidates.push(candidate);
+    if (override) {
+        candidates.push(override);
+    } else if (defaultBucketFieldCache.value) {
+        candidates.push(defaultBucketFieldCache.value);
+    } else {
+        return false;
     }
     let lastError: string | null = null;
     for (const field of candidates) {
@@ -222,9 +224,6 @@ async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId:
         } catch (error) {
             const message = (error as Error)?.message || String(error);
             lastError = message;
-            if (message.toLowerCase().includes("undeclared property")) {
-                continue;
-            }
             if (!warnedDefaultBucketFields.has(field)) {
                 warnedDefaultBucketFields.add(field);
                 logger.warn("Dataverse default bucket update failed", { projectId, field, error: message });
@@ -232,11 +231,11 @@ async function ensureProjectDefaultBucket(dataverse: DataverseClient, projectId:
             return false;
         }
     }
-    if (!warnedDefaultBucketProjects.has(projectId)) {
+    if (override && !warnedDefaultBucketProjects.has(projectId)) {
         warnedDefaultBucketProjects.add(projectId);
-        logger.warn("Dataverse default bucket update failed (no valid field)", {
+        logger.warn("Dataverse default bucket update failed (override)", {
             projectId,
-            tried: candidates,
+            field: override,
             error: lastError || "Unknown error",
         });
     }
