@@ -869,10 +869,14 @@ function buildTaskPayload(
     const title = buildTaskTitle(task);
     payload[mapping.taskTitleField] = title;
 
-    const start = resolveTaskDate(task.manualStartDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || null);
+    const start = resolveTaskDate(task.manualStartDate || task.startDate || null);
+    const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
     if (start) payload[mapping.taskStartField] = start;
-    if (finish) payload[mapping.taskFinishField] = finish;
+    if (finish) {
+        if (!start || Date.parse(finish) >= Date.parse(start)) {
+            payload[mapping.taskFinishField] = finish;
+        }
+    }
 
     const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) payload[mapping.taskPercentField] = percent;
@@ -1569,9 +1573,22 @@ export async function syncBcToPremium(
         const resourceNameCache = new Map<string, { id: string; name: string } | null>();
         const teamCache = new Map<string, string | null>();
         const assignmentCache = new Set<string>();
+        const scheduleTasks: BcProjectTask[] = [];
+        const scheduleCounts = { created: 0, updated: 0, skipped: 0 };
         let useScheduleApi = syncConfig.useScheduleApi;
         let operationSetId = "";
         let operationSetTouched = false;
+        if (useScheduleApi) {
+            const bucketId = await getProjectBucketId(dataverse, projectId, bucketCache);
+            if (!bucketId) {
+                useScheduleApi = false;
+                logger.warn("Dataverse bucket unavailable; falling back to direct updates", {
+                    requestId,
+                    projectNo: projNo,
+                    projectId,
+                });
+            }
+        }
         if (useScheduleApi) {
             try {
                 operationSetId = await dataverse.createOperationSet(
@@ -1648,55 +1665,65 @@ export async function syncBcToPremium(
                 continue;
             }
 
-        for (const task of sorted) {
-            const skipForSection = shouldSkipTaskForSection(task, currentSection);
-            const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
-            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
-            if (!isTarget) {
-                continue;
-            }
-            result.tasks += 1;
-            if (!options.taskOnly && skipForSection) {
-                result.skipped += 1;
-                continue;
-            }
-            const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
-            if (cleanTask.syncLock) {
-                result.skipped += 1;
-                continue;
-            }
-            try {
-            const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                requestId,
-                useScheduleApi,
-                operationSetId: useScheduleApi ? operationSetId : undefined,
-                bucketCache,
-                resourceCache,
-                teamCache,
-                assignmentCache,
-                taskOnly: options.taskOnly,
-                touchOperationSet: () => {
-                    operationSetTouched = true;
-                },
-                preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
-                plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
-            });
-                if (res.action === "created") result.created += 1;
-                else if (res.action === "updated") result.updated += 1;
-                else result.skipped += 1;
-                if (res.pendingUpdate) {
-                    pendingUpdates.push(res.pendingUpdate);
+            for (const task of sorted) {
+                const skipForSection = shouldSkipTaskForSection(task, currentSection);
+                const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
+                const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+                if (!isTarget) {
+                    continue;
                 }
-            } catch (error) {
-                logger.warn("Premium task sync failed", {
-                    requestId,
-                    projectNo: projNo,
-                    taskNo: cleanTask.taskNo,
-                    error: (error as Error)?.message,
-                });
-                result.errors += 1;
+                result.tasks += 1;
+                if (!options.taskOnly && skipForSection) {
+                    result.skipped += 1;
+                    continue;
+                }
+                const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
+                if (cleanTask.syncLock) {
+                    result.skipped += 1;
+                    continue;
+                }
+                try {
+                    const usingOperationSet = Boolean(useScheduleApi && operationSetId);
+                    if (usingOperationSet) {
+                        scheduleTasks.push(cleanTask);
+                    }
+                    const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                        requestId,
+                        useScheduleApi,
+                        operationSetId: useScheduleApi ? operationSetId : undefined,
+                        bucketCache,
+                        resourceCache,
+                        teamCache,
+                        assignmentCache,
+                        taskOnly: options.taskOnly,
+                        touchOperationSet: () => {
+                            operationSetTouched = true;
+                        },
+                        preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
+                        plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                    });
+                    if (usingOperationSet) {
+                        if (res.action === "created") scheduleCounts.created += 1;
+                        else if (res.action === "updated") scheduleCounts.updated += 1;
+                        else scheduleCounts.skipped += 1;
+                    } else {
+                        if (res.action === "created") result.created += 1;
+                        else if (res.action === "updated") result.updated += 1;
+                        else result.skipped += 1;
+                    }
+                    if (res.pendingUpdate) {
+                        pendingUpdates.push(res.pendingUpdate);
+                    }
+                } catch (error) {
+                    logger.warn("Premium task sync failed", {
+                        requestId,
+                        projectNo: projNo,
+                        taskNo: cleanTask.taskNo,
+                        error: (error as Error)?.message,
+                    });
+                    result.errors += 1;
+                }
             }
-        }
 
             if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
                 try {
@@ -1704,13 +1731,50 @@ export async function syncBcToPremium(
                     for (const entry of pendingUpdates) {
                         await updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates);
                     }
+                    result.created += scheduleCounts.created;
+                    result.updated += scheduleCounts.updated;
+                    result.skipped += scheduleCounts.skipped;
                 } catch (error) {
                     logger.warn("Dataverse schedule execute failed", {
                         requestId,
                         projectNo: projNo,
                         error: (error as Error)?.message,
                     });
-                    result.errors += pendingUpdates.length;
+                    if (scheduleTasks.length) {
+                        logger.warn("Retrying tasks via direct Dataverse API", {
+                            requestId,
+                            projectNo: projNo,
+                            count: scheduleTasks.length,
+                        });
+                        for (const task of scheduleTasks) {
+                            try {
+                                const res = await syncTaskToDataverse(bcClient, dataverse, task, projectId, mapping, {
+                                    requestId,
+                                    useScheduleApi: false,
+                                    operationSetId: undefined,
+                                    bucketCache,
+                                    resourceCache,
+                                    teamCache,
+                                    assignmentCache,
+                                    taskOnly: options.taskOnly,
+                                    touchOperationSet: undefined,
+                                    preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
+                                    plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                                });
+                                if (res.action === "created") result.created += 1;
+                                else if (res.action === "updated") result.updated += 1;
+                                else result.skipped += 1;
+                            } catch (retryError) {
+                                result.errors += 1;
+                                logger.warn("Premium task direct retry failed", {
+                                    requestId,
+                                    projectNo: projNo,
+                                    taskNo: task.taskNo,
+                                    error: (retryError as Error)?.message,
+                                });
+                            }
+                        }
+                    }
                 }
             }
 

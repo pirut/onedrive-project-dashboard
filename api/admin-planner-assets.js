@@ -7,6 +7,7 @@ import { getDataverseMappingConfig } from "../lib/premium-sync/config.js";
 import { getPremiumProjectUrlTemplate, getTenantIdForUrl } from "../lib/premium-sync/premium-url.js";
 import { syncBcToPremium } from "../lib/premium-sync/index.js";
 import { logger } from "../lib/planner-sync/logger.js";
+import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../lib/planner-sync/project-sync-store.js";
 
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || "";
 
@@ -259,13 +260,95 @@ export default async function handler(req, res) {
             const graphConfig = getGraphConfig();
             const msalApp = createGraphClient(graphConfig);
             const graphEnabled = Boolean(msalApp && graphConfig.groupId);
+            const bcClient = new BusinessCentralClient();
             const graphPlansPromise = graphEnabled ? listGraphPlans(graphConfig, msalApp) : Promise.resolve([]);
             const whoPromise = dataverse.whoAmI().catch(() => null);
-            const [dataverseProjects, graphPlans, who] = await Promise.all([
+            const bcProjectsPromise = bcClient.listProjects().catch((error) => {
+                logger.warn("BC project list failed", { error: error?.message || String(error) });
+                return [];
+            });
+            const bcTasksPromise = bcClient.listProjectTasks().catch((error) => {
+                logger.warn("BC task list failed", { error: error?.message || String(error) });
+                return [];
+            });
+            const syncSettingsPromise = listProjectSyncSettings().catch(() => []);
+            const [dataverseProjects, graphPlans, who, bcProjectsRaw, bcTasks, syncSettings] = await Promise.all([
                 listDataverseProjects(dataverse, mapping),
                 graphPlansPromise,
                 whoPromise,
+                bcProjectsPromise,
+                bcTasksPromise,
+                syncSettingsPromise,
             ]);
+            const disabledSet = buildDisabledProjectSet(syncSettings);
+            const premiumProjectSet = new Set();
+            if (mapping.projectBcNoField) {
+                for (const project of dataverseProjects || []) {
+                    const bcNo = project?.[mapping.projectBcNoField];
+                    if (typeof bcNo === "string" && bcNo.trim()) {
+                        premiumProjectSet.add(normalizeProjectNo(bcNo));
+                    }
+                }
+            }
+            const taskStats = new Map();
+            for (const task of bcTasks || []) {
+                const projectNo = (task?.projectNo || "").trim();
+                if (!projectNo) continue;
+                const key = normalizeProjectNo(projectNo);
+                const entry = taskStats.get(key) || { projectNo, total: 0, linked: 0, lastSyncAt: "" };
+                entry.total += 1;
+                const planId = (task?.plannerPlanId || "").trim();
+                if (planId && isGuid(planId)) {
+                    entry.linked += 1;
+                }
+                const lastSyncAt = typeof task?.lastSyncAt === "string" ? task.lastSyncAt : "";
+                if (lastSyncAt) {
+                    if (!entry.lastSyncAt || Date.parse(lastSyncAt) > Date.parse(entry.lastSyncAt)) {
+                        entry.lastSyncAt = lastSyncAt;
+                    }
+                }
+                taskStats.set(key, entry);
+            }
+            const bcProjects = [];
+            const seen = new Set();
+            for (const project of bcProjectsRaw || []) {
+                const projectNo = (project?.projectNo || "").trim();
+                if (!projectNo) continue;
+                const key = normalizeProjectNo(projectNo);
+                seen.add(key);
+                const stats = taskStats.get(key) || { total: 0, linked: 0, lastSyncAt: "" };
+                const total = stats.total || 0;
+                const linked = stats.linked || 0;
+                const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                bcProjects.push({
+                    projectNo,
+                    description: project?.description || "",
+                    status: project?.status || "",
+                    syncEnabled: !disabledSet.has(key),
+                    tasksTotal: total,
+                    tasksLinked: linked,
+                    lastSyncAt: stats.lastSyncAt || "",
+                    syncState,
+                    hasPremiumProject: premiumProjectSet.has(key),
+                });
+            }
+            for (const [key, stats] of taskStats.entries()) {
+                if (seen.has(key)) continue;
+                const total = stats.total || 0;
+                const linked = stats.linked || 0;
+                const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                bcProjects.push({
+                    projectNo: stats.projectNo || key,
+                    description: "",
+                    status: "",
+                    syncEnabled: !disabledSet.has(key),
+                    tasksTotal: total,
+                    tasksLinked: linked,
+                    lastSyncAt: stats.lastSyncAt || "",
+                    syncState,
+                    hasPremiumProject: premiumProjectSet.has(key),
+                });
+            }
             const orgId = who && who.OrganizationId ? String(who.OrganizationId) : "";
             res.status(200).json({
                 ok: true,
@@ -273,6 +356,7 @@ export default async function handler(req, res) {
                 dataverseProjects,
                 graphPlans,
                 graphEnabled,
+                bcProjects,
                 projectUrlTemplate: getPremiumProjectUrlTemplate({ tenantId: getTenantIdForUrl(), orgId }),
             });
         } catch (error) {
@@ -368,6 +452,27 @@ export default async function handler(req, res) {
                 return;
             }
 
+            if (action === "sync-bc-projects") {
+                const projectNos = Array.isArray(body?.projectNos)
+                    ? body.projectNos.map((value) => String(value || "").trim()).filter(Boolean)
+                    : [];
+                if (!projectNos.length) {
+                    res.status(400).json({ ok: false, error: "projectNos required" });
+                    return;
+                }
+                const requestId = body?.requestId ? String(body.requestId) : undefined;
+                const skipProjectAccess = body?.skipProjectAccess !== false;
+                const forceProjectCreate = body?.forceProjectCreate !== false;
+                const result = await syncBcToPremium(undefined, {
+                    requestId,
+                    projectNos,
+                    forceProjectCreate,
+                    skipProjectAccess,
+                });
+                res.status(200).json({ ok: true, projectNos, result });
+                return;
+            }
+
             if (action === "recreate-all") {
                 const bcClient = new BusinessCentralClient();
                 let projectNos = Array.isArray(body?.projectNos)
@@ -385,10 +490,12 @@ export default async function handler(req, res) {
                     projectNos = projectNos.filter((projectNo) => !synced.has(projectNo));
                 }
                 const requestId = body?.requestId ? String(body.requestId) : undefined;
+                const skipProjectAccess = body?.skipProjectAccess === true;
                 const result = await syncBcToPremium(undefined, {
                     requestId,
                     projectNos,
                     forceProjectCreate: true,
+                    skipProjectAccess,
                 });
                 res.status(200).json({
                     ok: true,

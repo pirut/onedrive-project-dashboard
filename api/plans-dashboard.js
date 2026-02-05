@@ -202,6 +202,39 @@ function renderPage() {
     </div>
 
     <div class="panel">
+      <h2>BC Projects Sync Status</h2>
+      <div class="row">
+        <input id="bc-projects-filter" placeholder="Filter by project no, description, or status..." />
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" id="bc-projects-sync">Sync selected (BC → Premium)</button>
+        <button class="btn-ghost" id="bc-projects-select-all">Select all (filtered)</button>
+        <button class="btn-ghost" id="bc-projects-clear">Clear</button>
+        <span class="small muted" id="bc-projects-count">0 selected</span>
+      </div>
+      <div id="bc-projects-status" class="small muted" style="margin-top:8px">Loading BC projects…</div>
+      <pre id="bc-projects-output" class="log" style="display:none"></pre>
+      <table>
+        <thead>
+          <tr>
+            <th>Select</th>
+            <th>Project</th>
+            <th>Description</th>
+            <th>Status</th>
+            <th>Sync</th>
+            <th>Tasks</th>
+            <th>Last Sync</th>
+            <th>Premium</th>
+          </tr>
+        </thead>
+        <tbody id="bc-projects-tbody">
+          <tr><td colspan="8" class="muted">Loading…</td></tr>
+        </tbody>
+      </table>
+      <div class="small muted" style="margin-top:8px">Sync uses BC → Premium with project creation enabled.</div>
+    </div>
+
+    <div class="panel">
       <h2>Filter + Bulk Actions</h2>
       <div class="row">
         <input id="plans-filter" placeholder="Filter by title, ID, BC No..." />
