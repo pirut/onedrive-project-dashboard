@@ -205,6 +205,27 @@ function isInvalidDefaultBucketError(error: unknown) {
     return normalized.includes("e_invaliddefaultbucket") || normalized.includes("invalid default bucket");
 }
 
+async function runWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    handler: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+    if (!items.length) return [];
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const results: R[] = new Array(items.length);
+    let nextIndex = 0;
+    const workers = new Array(Math.min(safeLimit, items.length)).fill(0).map(async () => {
+        while (true) {
+            const index = nextIndex;
+            if (index >= items.length) return;
+            nextIndex += 1;
+            results[index] = await handler(items[index], index);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
+
 function createEmptyTaskIndex(): TaskIndex {
     return { byId: new Set(), byTaskNo: new Map(), byTitle: new Map() };
 }
@@ -1846,76 +1867,88 @@ export async function syncBcToPremium(
                 }
             }
 
-            if (!sorted.length) {
-                result.projects += 1;
-                result.projectNos.push(projNo);
+        if (!sorted.length) {
+            result.projects += 1;
+            result.projectNos.push(projNo);
+            continue;
+        }
+
+        const toSync: BcProjectTask[] = [];
+        for (const task of sorted) {
+            const skipForSection = shouldSkipTaskForSection(task, currentSection);
+            const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
+            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+            if (!isTarget) {
                 continue;
             }
-
-            for (const task of sorted) {
-                const skipForSection = shouldSkipTaskForSection(task, currentSection);
-                const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
-                const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
-                if (!isTarget) {
-                    continue;
-                }
-                result.tasks += 1;
-                if (!options.taskOnly && skipForSection) {
-                    result.skipped += 1;
-                    continue;
-                }
-                if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) {
-                    result.skipped += 1;
-                    continue;
-                }
-                const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
-                if (cleanTask.syncLock) {
-                    result.skipped += 1;
-                    continue;
-                }
-                try {
-                    const usingOperationSet = Boolean(useScheduleApi && operationSetId);
-                    if (usingOperationSet) {
-                        scheduleTasks.push(cleanTask);
-                    }
-                    const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                        requestId,
-                        useScheduleApi,
-                        operationSetId: useScheduleApi ? operationSetId : undefined,
-                        bucketCache,
-                        resourceCache,
-                        teamCache,
-                        assignmentCache,
-                        taskOnly: options.taskOnly,
-                        touchOperationSet: () => {
-                            operationSetTouched = true;
-                        },
-                        preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
-                        plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
-                        taskIndex,
-                    });
-                    if (usingOperationSet) {
-                        if (res.action === "created") scheduleCounts.created += 1;
-                        else if (res.action === "updated") scheduleCounts.updated += 1;
-                        else scheduleCounts.skipped += 1;
-                    } else {
-                        if (res.action === "created") result.created += 1;
-                        else if (res.action === "updated") result.updated += 1;
-                        else result.skipped += 1;
-                    }
-                    if (res.pendingUpdate) {
-                        pendingUpdates.push(res.pendingUpdate);
-                    }
-                } catch (error) {
-                    logger.warn("Premium task sync failed", {
-                        requestId,
-                        projectNo: projNo,
-                        taskNo: cleanTask.taskNo,
-                        error: (error as Error)?.message,
-                    });
-                    result.errors += 1;
-                }
+            result.tasks += 1;
+            if (!options.taskOnly && skipForSection) {
+                result.skipped += 1;
+                continue;
             }
+            if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) {
+                result.skipped += 1;
+                continue;
+            }
+            toSync.push(task);
+        }
+
+        const usingOperationSet = Boolean(useScheduleApi && operationSetId);
+        const outcomes = await runWithConcurrency(toSync, syncConfig.taskConcurrency, async (task) => {
+            const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
+            if (cleanTask.syncLock) {
+                return { action: "skipped" as const, task: cleanTask };
+            }
+            if (usingOperationSet) {
+                scheduleTasks.push(cleanTask);
+            }
+            try {
+                const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                    requestId,
+                    useScheduleApi,
+                    operationSetId: useScheduleApi ? operationSetId : undefined,
+                    bucketCache,
+                    resourceCache,
+                    teamCache,
+                    assignmentCache,
+                    taskOnly: options.taskOnly,
+                    touchOperationSet: () => {
+                        operationSetTouched = true;
+                    },
+                    preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
+                    plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                    taskIndex,
+                });
+                if (res.pendingUpdate) {
+                    pendingUpdates.push(res.pendingUpdate);
+                }
+                return { action: res.action as "created" | "updated" | "skipped" | "error", task: cleanTask };
+            } catch (error) {
+                logger.warn("Premium task sync failed", {
+                    requestId,
+                    projectNo: projNo,
+                    taskNo: cleanTask.taskNo,
+                    error: (error as Error)?.message,
+                });
+                return { action: "error" as const, task: cleanTask };
+            }
+        });
+
+        for (const outcome of outcomes) {
+            if (outcome.action === "error") {
+                result.errors += 1;
+                continue;
+            }
+            if (usingOperationSet) {
+                if (outcome.action === "created") scheduleCounts.created += 1;
+                else if (outcome.action === "updated") scheduleCounts.updated += 1;
+                else scheduleCounts.skipped += 1;
+            } else {
+                if (outcome.action === "created") result.created += 1;
+                else if (outcome.action === "updated") result.updated += 1;
+                else result.skipped += 1;
+            }
+        }
 
             if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
                 try {

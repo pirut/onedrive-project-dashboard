@@ -48,6 +48,7 @@ export function getPremiumSyncConfig() {
         bcModifiedGraceMs: readNumberEnv("SYNC_BC_MODIFIED_GRACE_MS", 2000),
         premiumModifiedGraceMs: readNumberEnv("SYNC_PREMIUM_MODIFIED_GRACE_MS", 2000),
         syncLockTimeoutMinutes: readNumberEnv("SYNC_LOCK_TIMEOUT_MINUTES", 30),
+        taskConcurrency: Math.max(1, Math.floor(readNumberEnv("SYNC_TASK_CONCURRENCY", 6))),
         deleteBehavior: (readEnv("PREMIUM_DELETE_BEHAVIOR") || "clearLink") as PremiumDeleteBehavior,
         maxProjectsPerRun: Math.max(0, Math.floor(readNumberEnv("SYNC_MAX_PROJECTS_PER_RUN", 0))),
         pollPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_PAGE_SIZE", 200))),
