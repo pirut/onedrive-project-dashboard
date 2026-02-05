@@ -1119,15 +1119,41 @@ function shouldSkipTaskForSection(task: BcProjectTask, currentSection: { name: s
 }
 
 function sortTasksByTaskNo(tasks: BcProjectTask[]) {
+    const parseTaskNoParts = (value: string | number | null | undefined) => {
+        const raw = String(value || "").trim();
+        if (!raw) return [] as number[];
+        const matches = raw.match(/\d+/g);
+        if (!matches?.length) return [] as number[];
+        return matches
+            .map((part) => Number(part))
+            .filter((part) => Number.isFinite(part));
+    };
+
+    const compareTaskNoParts = (aParts: number[], bParts: number[]) => {
+        const len = Math.max(aParts.length, bParts.length);
+        for (let idx = 0; idx < len; idx += 1) {
+            const aVal = aParts[idx];
+            const bVal = bParts[idx];
+            const aHas = Number.isFinite(aVal);
+            const bHas = Number.isFinite(bVal);
+            if (!aHas && !bHas) return 0;
+            if (!aHas) return -1;
+            if (!bHas) return 1;
+            if (aVal !== bVal) return aVal - bVal;
+        }
+        return 0;
+    };
+
     return [...tasks].sort((a, b) => {
-        const aNum = parseTaskNumber(a.taskNo);
-        const bNum = parseTaskNumber(b.taskNo);
-        if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) {
-            return aNum - bNum;
+        const aParts = parseTaskNoParts(a.taskNo);
+        const bParts = parseTaskNoParts(b.taskNo);
+        const numericCompare = compareTaskNoParts(aParts, bParts);
+        if (numericCompare !== 0) {
+            return numericCompare;
         }
         const aStr = String(a.taskNo || "").trim();
         const bStr = String(b.taskNo || "").trim();
-        return aStr.localeCompare(bStr);
+        return aStr.localeCompare(bStr, undefined, { numeric: true, sensitivity: "base" });
     });
 }
 
@@ -1911,7 +1937,9 @@ export async function syncBcToPremium(
         }
 
         const usingOperationSet = Boolean(useScheduleApi && operationSetId);
-        const outcomes = await runWithConcurrency(toSync, syncConfig.taskConcurrency, async (task) => {
+        // Keep operation-set writes in strict BC order so Planner task order stays stable.
+        const taskConcurrency = usingOperationSet ? 1 : syncConfig.taskConcurrency;
+        const outcomes = await runWithConcurrency(toSync, taskConcurrency, async (task) => {
             const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
             if (cleanTask.syncLock) {
                 return { action: "skipped" as const, task: cleanTask };

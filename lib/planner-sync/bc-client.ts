@@ -167,6 +167,10 @@ export class BusinessCentralClient {
         return `/api/${publisher}/${group}/${version}/companies(${companyId})/${trimmed}`;
     }
 
+    private normalizeEntitySet(entitySet: string) {
+        return (entitySet || "").trim().replace(/^\/+/, "");
+    }
+
     private async getAccessToken() {
         const now = Date.now();
         if (this.tokenCache && now < this.tokenCache.expiresAt - 60_000) {
@@ -469,6 +473,44 @@ export class BusinessCentralClient {
             body: JSON.stringify(payload),
         });
         return res;
+    }
+
+    async getEntity(entitySet: string, systemId: string) {
+        const setName = this.normalizeEntitySet(entitySet);
+        const trimmed = (systemId || "").trim();
+        if (!setName || !trimmed) return null;
+        const res = await this.request(`/${setName}(${trimmed})`);
+        return readResponseJson<Record<string, unknown>>(res);
+    }
+
+    async patchEntity(entitySet: string, systemId: string, payload: Record<string, unknown>) {
+        const setName = this.normalizeEntitySet(entitySet);
+        const trimmed = (systemId || "").trim();
+        if (!setName || !trimmed) {
+            throw new Error("BC patchEntity requires entitySet and systemId");
+        }
+        const res = await this.request(`/${setName}(${trimmed})`, {
+            method: "PATCH",
+            headers: {
+                "If-Match": "*",
+            },
+            body: JSON.stringify(payload),
+        });
+        return res;
+    }
+
+    async deleteEntity(entitySet: string, systemId: string) {
+        const setName = this.normalizeEntitySet(entitySet);
+        const trimmed = (systemId || "").trim();
+        if (!setName || !trimmed) {
+            throw new Error("BC deleteEntity requires entitySet and systemId");
+        }
+        await this.request(`/${setName}(${trimmed})`, {
+            method: "DELETE",
+            headers: {
+                "If-Match": "*",
+            },
+        });
     }
 
     async findProjectTaskByPlannerTaskId(plannerTaskId: string) {
