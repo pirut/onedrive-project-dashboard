@@ -4,7 +4,7 @@ import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_ENTITY_SETS = ["projectTasks"];
+const DEFAULT_ENTITY_SETS = ["premiumSyncQueue"];
 const SUBSCRIPTION_TTL_HOURS = 48;
 const RENEWAL_BUFFER_HOURS = 6;
 

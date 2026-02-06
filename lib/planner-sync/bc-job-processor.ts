@@ -67,11 +67,18 @@ const QUEUE_ENTITY_SET = (process.env.BC_SYNC_QUEUE_ENTITY_SET || "premiumSyncQu
 const QUEUE_PROJECT_NO_FIELD = (process.env.BC_SYNC_QUEUE_PROJECTNO_FIELD || "projectNo").trim();
 const QUEUE_TASK_SYSTEM_ID_FIELD = (process.env.BC_SYNC_QUEUE_TASKSYSTEMID_FIELD || "projectTaskSystemId").trim();
 const QUEUE_DELETE_AFTER = parseBool(process.env.BC_SYNC_QUEUE_DELETE_AFTER, true);
+const PROCESS_QUEUE_ONLY = parseBool(
+    process.env.BC_WEBHOOK_PROCESS_QUEUE_ONLY,
+    Boolean(QUEUE_ENTITY_SET && QUEUE_ENTITY_SET.toLowerCase() !== "projecttasks")
+);
 
 async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJob): Promise<ResolveResult> {
     const entitySet = (job.entitySet || "").trim();
     const systemId = normalizeSystemId(job.systemId || "");
     if (!entitySet || !systemId) return { projectNo: "", systemId: "", skipped: true, reason: "missing_resource" };
+    if (PROCESS_QUEUE_ONLY && QUEUE_ENTITY_SET && entitySet.toLowerCase() !== QUEUE_ENTITY_SET.toLowerCase()) {
+        return { projectNo: "", systemId: "", skipped: true, reason: "queue_only_entity" };
+    }
 
     if (QUEUE_ENTITY_SET && entitySet.toLowerCase() === QUEUE_ENTITY_SET.toLowerCase()) {
         try {

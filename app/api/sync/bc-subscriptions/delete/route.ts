@@ -5,7 +5,7 @@ import { logger } from "../../../../../lib/planner-sync/logger";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_ENTITY_SETS = ["projectTasks"];
+const DEFAULT_ENTITY_SETS = ["premiumSyncQueue"];
 
 function normalizeValue(value: string | undefined | null) {
     return (value || "").trim().replace(/^\/+/, "").toLowerCase();

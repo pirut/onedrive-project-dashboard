@@ -16,6 +16,7 @@ type BcNotification = {
 
 const LOG_SAMPLE_LIMIT = 10;
 const DEBUG_LOG_LIMIT = 10;
+const QUEUE_ENTITY_SET = (process.env.BC_SYNC_QUEUE_ENTITY_SET || "premiumSyncQueue").trim().toLowerCase();
 
 function shouldDebugLog() {
     const flag = (process.env.BC_WEBHOOK_DEBUG_LOG || "").trim().toLowerCase();
@@ -124,6 +125,13 @@ function resolveInlineMaxJobs(url: URL) {
     const env = Number(process.env.BC_WEBHOOK_INLINE_MAX_JOBS);
     if (Number.isFinite(env) && env > 0) return Math.floor(env);
     return 25;
+}
+
+function shouldSkipNotification(entitySet: string, changeType: string | undefined) {
+    if (!QUEUE_ENTITY_SET) return false;
+    const normalizedEntity = (entitySet || "").trim().toLowerCase();
+    const normalizedChangeType = (changeType || "").trim().toLowerCase();
+    return normalizedEntity === QUEUE_ENTITY_SET && normalizedChangeType === "deleted";
 }
 
 function resolveRetryDelayMs(url: URL) {
@@ -268,6 +276,9 @@ export async function POST(request: Request) {
                 missingResource += 1;
                 continue;
             }
+            if (shouldSkipNotification(entitySet, notification.changeType)) {
+                continue;
+            }
 
             jobs.push({
                 entitySet,
@@ -294,7 +305,8 @@ export async function POST(request: Request) {
             });
         }
         if (processInline) {
-            const maxJobs = resolveInlineMaxJobs(url);
+            const requestedMaxJobs = resolveInlineMaxJobs(url);
+            const maxJobs = Math.max(requestedMaxJobs, Math.min(100, Math.max(0, jobs.length)));
             const retryDelayMs = resolveRetryDelayMs(url);
             const retryCount = resolveRetryCount(url);
             let attempts = 0;

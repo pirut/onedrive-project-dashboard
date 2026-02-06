@@ -35,7 +35,10 @@ const SUBSCRIPTION_PREFIX = "bc:subscription:";
 const JOBS_KEY = "bc:jobs";
 const DEDUPE_PREFIX = "bc:job_dedupe:";
 const LOCK_KEY = "bc:jobs:lock";
-const DEDUPE_WINDOW_SECONDS = 0;
+const DEDUPE_WINDOW_SECONDS = Math.max(
+    0,
+    Math.floor(Number(process.env.BC_WEBHOOK_DEDUPE_WINDOW_SECONDS || 15))
+);
 const LOCK_TTL_SECONDS = 60;
 
 function normalizeEntitySet(entitySet: string) {
@@ -242,7 +245,7 @@ export async function popBcJobs(maxJobs = 25): Promise<BcWebhookJob[]> {
     if (redis) {
         const jobs: BcWebhookJob[] = [];
         for (let i = 0; i < maxJobs; i += 1) {
-            const raw = await redis.rpop(JOBS_KEY);
+            const raw = await redis.lpop(JOBS_KEY);
             if (!raw) break;
             const parsed = parseJsonString<BcWebhookJob>(raw);
             if (parsed) jobs.push(parsed);
@@ -252,7 +255,8 @@ export async function popBcJobs(maxJobs = 25): Promise<BcWebhookJob[]> {
 
     const store = await readFileStore();
     const jobs = store.jobs || [];
-    const items = jobs.splice(0, maxJobs);
+    const take = Math.max(0, Math.min(maxJobs, jobs.length));
+    const items = take ? jobs.splice(jobs.length - take, take).reverse() : [];
     store.jobs = jobs;
     await writeFileStore(store);
     return items;

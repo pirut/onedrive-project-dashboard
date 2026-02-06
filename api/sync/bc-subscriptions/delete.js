@@ -4,7 +4,7 @@ import { getBcConfig } from "../../../lib/planner-sync/config.js";
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = [
-    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "projectTasks",
+    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "premiumSyncQueue",
 ].filter(Boolean);
 
 function normalizeValue(value) {

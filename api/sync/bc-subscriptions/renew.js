@@ -3,7 +3,7 @@ import { getBcSubscription, saveBcSubscription } from "../../../lib/planner-sync
 import { logger } from "../../../lib/planner-sync/logger.js";
 
 const DEFAULT_ENTITY_SETS = [
-    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "projectTasks",
+    (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "premiumSyncQueue",
 ].filter(Boolean);
 const SUBSCRIPTION_TTL_HOURS = 48;
 const RENEWAL_BUFFER_HOURS = 6;
