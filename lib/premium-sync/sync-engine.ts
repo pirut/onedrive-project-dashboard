@@ -805,15 +805,11 @@ function buildScheduleTaskEntity(params: {
     const finish = finishOverride !== undefined ? finishOverride : fields.finish.value;
     if (start) {
         entity[mapping.taskStartField] = start;
-    } else if (!isCreate && fields.start.present) {
-        entity[mapping.taskStartField] = null;
     }
     if (finish) {
         if (!start || Date.parse(finish) >= Date.parse(start)) {
             entity[mapping.taskFinishField] = finish;
         }
-    } else if (!isCreate && fields.finish.present) {
-        entity[mapping.taskFinishField] = null;
     }
 
     const percent =
@@ -822,8 +818,6 @@ function buildScheduleTaskEntity(params: {
             : toDataversePercent(fields.percent.value, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) {
         entity[mapping.taskPercentField] = percent;
-    } else if (!isCreate && fields.percent.present) {
-        entity[mapping.taskPercentField] = null;
     }
 
     if (mapping.taskDescriptionField) {
