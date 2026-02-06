@@ -2057,7 +2057,7 @@ async function resolveBcQueueTargets(
     for (const entry of queueEntries) {
         const record = entry || {};
         const queueProjectNo = toTrimmedString(record[BC_QUEUE_PROJECT_NO_FIELD]);
-        const queueTaskSystemId = normalizeTaskSystemId(toTrimmedString(record[BC_QUEUE_TASK_SYSTEM_ID_FIELD]));
+        const queueTaskSystemId = canonicalTaskSystemId(toTrimmedString(record[BC_QUEUE_TASK_SYSTEM_ID_FIELD]));
         const entryMs = extractLatestTimestampMs(record);
         if (entryMs != null && (latestChangedMs == null || entryMs > latestChangedMs)) {
             latestChangedMs = entryMs;
@@ -2167,7 +2167,7 @@ export async function syncBcToPremium(
     if (projectNo) projectNos = [projectNo];
     if (options.projectNos && options.projectNos.length) projectNos = options.projectNos;
     const taskSystemIdSet = options.taskSystemIds?.length
-        ? new Set(options.taskSystemIds.map((value) => normalizeTaskSystemId(value)).filter(Boolean))
+        ? new Set(options.taskSystemIds.map((value) => canonicalTaskSystemId(value)).filter(Boolean))
         : null;
     let taskSystemIdsByProject: Map<string, Set<string>> | null = null;
     let queueEntriesByProject: Map<string, BcQueueEntryRef[]> | null = null;
@@ -2448,8 +2448,8 @@ export async function syncBcToPremium(
         const toSync: BcProjectTask[] = [];
         for (const task of sorted) {
             const skipForSection = shouldSkipTaskForSection(task, currentSection);
-            const systemId = typeof task.systemId === "string" ? normalizeTaskSystemId(task.systemId) : "";
-            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+                    const systemId = typeof task.systemId === "string" ? canonicalTaskSystemId(task.systemId) : "";
+                    const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
             if (!isTarget) {
                 continue;
             }
