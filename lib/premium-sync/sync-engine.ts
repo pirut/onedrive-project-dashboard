@@ -2527,12 +2527,12 @@ export async function syncBcToPremium(
         const projectErrorsStart = result.errors;
 
         let tasks: BcProjectTask[] = [];
+        let scopedTaskSystemIdSet =
+            taskSystemIdSet ||
+            (taskSystemIdsByProject && !fullSyncProjects?.has(projNo)
+                ? taskSystemIdsByProject.get(projNo) || null
+                : null);
         try {
-            const scopedTaskSystemIdSet =
-                taskSystemIdSet ||
-                (taskSystemIdsByProject && !fullSyncProjects?.has(projNo)
-                    ? taskSystemIdsByProject.get(projNo) || null
-                    : null);
             if (scopedTaskSystemIdSet) {
                 const resolved: BcProjectTask[] = [];
                 for (const systemId of scopedTaskSystemIdSet) {
@@ -2559,7 +2559,7 @@ export async function syncBcToPremium(
             continue;
         }
 
-        const sorted = tasks.length ? sortTasksByTaskNo(tasks) : [];
+        let sorted = tasks.length ? sortTasksByTaskNo(tasks) : [];
         const currentSection = { name: null as string | null };
 
         let projectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
@@ -2587,7 +2587,45 @@ export async function syncBcToPremium(
             continue;
         }
 
-        const shouldLoadTaskIndex = !taskSystemIdSet;
+        if (scopedTaskSystemIdSet?.size) {
+            try {
+                const filter = `projectNo eq '${escapeODataString(projNo)}'`;
+                const projectTasks = await bcClient.listProjectTasks(filter);
+                const projectSorted = projectTasks.length ? sortTasksByTaskNo(projectTasks) : [];
+                const bootstrapSection = { name: null as string | null };
+                const hasUnlinkedSyncableTasks = projectSorted.some((task) => {
+                    const skipForSection = shouldSkipTaskForSection(task, bootstrapSection);
+                    if (!options.taskOnly && skipForSection) return false;
+                    if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) return false;
+                    const plannerTaskId = (task.plannerTaskId || "").trim();
+                    const plannerPlanId = (task.plannerPlanId || "").trim();
+                    if (!plannerTaskId || !plannerPlanId) return true;
+                    if (!isGuid(plannerTaskId)) return true;
+                    if (!isGuid(plannerPlanId)) return true;
+                    if (plannerPlanId.toLowerCase() !== projectId.toLowerCase()) return true;
+                    return false;
+                });
+                if (hasUnlinkedSyncableTasks) {
+                    tasks = projectSorted;
+                    sorted = projectSorted;
+                    scopedTaskSystemIdSet = null;
+                    logger.info("Switching to full project task sync for unlinked project bootstrap", {
+                        requestId,
+                        projectNo: projNo,
+                        projectId,
+                        loadedTasks: projectSorted.length,
+                    });
+                }
+            } catch (error) {
+                logger.warn("Failed to evaluate bootstrap full-project sync eligibility", {
+                    requestId,
+                    projectNo: projNo,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+
+        const shouldLoadTaskIndex = !scopedTaskSystemIdSet;
         const taskIndex = shouldLoadTaskIndex
             ? await loadProjectTaskIndex(dataverse, projectId, mapping)
             : createEmptyTaskIndex();
@@ -2701,7 +2739,7 @@ export async function syncBcToPremium(
         for (const task of sorted) {
             const skipForSection = shouldSkipTaskForSection(task, currentSection);
             const systemId = typeof task.systemId === "string" ? canonicalTaskSystemId(task.systemId) : "";
-            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+            const isTarget = !scopedTaskSystemIdSet || (systemId && scopedTaskSystemIdSet.has(systemId));
             if (!isTarget) {
                 continue;
             }
