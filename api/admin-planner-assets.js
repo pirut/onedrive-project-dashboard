@@ -495,6 +495,7 @@ export default async function handler(req, res) {
                     projectNos,
                     forceProjectCreate,
                     skipProjectAccess,
+                    preferPlanner: false,
                 });
                 res.status(200).json({ ok: true, projectNos, result });
                 return;
@@ -591,6 +592,7 @@ export default async function handler(req, res) {
                     projectNos,
                     forceProjectCreate: true,
                     skipProjectAccess,
+                    preferPlanner: false,
                 });
                 res.status(200).json({
                     ok: true,

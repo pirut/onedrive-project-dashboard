@@ -29,6 +29,7 @@ export default async function handler(req, res) {
         const bcResult = await syncBcToPremium(projectNo || undefined, {
             requestId: body?.requestId ? String(body.requestId) : undefined,
             projectNos: projectNos.length ? projectNos : undefined,
+            preferPlanner: false,
         });
         let premiumResult = null;
         if (includePremiumChanges) {
