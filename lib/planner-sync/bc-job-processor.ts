@@ -239,6 +239,8 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
                 queueEntries: queueEntriesByProject.get(projectNo) || [],
                 skipProjectAccess: true,
                 taskOnly: false,
+                // Webhook jobs are BC-originated changes and should not be dropped by "planner newer" arbitration.
+                preferPlanner: false,
             });
             if ((syncResult.errors || 0) > 0) {
                 logger.warn("BC webhook sync completed with task errors", {

@@ -245,6 +245,15 @@ function isOperationSetLimitError(error: unknown) {
     return normalized.includes("operation set allowed per user");
 }
 
+function isOperationSetMissingError(error: unknown) {
+    const message = (error as Error)?.message || String(error || "");
+    const normalized = message.toLowerCase();
+    if (normalized.includes("operationsetdoesnotexist")) return true;
+    if (normalized.includes("operation set does not exist")) return true;
+    if (normalized.includes("one or more operation sets do not exist")) return true;
+    return normalized.includes("-> 404");
+}
+
 function extractOperationSetId(row: DataverseEntity) {
     if (!row || typeof row !== "object") return null;
     const direct = row.msdyn_operationsetid || row.OperationSetId || row.operationSetId;
@@ -1690,9 +1699,53 @@ async function cleanupOperationSet(
     if (!["1", "true", "yes", "y", "on"].includes(cleanupFlag)) {
         return;
     }
+    const cleanupMinAgeRaw = Number(process.env.DATAVERSE_CLEANUP_OPERATION_SETS_MIN_AGE_MINUTES || 15);
+    const cleanupMinAgeMinutes = Number.isFinite(cleanupMinAgeRaw) ? Math.max(1, Math.floor(cleanupMinAgeRaw)) : 15;
     try {
-        await dataverse.delete("msdyn_operationsets", operationSetId);
+        const entitySet = await resolveOperationSetEntitySet(dataverse);
+        let row: DataverseEntity | null = null;
+        try {
+            row = await dataverse.getById<DataverseEntity>(entitySet, operationSetId, [
+                "msdyn_operationsetid",
+                "msdyn_completedon",
+                "msdyn_executedon",
+                "createdon",
+                "modifiedon",
+                "statecode",
+                "statuscode",
+                "msdyn_status",
+            ]);
+        } catch (error) {
+            if (isOperationSetMissingError(error)) {
+                return;
+            }
+            logger.warn("Dataverse operation set cleanup lookup failed", {
+                operationSetId,
+                entitySet,
+                ...meta,
+                error: (error as Error)?.message,
+            });
+            return;
+        }
+        if (!row || !isTerminalOperationSet(row)) {
+            return;
+        }
+
+        const terminalMs =
+            parseDateMs(String(row.msdyn_completedon || "")) ??
+            parseDateMs(String(row.msdyn_executedon || "")) ??
+            parseDateMs(String(row.modifiedon || "")) ??
+            parseDateMs(String(row.createdon || ""));
+        if (terminalMs == null) return;
+
+        const ageMs = Date.now() - terminalMs;
+        if (ageMs < cleanupMinAgeMinutes * 60 * 1000) {
+            return;
+        }
+
+        await dataverse.delete(entitySet, operationSetId);
     } catch (error) {
+        if (isOperationSetMissingError(error)) return;
         logger.warn("Dataverse operation set cleanup failed", {
             operationSetId,
             ...meta,
