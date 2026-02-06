@@ -18,6 +18,7 @@ const HEADING_TASK_SECTIONS = new Map<number, string | null>([
 const warnedNonGuidPlanProjects = new Set<string>();
 const warnedNonGuidTaskProjects = new Set<string>();
 const warnedDefaultBucketProjects = new Set<string>();
+const warnedMissingTaskProjectLookup = new Set<string>();
 const BC_QUEUE_ENTITY_SET = (process.env.BC_SYNC_QUEUE_ENTITY_SET || "premiumSyncQueue").trim();
 const BC_QUEUE_PROJECT_NO_FIELD = (process.env.BC_SYNC_QUEUE_PROJECTNO_FIELD || "projectNo").trim();
 const BC_QUEUE_TASK_SYSTEM_ID_FIELD = (process.env.BC_SYNC_QUEUE_TASKSYSTEMID_FIELD || "projectTaskSystemId").trim();
@@ -1246,8 +1247,13 @@ export async function resolveProjectFromBc(
 
     const escaped = escapeODataString(normalized);
     const select = [mapping.projectIdField, mapping.projectTitleField, mapping.projectBcNoField].filter(Boolean) as string[];
+    const allowTitleFallback = ["1", "true", "yes", "y", "on"].includes(
+        String(process.env.DATAVERSE_ALLOW_PROJECT_TITLE_FALLBACK || "")
+            .trim()
+            .toLowerCase()
+    );
 
-    if (mapping.projectBcNoField) {
+    if (!options.forceCreate && mapping.projectBcNoField) {
         const filter = `${mapping.projectBcNoField} eq '${escaped}'`;
         const result = await dataverse.list<DataverseEntity>(mapping.projectEntitySet, {
             select,
@@ -1256,13 +1262,17 @@ export async function resolveProjectFromBc(
         });
         if (result.value.length) {
             const match = result.value[0];
+            logger.info("Dataverse project resolved by BC project number", {
+                projectNo: normalized,
+                projectId: resolveProjectId(match, mapping),
+            });
             return match;
         }
     }
 
     const titleField = mapping.projectTitleField;
-    if (titleField) {
-        const filter = `startswith(${titleField}, '${escaped}')`;
+    if (!options.forceCreate && allowTitleFallback && titleField) {
+        const filter = `${titleField} eq '${escaped}'`;
         const result = await dataverse.list<DataverseEntity>(mapping.projectEntitySet, {
             select,
             filter,
@@ -1270,6 +1280,10 @@ export async function resolveProjectFromBc(
         });
         if (result.value.length) {
             const match = result.value[0];
+            logger.warn("Dataverse project resolved by title fallback", {
+                projectNo: normalized,
+                projectId: resolveProjectId(match, mapping),
+            });
             return match;
         }
     }
@@ -1289,6 +1303,10 @@ export async function resolveProjectFromBc(
 
     const created = await dataverse.createProjectV1(payload);
     if (!created.projectId) return null;
+    logger.info("Dataverse project created for BC project", {
+        projectNo: normalized,
+        projectId: created.projectId,
+    });
     if (mapping.projectBcNoField) {
         try {
             await dataverse.update(mapping.projectEntitySet, created.projectId, { [mapping.projectBcNoField]: normalized });
@@ -1329,16 +1347,28 @@ async function validateTaskIdForProject(
 ) {
     if (!taskId) return false;
     try {
-        const fields = [mapping.taskIdField, mapping.taskProjectIdField].filter(Boolean) as string[];
+        const fields = Array.from(new Set([mapping.taskIdField, mapping.taskProjectIdField, "_msdyn_project_value"].filter(Boolean))) as string[];
         const entity = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, fields);
         if (!entity) return false;
-        const projectField = mapping.taskProjectIdField;
-        if (!projectField) return true;
-        const raw = entity[projectField];
-        if (typeof raw === "string" && raw.trim()) {
-            return raw.trim().toLowerCase() === projectId.toLowerCase();
+        const projectField = mapping.taskProjectIdField || "_msdyn_project_value";
+        const projectCandidates = [projectField, "_msdyn_project_value"];
+        for (const field of projectCandidates) {
+            const raw = entity[field];
+            if (typeof raw === "string" && raw.trim()) {
+                return raw.trim().toLowerCase() === projectId.toLowerCase();
+            }
         }
-        return true;
+        const warnKey = `${projectField}`;
+        if (!warnedMissingTaskProjectLookup.has(warnKey)) {
+            warnedMissingTaskProjectLookup.add(warnKey);
+            logger.warn("Dataverse task project lookup missing; treating cached taskId as invalid", {
+                taskId,
+                expectedProjectId: projectId,
+                projectField,
+                availableKeys: Object.keys(entity || {}).slice(0, 20),
+            });
+        }
+        return false;
     } catch (error) {
         const message = (error as Error)?.message || "";
         if (message.includes("Does Not Exist") || message.includes("404")) {
@@ -3060,6 +3090,7 @@ export async function syncBcToPremium(
                 logger.info("BC -> Premium project sync summary", {
                     requestId,
                     projectNo: projNo,
+                    projectId,
                     tasksExamined: result.tasks - projectTasksStart,
                     created: result.created - projectCreatedStart,
                     updated: result.updated - projectUpdatedStart,
