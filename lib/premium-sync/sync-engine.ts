@@ -2525,6 +2525,8 @@ export async function syncBcToPremium(
             (queueEntriesByProject && queueEntriesByProject.get(projNo) ? queueEntriesByProject.get(projNo) || [] : []);
         const successfulTaskSystemIds = new Set<string>();
         const projectErrorsStart = result.errors;
+        const projectTasksStart = result.tasks;
+        const projectActivityStart = result.created + result.updated + result.skipped;
 
         let tasks: BcProjectTask[] = [];
         let scopedTaskSystemIdSet =
@@ -2757,6 +2759,23 @@ export async function syncBcToPremium(
             }
 
         if (!sorted.length) {
+            const hasProjectQueueEntry = scopedQueueEntries.some(
+                (entry) => !canonicalTaskSystemId(String(entry.taskSystemId || ""))
+            );
+            logger.warn("BC -> Premium found no BC tasks for queued project sync", {
+                requestId,
+                projectNo: projNo,
+                queueEntries: scopedQueueEntries.length,
+                hasProjectQueueEntry,
+            });
+            if (hasProjectQueueEntry) {
+                // Keep project-level queue entry for retry when BC task rows become queryable.
+                result.errors += 1;
+                logger.warn("Retaining project-level queue entry; no BC tasks were loaded yet", {
+                    requestId,
+                    projectNo: projNo,
+                });
+            }
             result.projects += 1;
             result.projectNos.push(projNo);
             continue;
@@ -2793,6 +2812,16 @@ export async function syncBcToPremium(
                 continue;
             }
             toSync.push(task);
+        }
+
+        if (!toSync.length) {
+            logger.warn("BC -> Premium found no syncable tasks after filters", {
+                requestId,
+                projectNo: projNo,
+                totalTasks: sorted.length,
+                allowlistSize: allowedTaskNumbers.size,
+                scopedTaskCount: scopedTaskSystemIdSet?.size || 0,
+            });
         }
 
         let assignmentSnapshotLoaded = false;
@@ -2973,6 +3002,8 @@ export async function syncBcToPremium(
             if (shouldDeleteQueueEntryAfterSync() && scopedQueueEntries.length && BC_QUEUE_ENTITY_SET) {
                 const seenEntryIds = new Set<string>();
                 const projectHadErrors = result.errors > projectErrorsStart;
+                const projectHadTaskReads = result.tasks > projectTasksStart;
+                const projectHadSyncActivity = result.created + result.updated + result.skipped > projectActivityStart;
                 for (const queueEntry of scopedQueueEntries) {
                     const entryId = normalizeTaskSystemId(queueEntry.queueEntryId);
                     if (!entryId || seenEntryIds.has(entryId)) continue;
@@ -2980,7 +3011,7 @@ export async function syncBcToPremium(
                     const taskId = canonicalTaskSystemId(queueEntry.taskSystemId);
                     const canDelete = taskId
                         ? successfulTaskSystemIds.has(taskId)
-                        : !projectHadErrors;
+                        : !projectHadErrors && (projectHadTaskReads || projectHadSyncActivity);
                     if (!canDelete) continue;
                     try {
                         await bcClient.deleteEntity(BC_QUEUE_ENTITY_SET, entryId);
