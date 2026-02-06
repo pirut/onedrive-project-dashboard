@@ -44,6 +44,12 @@ type TaskIndex = {
     byTitle: Map<string, string>;
 };
 
+type PendingDirectTaskUpdate = {
+    taskId: string;
+    payload: Record<string, unknown>;
+    task: BcProjectTask;
+};
+
 type ScheduleFallbackState = {
     unavailable: boolean;
     reason?: string;
@@ -1422,6 +1428,21 @@ function buildTaskPayload(
     return payload;
 }
 
+function buildDirectDateClearPayload(
+    fields: BcTaskSyncFields,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+): Record<string, unknown> | null {
+    const payload: Record<string, unknown> = {};
+    // Explicit date clears from BC should still propagate even when schedule API rejects null date values.
+    if (fields.start.present && !fields.start.value) {
+        payload[mapping.taskStartField] = null;
+    }
+    if (fields.finish.present && !fields.finish.value) {
+        payload[mapping.taskFinishField] = null;
+    }
+    return Object.keys(payload).length ? payload : null;
+}
+
 function shouldSkipTaskForSection(task: BcProjectTask, currentSection: { name: string | null }) {
     const description = String(task.description || "").trim();
     if (description.toUpperCase() === "TOTAL") return true;
@@ -1923,8 +1944,16 @@ async function syncTaskToDataverse(
                 lastPlannerEtag: task.lastPlannerEtag || "",
                 lastSyncAt: new Date().toISOString(),
             };
+            const pendingDirectClearPayload = buildDirectDateClearPayload(bcFields, mapping);
             addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
-            return { action: "updated", taskId, pendingUpdate: { task, updates } };
+            return {
+                action: "updated",
+                taskId,
+                pendingUpdate: { task, updates },
+                pendingDirectUpdate: pendingDirectClearPayload
+                    ? ({ taskId, payload: pendingDirectClearPayload, task } as PendingDirectTaskUpdate)
+                    : undefined,
+            };
         }
 
         if (requireScheduleApi) {
@@ -2569,6 +2598,7 @@ export async function syncBcToPremium(
             : createEmptyTaskIndex();
 
         const pendingUpdates: Array<{ task: BcProjectTask; updates: Record<string, unknown> }> = [];
+        const pendingDirectUpdates: PendingDirectTaskUpdate[] = [];
         const bucketCache = new Map<string, string | null>();
         const resourceCache = new Map<string, string | null>();
         const resourceNameCache = new Map<string, { id: string; name: string } | null>();
@@ -2748,6 +2778,9 @@ export async function syncBcToPremium(
                     if (res.pendingUpdate) {
                         pendingUpdates.push(res.pendingUpdate);
                     }
+                    if (res.pendingDirectUpdate) {
+                        pendingDirectUpdates.push(res.pendingDirectUpdate);
+                    }
                     return { action: res.action as "created" | "updated" | "skipped" | "error", task: cleanTask };
                 } catch (error) {
                     logger.warn("Premium task sync failed", {
@@ -2802,6 +2835,31 @@ export async function syncBcToPremium(
             if (useScheduleApi && operationSetId && (pendingUpdates.length || operationSetTouched)) {
                 try {
                     await dataverse.executeOperationSet(operationSetId);
+                    if (pendingDirectUpdates.length) {
+                        for (const entry of pendingDirectUpdates) {
+                            try {
+                                await dataverse.update(mapping.taskEntitySet, entry.taskId, entry.payload);
+                            } catch (error) {
+                                if (isDirectTaskWriteBlocked(error)) {
+                                    logger.warn("Direct Dataverse date clear blocked after schedule execute", {
+                                        requestId,
+                                        projectNo: projNo,
+                                        taskNo: entry.task.taskNo,
+                                        taskId: entry.taskId,
+                                        error: (error as Error)?.message,
+                                    });
+                                    continue;
+                                }
+                                logger.warn("Direct Dataverse date clear failed after schedule execute", {
+                                    requestId,
+                                    projectNo: projNo,
+                                    taskNo: entry.task.taskNo,
+                                    taskId: entry.taskId,
+                                    error: (error as Error)?.message,
+                                });
+                            }
+                        }
+                    }
                     if (pendingUpdates.length) {
                         await Promise.all(
                             pendingUpdates.map((entry) => updateBcTaskWithSyncLock(bcClient, entry.task, entry.updates))
