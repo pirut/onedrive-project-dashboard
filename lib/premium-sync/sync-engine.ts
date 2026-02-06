@@ -1,6 +1,5 @@
-import { BusinessCentralClient, BcProject, BcProjectTask, BcProjectChange } from "../planner-sync/bc-client.js";
+import { BusinessCentralClient, BcProject, BcProjectTask } from "../planner-sync/bc-client.js";
 import { logger } from "../planner-sync/logger.js";
-import { getBcProjectChangeCursor, saveBcProjectChangeCursor } from "../planner-sync/bc-change-store.js";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../planner-sync/project-sync-store.js";
 import { DataverseClient, DataverseEntity } from "../dataverse-client.js";
 import { getDataverseDeltaLink, saveDataverseDeltaLink } from "./delta-store.js";
@@ -18,6 +17,23 @@ const HEADING_TASK_SECTIONS = new Map<number, string | null>([
 const warnedNonGuidPlanProjects = new Set<string>();
 const warnedNonGuidTaskProjects = new Set<string>();
 const warnedDefaultBucketProjects = new Set<string>();
+const BC_QUEUE_ENTITY_SET = (process.env.BC_SYNC_QUEUE_ENTITY_SET || "premiumSyncQueue").trim();
+const BC_QUEUE_PROJECT_NO_FIELD = (process.env.BC_SYNC_QUEUE_PROJECTNO_FIELD || "projectNo").trim();
+const BC_QUEUE_TASK_SYSTEM_ID_FIELD = (process.env.BC_SYNC_QUEUE_TASKSYSTEMID_FIELD || "projectTaskSystemId").trim();
+const BC_QUEUE_TIME_FIELDS = [
+    "changedAt",
+    "systemModifiedAt",
+    "lastModifiedDateTime",
+    "modifiedAt",
+    "modifiedOn",
+    "lastModifiedOn",
+    "systemModifiedOn",
+    "createdAt",
+    "createdOn",
+    "systemCreatedAt",
+];
+const BC_QUEUE_PAGE_SIZE = Math.max(1, Math.floor(Number(process.env.BC_SYNC_QUEUE_PAGE_SIZE || 5000)));
+const BC_QUEUE_MAX_PAGES = Math.max(1, Math.floor(Number(process.env.BC_SYNC_QUEUE_MAX_PAGES || 20)));
 const defaultBucketFieldCache = { value: undefined as string | null | undefined };
 const warnedDefaultBucketFields = new Set<string>();
 
@@ -1953,6 +1969,133 @@ function normalizeTaskSystemId(raw: string) {
     return value.trim();
 }
 
+type BcQueueTargetInfo = {
+    queueEntries: Array<Record<string, unknown>>;
+    queueRows: number;
+    projectNos: string[];
+    taskSystemIdsByProject: Map<string, Set<string>>;
+    fullSyncProjects: Set<string>;
+    latestChangedMs: number | null;
+};
+
+function toTrimmedString(value: unknown): string {
+    if (typeof value === "string") return value.trim();
+    if (value == null) return "";
+    return String(value).trim();
+}
+
+function extractLatestTimestampMs(record: Record<string, unknown>): number | null {
+    for (const field of BC_QUEUE_TIME_FIELDS) {
+        const ms = parseTimestamp(record[field]);
+        if (ms != null) return ms;
+    }
+    return null;
+}
+
+async function loadBcQueueEntries(
+    bcClient: BusinessCentralClient,
+    options: { requestId?: string } = {}
+): Promise<Array<Record<string, unknown>>> {
+    if (!BC_QUEUE_ENTITY_SET) return [];
+    let nextLink: string | null = null;
+    let page = 0;
+    const entries: Array<Record<string, unknown>> = [];
+
+    while (page < BC_QUEUE_MAX_PAGES) {
+        const path = nextLink || `/${BC_QUEUE_ENTITY_SET}?$top=${BC_QUEUE_PAGE_SIZE}`;
+        const res = await (bcClient as unknown as { request: (path: string) => Promise<Response> }).request(path);
+        const data = (await res.json()) as { value?: Array<Record<string, unknown>>; "@odata.nextLink"?: string };
+        const value = Array.isArray(data?.value) ? data.value : [];
+        for (const item of value) {
+            entries.push(item || {});
+        }
+        nextLink = typeof data?.["@odata.nextLink"] === "string" ? data["@odata.nextLink"] : null;
+        page += 1;
+        if (!nextLink) break;
+    }
+
+    if (nextLink) {
+        logger.warn("BC queue read truncated at max pages", {
+            requestId: options.requestId || "",
+            entitySet: BC_QUEUE_ENTITY_SET,
+            maxPages: BC_QUEUE_MAX_PAGES,
+        });
+    }
+    return entries;
+}
+
+async function resolveBcQueueTargets(
+    bcClient: BusinessCentralClient,
+    options: { requestId?: string } = {}
+): Promise<BcQueueTargetInfo> {
+    const queueEntries = await loadBcQueueEntries(bcClient, options);
+    const projectNos = new Set<string>();
+    const taskSystemIdsByProject = new Map<string, Set<string>>();
+    const fullSyncProjects = new Set<string>();
+    const taskCache = new Map<string, BcProjectTask | null>();
+    let latestChangedMs: number | null = null;
+
+    for (const entry of queueEntries) {
+        const record = entry || {};
+        const queueProjectNo = toTrimmedString(record[BC_QUEUE_PROJECT_NO_FIELD]);
+        const queueTaskSystemId = normalizeTaskSystemId(toTrimmedString(record[BC_QUEUE_TASK_SYSTEM_ID_FIELD]));
+        const entryMs = extractLatestTimestampMs(record);
+        if (entryMs != null && (latestChangedMs == null || entryMs > latestChangedMs)) {
+            latestChangedMs = entryMs;
+        }
+
+        let resolvedProjectNo = queueProjectNo;
+        if (queueTaskSystemId) {
+            let task = taskCache.get(queueTaskSystemId);
+            if (task === undefined) {
+                try {
+                    task = await bcClient.getProjectTask(queueTaskSystemId);
+                } catch (error) {
+                    const message = (error as Error)?.message || "";
+                    if (message.includes("-> 404")) {
+                        task = null;
+                    } else {
+                        throw error;
+                    }
+                }
+                taskCache.set(queueTaskSystemId, task || null);
+            }
+            const taskMs = task ? extractLatestTimestampMs(task as Record<string, unknown>) : null;
+            if (taskMs != null && (latestChangedMs == null || taskMs > latestChangedMs)) {
+                latestChangedMs = taskMs;
+            }
+            if (task?.projectNo) {
+                const taskProjectNo = toTrimmedString(task.projectNo);
+                if (taskProjectNo) {
+                    resolvedProjectNo = taskProjectNo;
+                }
+            }
+        }
+
+        if (!resolvedProjectNo) continue;
+        projectNos.add(resolvedProjectNo);
+
+        if (!queueTaskSystemId) {
+            fullSyncProjects.add(resolvedProjectNo);
+            continue;
+        }
+        if (fullSyncProjects.has(resolvedProjectNo)) continue;
+
+        const set = taskSystemIdsByProject.get(resolvedProjectNo) || new Set<string>();
+        set.add(queueTaskSystemId);
+        taskSystemIdsByProject.set(resolvedProjectNo, set);
+    }
+
+    return {
+        queueEntries,
+        queueRows: queueEntries.length,
+        projectNos: Array.from(projectNos),
+        taskSystemIdsByProject,
+        fullSyncProjects,
+        latestChangedMs,
+    };
+}
+
 async function markPremiumTaskWrite(taskId: string, meta: Record<string, unknown> = {}) {
     if (!taskId) return;
     try {
@@ -1995,46 +2138,55 @@ export async function syncBcToPremium(
     const taskSystemIdSet = options.taskSystemIds?.length
         ? new Set(options.taskSystemIds.map((value) => normalizeTaskSystemId(value)).filter(Boolean))
         : null;
+    let taskSystemIdsByProject: Map<string, Set<string>> | null = null;
+    let fullSyncProjects: Set<string> | null = null;
 
-    if (!projectNos.length) {
+    if (!projectNos.length && !taskSystemIdSet) {
         try {
-            const cursor = await getBcProjectChangeCursor("premium");
-            const { items, lastSeq } = await bcClient.listProjectChangesSince(cursor);
-            const changed = new Set<string>();
-            for (const item of items) {
-                const proj = (item.projectNo || "").trim();
-                if (proj) changed.add(proj);
-            }
-            projectNos = Array.from(changed);
-            if (lastSeq != null) {
-                await saveBcProjectChangeCursor("premium", lastSeq);
-            }
+            const queueTargets = await resolveBcQueueTargets(bcClient, { requestId });
+            projectNos = queueTargets.projectNos;
+            taskSystemIdsByProject = queueTargets.taskSystemIdsByProject;
+            fullSyncProjects = queueTargets.fullSyncProjects;
         } catch (error) {
-            logger.debug("BC change feed unavailable; falling back to project list", { error: (error as Error)?.message });
+            logger.warn("BC queue load failed", {
+                requestId,
+                entitySet: BC_QUEUE_ENTITY_SET,
+                error: (error as Error)?.message,
+            });
+            return {
+                projects: 0,
+                tasks: 0,
+                created: 0,
+                updated: 0,
+                skipped: 0,
+                errors: 1,
+                projectNos: [] as string[],
+            };
         }
-    }
-
-    if (!projectNos.length && syncConfig.maxProjectsPerRun > 0) {
-        const projects = await bcClient.listProjects();
-        projectNos = projects.map((project) => project.projectNo || "").filter(Boolean).slice(0, syncConfig.maxProjectsPerRun);
     }
 
     if (
         !options.disableProjectConcurrency &&
-        !taskSystemIdSet &&
         syncConfig.projectConcurrency > 1 &&
         projectNos.length > 1
     ) {
-        const runs = await runWithConcurrency(projectNos, syncConfig.projectConcurrency, async (projNo) =>
-            syncBcToPremium(projNo, {
+        const runs = await runWithConcurrency(projectNos, syncConfig.projectConcurrency, async (projNo) => {
+            const projectTaskIds = taskSystemIdSet
+                ? Array.from(taskSystemIdSet)
+                : taskSystemIdsByProject?.get(projNo)
+                  ? Array.from(taskSystemIdsByProject.get(projNo) || [])
+                  : undefined;
+            const forceFullSync = !taskSystemIdSet && !!fullSyncProjects?.has(projNo);
+            return syncBcToPremium(projNo, {
                 requestId,
+                taskSystemIds: forceFullSync ? undefined : projectTaskIds,
                 skipProjectAccess: options.skipProjectAccess,
                 taskOnly: options.taskOnly,
                 preferPlanner: options.preferPlanner,
                 forceProjectCreate: options.forceProjectCreate,
                 disableProjectConcurrency: true,
-            })
-        );
+            });
+        });
         const mergedProjectNos = new Set<string>();
         let projects = 0;
         let tasks = 0;
@@ -2084,9 +2236,14 @@ export async function syncBcToPremium(
 
         let tasks: BcProjectTask[] = [];
         try {
-            if (taskSystemIdSet) {
+            const scopedTaskSystemIdSet =
+                taskSystemIdSet ||
+                (taskSystemIdsByProject && !fullSyncProjects?.has(projNo)
+                    ? taskSystemIdsByProject.get(projNo) || null
+                    : null);
+            if (scopedTaskSystemIdSet) {
                 const resolved: BcProjectTask[] = [];
-                for (const systemId of taskSystemIdSet) {
+                for (const systemId of scopedTaskSystemIdSet) {
                     if (!systemId) continue;
                     try {
                         const task = await bcClient.getProjectTask(systemId);
@@ -2928,16 +3085,6 @@ export async function runPremiumChangePoll(options: { requestId?: string } = {})
     return syncPremiumChanges(options);
 }
 
-const BC_CHANGE_TIME_FIELDS = [
-    "changedAt",
-    "systemModifiedAt",
-    "lastModifiedDateTime",
-    "modifiedAt",
-    "modifiedOn",
-    "lastModifiedOn",
-    "systemModifiedOn",
-];
-
 function parseTimestamp(value: unknown): number | null {
     if (value == null) return null;
     const ms = Date.parse(String(value));
@@ -2947,15 +3094,6 @@ function parseTimestamp(value: unknown): number | null {
 function formatTimestamp(ms: number | null): string | null {
     if (ms == null || !Number.isFinite(ms)) return null;
     return new Date(ms).toISOString();
-}
-
-function resolveBcChangeTimestamp(change: BcProjectChange): number | null {
-    const record = change as Record<string, unknown>;
-    for (const field of BC_CHANGE_TIME_FIELDS) {
-        const ms = parseTimestamp(record[field]);
-        if (ms != null) return ms;
-    }
-    return null;
 }
 
 export type BcChangePreview = {
@@ -2990,28 +3128,21 @@ export async function previewBcChanges(options: { requestId?: string } = {}): Pr
     const requestId = options.requestId || "";
     const bcClient = new BusinessCentralClient();
     try {
-        const cursor = await getBcProjectChangeCursor("premium");
-        const { items, lastSeq } = await bcClient.listProjectChangesSince(cursor);
-        const projectNos = new Set<string>();
-        let latestMs: number | null = null;
-        for (const item of items) {
-            const projectNo = typeof item.projectNo === "string" ? item.projectNo.trim() : "";
-            if (projectNo) projectNos.add(projectNo);
-            const changeMs = resolveBcChangeTimestamp(item);
-            if (changeMs != null && (latestMs == null || changeMs > latestMs)) {
-                latestMs = changeMs;
-            }
-        }
+        const queueTargets = await resolveBcQueueTargets(bcClient, { requestId });
         return {
-            hasChanges: items.length > 0,
-            changes: items.length,
-            latestChangedAt: formatTimestamp(latestMs),
-            latestChangedMs: latestMs,
-            lastSeq: lastSeq ?? null,
-            projectNos: Array.from(projectNos),
+            hasChanges: queueTargets.queueRows > 0,
+            changes: queueTargets.queueRows,
+            latestChangedAt: formatTimestamp(queueTargets.latestChangedMs),
+            latestChangedMs: queueTargets.latestChangedMs,
+            lastSeq: null,
+            projectNos: queueTargets.projectNos,
         };
     } catch (error) {
-        logger.warn("BC change preview failed", { requestId, error: (error as Error)?.message });
+        logger.warn("BC queue preview failed", {
+            requestId,
+            entitySet: BC_QUEUE_ENTITY_SET,
+            error: (error as Error)?.message,
+        });
         return {
             hasChanges: false,
             changes: 0,
@@ -3137,11 +3268,7 @@ export async function runPremiumSyncDecision(options: {
         return { decision, result: null };
     }
     if (decision.decision === "bcToPremium") {
-        const projectNos = decision.bc.projectNos?.length ? decision.bc.projectNos : undefined;
-        const bcResult = await syncBcToPremium(undefined, { requestId, projectNos });
-        if (projectNos && decision.bc.lastSeq != null) {
-            await saveBcProjectChangeCursor("premium", decision.bc.lastSeq);
-        }
+        const bcResult = await syncBcToPremium(undefined, { requestId });
         return { decision, result: { bcToPremium: bcResult } };
     }
     const premiumResult = await syncPremiumChanges({ requestId });
