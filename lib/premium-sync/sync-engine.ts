@@ -27,6 +27,12 @@ type TaskIndex = {
     byTitle: Map<string, string>;
 };
 
+type ScheduleFallbackState = {
+    unavailable: boolean;
+    reason?: string;
+    warned?: boolean;
+};
+
 function hasField(task: BcProjectTask, field: string) {
     return Object.prototype.hasOwnProperty.call(task, field);
 }
@@ -203,6 +209,136 @@ function isInvalidDefaultBucketError(error: unknown) {
     const message = (error as Error)?.message || String(error || "");
     const normalized = message.toLowerCase();
     return normalized.includes("e_invaliddefaultbucket") || normalized.includes("invalid default bucket");
+}
+
+function isOperationSetLimitError(error: unknown) {
+    const message = (error as Error)?.message || String(error || "");
+    const normalized = message.toLowerCase();
+    if (normalized.includes("scheduleapi-ov-0004")) return true;
+    if (normalized.includes("maximum number of operation set")) return true;
+    if (normalized.includes("maximum number of operationset")) return true;
+    return normalized.includes("operation set allowed per user");
+}
+
+function extractOperationSetId(row: DataverseEntity) {
+    if (!row || typeof row !== "object") return null;
+    const direct = row.msdyn_operationsetid || row.OperationSetId || row.operationSetId;
+    if (typeof direct === "string" && direct.trim()) return direct.trim();
+    for (const key of Object.keys(row)) {
+        if (key.toLowerCase().endsWith("operationsetid")) {
+            const value = row[key];
+            if (typeof value === "string" && value.trim()) return value.trim();
+        }
+    }
+    return null;
+}
+
+function isTerminalOperationSet(row: DataverseEntity) {
+    if (row.msdyn_completedon || row.msdyn_executedon) return true;
+    const stateCode = Number(row.statecode);
+    if (Number.isFinite(stateCode) && stateCode !== 0) return true;
+    const statusCode = Number(row.statuscode ?? row.msdyn_status);
+    if (Number.isFinite(statusCode) && statusCode === 192350003) return true;
+    return false;
+}
+
+async function resolveOperationSetEntitySet(dataverse: DataverseClient) {
+    try {
+        const res = await dataverse.requestRaw("/EntityDefinitions(LogicalName='msdyn_operationset')?$select=EntitySetName");
+        const data = (await res.json()) as { EntitySetName?: string; entitySetName?: string };
+        const entitySet = data?.EntitySetName || data?.entitySetName;
+        if (entitySet) return String(entitySet);
+    } catch (error) {
+        logger.warn("Operation set entity set lookup failed", { error: (error as Error)?.message });
+    }
+    return "msdyn_operationsets";
+}
+
+async function clearCompletedOperationSetsForCapacity(dataverse: DataverseClient, meta: Record<string, unknown> = {}) {
+    const entitySet = await resolveOperationSetEntitySet(dataverse);
+    const olderThanMinutes = 5;
+    const pageSize = 50;
+    const maxPages = 10;
+    const maxDelete = 250;
+    const cutoffMs = Date.now() - olderThanMinutes * 60 * 1000;
+
+    let pages = 0;
+    let scanned = 0;
+    let nextLink: string | null = null;
+    const idsToDelete: string[] = [];
+
+    while (pages < maxPages && idsToDelete.length < maxDelete) {
+        const path =
+            nextLink ||
+            `/${entitySet}?$select=msdyn_operationsetid,msdyn_completedon,msdyn_executedon,createdon,modifiedon,statecode,statuscode,msdyn_status&$top=${pageSize}`;
+        const res = await dataverse.requestRaw(path);
+        const data = (await res.json()) as { value?: DataverseEntity[]; "@odata.nextLink"?: string };
+        const rows = Array.isArray(data?.value) ? data.value : [];
+        scanned += rows.length;
+
+        for (const row of rows) {
+            if (!isTerminalOperationSet(row)) continue;
+            const ts =
+                parseDateMs(String(row.msdyn_completedon || "")) ??
+                parseDateMs(String(row.msdyn_executedon || "")) ??
+                parseDateMs(String(row.modifiedon || "")) ??
+                parseDateMs(String(row.createdon || ""));
+            if (ts == null || ts > cutoffMs) continue;
+            const id = extractOperationSetId(row);
+            if (!id) continue;
+            idsToDelete.push(id);
+            if (idsToDelete.length >= maxDelete) break;
+        }
+
+        nextLink = data?.["@odata.nextLink"] || null;
+        pages += 1;
+        if (!nextLink) break;
+    }
+
+    let deleted = 0;
+    let failed = 0;
+    for (const id of idsToDelete) {
+        try {
+            await dataverse.delete(entitySet, id);
+            deleted += 1;
+        } catch (error) {
+            failed += 1;
+            logger.warn("Operation set delete failed during capacity cleanup", {
+                ...meta,
+                operationSetId: id,
+                error: (error as Error)?.message,
+            });
+        }
+    }
+
+    return { entitySet, scanned, considered: idsToDelete.length, deleted, failed, olderThanMinutes };
+}
+
+async function createOperationSetWithRecovery(options: {
+    dataverse: DataverseClient;
+    projectId: string;
+    description: string;
+    requestId?: string;
+    projectNo?: string;
+}) {
+    try {
+        return await options.dataverse.createOperationSet(options.projectId, options.description);
+    } catch (error) {
+        if (!isOperationSetLimitError(error)) throw error;
+        const cleanup = await clearCompletedOperationSetsForCapacity(options.dataverse, {
+            requestId: options.requestId,
+            projectNo: options.projectNo,
+            projectId: options.projectId,
+        });
+        logger.warn("Dataverse operation set capacity reached; cleaned completed sets and retrying", {
+            requestId: options.requestId,
+            projectNo: options.projectNo,
+            projectId: options.projectId,
+            ...cleanup,
+            error: (error as Error)?.message,
+        });
+        return options.dataverse.createOperationSet(options.projectId, options.description);
+    }
 }
 
 async function runWithConcurrency<T, R>(
@@ -1286,6 +1422,7 @@ async function runScheduleUpdateFallback(options: {
     task: BcProjectTask;
     taskId: string;
     projectId: string;
+    requestId?: string;
     mapping: ReturnType<typeof getDataverseMappingConfig>;
     resourceCache: Map<string, string | null>;
     teamCache: Map<string, string | null>;
@@ -1296,10 +1433,13 @@ async function runScheduleUpdateFallback(options: {
     startOverride?: string | null;
     finishOverride?: string | null;
 }) {
-    const operationSetId = await options.dataverse.createOperationSet(
-        options.projectId,
-        `BC sync fallback ${options.projectId} ${new Date().toISOString()}`
-    );
+    const operationSetId = await createOperationSetWithRecovery({
+        dataverse: options.dataverse,
+        projectId: options.projectId,
+        projectNo: options.task.projectNo,
+        requestId: options.requestId,
+        description: `BC sync fallback ${options.projectId} ${new Date().toISOString()}`,
+    });
     if (!operationSetId) {
         throw new Error("Dataverse schedule API unavailable for fallback update");
     }
@@ -1344,6 +1484,7 @@ async function runScheduleCreateFallback(options: {
     dataverse: DataverseClient;
     task: BcProjectTask;
     projectId: string;
+    requestId?: string;
     mapping: ReturnType<typeof getDataverseMappingConfig>;
     bucketCache: Map<string, string | null>;
     resourceCache: Map<string, string | null>;
@@ -1352,10 +1493,13 @@ async function runScheduleCreateFallback(options: {
     assignmentSnapshotLoaded?: boolean;
     assignmentLookups?: { project: string; task: string; team: string };
 }) {
-    const operationSetId = await options.dataverse.createOperationSet(
-        options.projectId,
-        `BC sync fallback ${options.projectId} ${new Date().toISOString()}`
-    );
+    const operationSetId = await createOperationSetWithRecovery({
+        dataverse: options.dataverse,
+        projectId: options.projectId,
+        projectNo: options.task.projectNo,
+        requestId: options.requestId,
+        description: `BC sync fallback ${options.projectId} ${new Date().toISOString()}`,
+    });
     if (!operationSetId) {
         throw new Error("Dataverse schedule API unavailable for fallback create");
     }
@@ -1452,6 +1596,7 @@ async function syncTaskToDataverse(
         plannerModifiedGraceMs?: number;
         skipCreate?: boolean;
         taskIndex?: TaskIndex;
+        scheduleFallbackState?: ScheduleFallbackState;
     }
 ) {
     const payload = buildTaskPayload(task, projectId, mapping, dataverse);
@@ -1630,6 +1775,17 @@ async function syncTaskToDataverse(
             return { action: "updated", taskId };
         } catch (error) {
             if (isDirectTaskWriteBlocked(error)) {
+                if (options.scheduleFallbackState?.unavailable) {
+                    if (!options.scheduleFallbackState.warned) {
+                        options.scheduleFallbackState.warned = true;
+                        logger.warn("Skipping direct Dataverse task writes; schedule fallback unavailable for project", {
+                            requestId: options.requestId,
+                            projectNo: task.projectNo,
+                            reason: options.scheduleFallbackState.reason,
+                        });
+                    }
+                    return { action: "skipped", taskId };
+                }
                 try {
                     return await runScheduleUpdateFallback({
                         bcClient,
@@ -1637,6 +1793,7 @@ async function syncTaskToDataverse(
                         task,
                         taskId,
                         projectId,
+                        requestId: options.requestId,
                         mapping,
                         resourceCache: options.resourceCache,
                         teamCache: options.teamCache,
@@ -1648,6 +1805,20 @@ async function syncTaskToDataverse(
                         finishOverride: finishOverride ?? undefined,
                     });
                 } catch (fallbackError) {
+                    if (isOperationSetLimitError(fallbackError)) {
+                        if (options.scheduleFallbackState) {
+                            options.scheduleFallbackState.unavailable = true;
+                            options.scheduleFallbackState.reason = "operation_set_capacity";
+                        }
+                        logger.warn("Schedule fallback disabled for project after operation set limit error", {
+                            requestId: options.requestId,
+                            projectNo: task.projectNo,
+                            taskNo: task.taskNo,
+                            projectId,
+                            error: (fallbackError as Error)?.message,
+                        });
+                        return { action: "skipped", taskId };
+                    }
                     logger.warn("Schedule update fallback failed", {
                         projectId,
                         taskId,
@@ -1719,12 +1890,24 @@ async function syncTaskToDataverse(
         return { action: "created", taskId: created.entityId };
     } catch (error) {
         if (isDirectTaskWriteBlocked(error)) {
+            if (options.scheduleFallbackState?.unavailable) {
+                if (!options.scheduleFallbackState.warned) {
+                    options.scheduleFallbackState.warned = true;
+                    logger.warn("Skipping direct Dataverse task writes; schedule fallback unavailable for project", {
+                        requestId: options.requestId,
+                        projectNo: task.projectNo,
+                        reason: options.scheduleFallbackState.reason,
+                    });
+                }
+                return { action: "skipped", taskId: "" };
+            }
             try {
                 return await runScheduleCreateFallback({
                     bcClient,
                     dataverse,
                     task,
                     projectId,
+                    requestId: options.requestId,
                     mapping,
                     bucketCache: options.bucketCache,
                     resourceCache: options.resourceCache,
@@ -1734,6 +1917,20 @@ async function syncTaskToDataverse(
                     assignmentLookups: options.assignmentLookups,
                 });
             } catch (fallbackError) {
+                if (isOperationSetLimitError(fallbackError)) {
+                    if (options.scheduleFallbackState) {
+                        options.scheduleFallbackState.unavailable = true;
+                        options.scheduleFallbackState.reason = "operation_set_capacity";
+                    }
+                    logger.warn("Schedule fallback disabled for project after operation set limit error", {
+                        requestId: options.requestId,
+                        projectNo: task.projectNo,
+                        taskNo: task.taskNo,
+                        projectId,
+                        error: (fallbackError as Error)?.message,
+                    });
+                    return { action: "skipped", taskId: "" };
+                }
                 logger.warn("Schedule create fallback failed", {
                     projectId,
                     error: (fallbackError as Error)?.message,
@@ -1954,6 +2151,7 @@ export async function syncBcToPremium(
         const assignmentCache = new Set<string>();
         const scheduleTasks: BcProjectTask[] = [];
         const scheduleCounts = { created: 0, updated: 0, skipped: 0 };
+        const scheduleFallbackState: ScheduleFallbackState = { unavailable: false };
         let useScheduleApi = syncConfig.useScheduleApi;
         let operationSetId = "";
         let operationSetTouched = false;
@@ -1970,10 +2168,13 @@ export async function syncBcToPremium(
         }
         if (useScheduleApi) {
             try {
-                operationSetId = await dataverse.createOperationSet(
+                operationSetId = await createOperationSetWithRecovery({
+                    dataverse,
                     projectId,
-                    `BC sync ${projNo} ${new Date().toISOString()}`
-                );
+                    projectNo: projNo,
+                    requestId,
+                    description: `BC sync ${projNo} ${new Date().toISOString()}`,
+                });
                 if (!operationSetId) {
                     useScheduleApi = false;
                     logger.warn("Dataverse schedule API unavailable; falling back to direct updates", {
@@ -1983,6 +2184,10 @@ export async function syncBcToPremium(
                 }
             } catch (error) {
                 useScheduleApi = false;
+                if (isOperationSetLimitError(error)) {
+                    scheduleFallbackState.unavailable = true;
+                    scheduleFallbackState.reason = "operation_set_capacity";
+                }
                 logger.warn("Dataverse schedule API init failed; falling back to direct updates", {
                     requestId,
                     projectNo: projNo,
@@ -2100,6 +2305,7 @@ export async function syncBcToPremium(
                         preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                         plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
                         taskIndex,
+                        scheduleFallbackState,
                     });
                     if (res.pendingUpdate) {
                         pendingUpdates.push(res.pendingUpdate);
@@ -2199,6 +2405,7 @@ export async function syncBcToPremium(
                                     plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
                                     skipCreate,
                                     taskIndex,
+                                    scheduleFallbackState,
                                 });
                                 if (res.action === "created") result.created += 1;
                                 else if (res.action === "updated") result.updated += 1;

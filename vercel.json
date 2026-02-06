@@ -25,6 +25,10 @@
         {
             "path": "/api/sync/auto?cronSecret=YOUR_CRON_SECRET",
             "schedule": "*/10 * * * *"
+        },
+        {
+            "path": "/api/sync/clear-operation-sets?olderThanMinutes=30&limit=250",
+            "schedule": "0 * * * *"
         }
     ],
     "headers": [
