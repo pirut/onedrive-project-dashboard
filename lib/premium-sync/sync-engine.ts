@@ -1974,8 +1974,15 @@ type BcQueueTargetInfo = {
     queueRows: number;
     projectNos: string[];
     taskSystemIdsByProject: Map<string, Set<string>>;
+    queueEntriesByProject: Map<string, BcQueueEntryRef[]>;
     fullSyncProjects: Set<string>;
     latestChangedMs: number | null;
+};
+
+type BcQueueEntryRef = {
+    queueEntryId: string;
+    projectNo: string;
+    taskSystemId: string;
 };
 
 function toTrimmedString(value: unknown): string {
@@ -1990,6 +1997,12 @@ function extractLatestTimestampMs(record: Record<string, unknown>): number | nul
         if (ms != null) return ms;
     }
     return null;
+}
+
+function shouldDeleteQueueEntryAfterSync() {
+    const raw = (process.env.BC_SYNC_QUEUE_DELETE_AFTER || "").trim().toLowerCase();
+    if (!raw) return true;
+    return !["0", "false", "no", "n", "off"].includes(raw);
 }
 
 async function loadBcQueueEntries(
@@ -2031,6 +2044,7 @@ async function resolveBcQueueTargets(
     const queueEntries = await loadBcQueueEntries(bcClient, options);
     const projectNos = new Set<string>();
     const taskSystemIdsByProject = new Map<string, Set<string>>();
+    const queueEntriesByProject = new Map<string, BcQueueEntryRef[]>();
     const fullSyncProjects = new Set<string>();
     const taskCache = new Map<string, BcProjectTask | null>();
     let latestChangedMs: number | null = null;
@@ -2074,6 +2088,16 @@ async function resolveBcQueueTargets(
 
         if (!resolvedProjectNo) continue;
         projectNos.add(resolvedProjectNo);
+        const queueEntryId = normalizeTaskSystemId(toTrimmedString(record.systemId || record.id || record.entryId));
+        if (queueEntryId) {
+            const refs = queueEntriesByProject.get(resolvedProjectNo) || [];
+            refs.push({
+                queueEntryId,
+                projectNo: resolvedProjectNo,
+                taskSystemId: queueTaskSystemId,
+            });
+            queueEntriesByProject.set(resolvedProjectNo, refs);
+        }
 
         if (!queueTaskSystemId) {
             fullSyncProjects.add(resolvedProjectNo);
@@ -2091,6 +2115,7 @@ async function resolveBcQueueTargets(
         queueRows: queueEntries.length,
         projectNos: Array.from(projectNos),
         taskSystemIdsByProject,
+        queueEntriesByProject,
         fullSyncProjects,
         latestChangedMs,
     };
@@ -2111,6 +2136,7 @@ export async function syncBcToPremium(
         requestId?: string;
         projectNos?: string[];
         taskSystemIds?: string[];
+        queueEntries?: BcQueueEntryRef[];
         skipProjectAccess?: boolean;
         taskOnly?: boolean;
         preferPlanner?: boolean;
@@ -2139,6 +2165,7 @@ export async function syncBcToPremium(
         ? new Set(options.taskSystemIds.map((value) => normalizeTaskSystemId(value)).filter(Boolean))
         : null;
     let taskSystemIdsByProject: Map<string, Set<string>> | null = null;
+    let queueEntriesByProject: Map<string, BcQueueEntryRef[]> | null = null;
     let fullSyncProjects: Set<string> | null = null;
 
     if (!projectNos.length && !taskSystemIdSet) {
@@ -2146,6 +2173,7 @@ export async function syncBcToPremium(
             const queueTargets = await resolveBcQueueTargets(bcClient, { requestId });
             projectNos = queueTargets.projectNos;
             taskSystemIdsByProject = queueTargets.taskSystemIdsByProject;
+            queueEntriesByProject = queueTargets.queueEntriesByProject;
             fullSyncProjects = queueTargets.fullSyncProjects;
         } catch (error) {
             logger.warn("BC queue load failed", {
@@ -2180,6 +2208,7 @@ export async function syncBcToPremium(
             return syncBcToPremium(projNo, {
                 requestId,
                 taskSystemIds: forceFullSync ? undefined : projectTaskIds,
+                queueEntries: queueEntriesByProject?.get(projNo) || [],
                 skipProjectAccess: options.skipProjectAccess,
                 taskOnly: options.taskOnly,
                 preferPlanner: options.preferPlanner,
@@ -2233,6 +2262,11 @@ export async function syncBcToPremium(
             logger.info("Premium sync skipped for disabled project", { requestId, projectNo: projNo });
             continue;
         }
+        const scopedQueueEntries =
+            options.queueEntries ||
+            (queueEntriesByProject && queueEntriesByProject.get(projNo) ? queueEntriesByProject.get(projNo) || [] : []);
+        const successfulTaskSystemIds = new Set<string>();
+        const projectErrorsStart = result.errors;
 
         let tasks: BcProjectTask[] = [];
         try {
@@ -2503,6 +2537,10 @@ export async function syncBcToPremium(
                 result.errors += 1;
                 continue;
             }
+            const outcomeSystemId = normalizeTaskSystemId(String(outcome.task?.systemId || ""));
+            if ((outcome.action === "created" || outcome.action === "updated") && outcomeSystemId) {
+                successfulTaskSystemIds.add(outcomeSystemId);
+            }
             if (usingOperationSet) {
                 if (outcome.action === "created") scheduleCounts.created += 1;
                 else if (outcome.action === "updated") scheduleCounts.updated += 1;
@@ -2564,9 +2602,17 @@ export async function syncBcToPremium(
                                     taskIndex,
                                     scheduleFallbackState,
                                 });
-                                if (res.action === "created") result.created += 1;
-                                else if (res.action === "updated") result.updated += 1;
-                                else result.skipped += 1;
+                                if (res.action === "created") {
+                                    result.created += 1;
+                                    const taskId = normalizeTaskSystemId(String(task.systemId || ""));
+                                    if (taskId) successfulTaskSystemIds.add(taskId);
+                                } else if (res.action === "updated") {
+                                    result.updated += 1;
+                                    const taskId = normalizeTaskSystemId(String(task.systemId || ""));
+                                    if (taskId) successfulTaskSystemIds.add(taskId);
+                                } else {
+                                    result.skipped += 1;
+                                }
                             } catch (retryError) {
                                 result.errors += 1;
                                 logger.warn("Premium task direct retry failed", {
@@ -2577,6 +2623,31 @@ export async function syncBcToPremium(
                                 });
                             }
                         }
+                    }
+                }
+            }
+            if (shouldDeleteQueueEntryAfterSync() && scopedQueueEntries.length && BC_QUEUE_ENTITY_SET) {
+                const seenEntryIds = new Set<string>();
+                const projectHadErrors = result.errors > projectErrorsStart;
+                for (const queueEntry of scopedQueueEntries) {
+                    const entryId = normalizeTaskSystemId(queueEntry.queueEntryId);
+                    if (!entryId || seenEntryIds.has(entryId)) continue;
+                    seenEntryIds.add(entryId);
+                    const taskId = normalizeTaskSystemId(queueEntry.taskSystemId);
+                    const canDelete = taskId
+                        ? successfulTaskSystemIds.has(taskId)
+                        : !projectHadErrors;
+                    if (!canDelete) continue;
+                    try {
+                        await bcClient.deleteEntity(BC_QUEUE_ENTITY_SET, entryId);
+                    } catch (error) {
+                        logger.warn("BC queue entry delete failed", {
+                            requestId,
+                            projectNo: projNo,
+                            queueEntryId: entryId,
+                            taskSystemId: taskId || null,
+                            error: (error as Error)?.message,
+                        });
                     }
                 }
             }
