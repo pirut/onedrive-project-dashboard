@@ -2559,6 +2559,33 @@ export async function syncBcToPremium(
             continue;
         }
 
+        if (!tasks.length && scopedQueueEntries.length) {
+            const retryFilter = `projectNo eq '${escapeODataString(projNo)}'`;
+            for (let attempt = 1; attempt <= 3 && !tasks.length; attempt += 1) {
+                await sleep(attempt * 800);
+                try {
+                    const reloadedTasks = await bcClient.listProjectTasks(retryFilter);
+                    if (!reloadedTasks.length) continue;
+                    tasks = reloadedTasks;
+                    // Queue events can arrive before task rows are queryable. Once rows appear, seed the whole project.
+                    scopedTaskSystemIdSet = null;
+                    logger.info("Queue-triggered sync expanded after BC task propagation delay", {
+                        requestId,
+                        projectNo: projNo,
+                        attempt,
+                        loadedTasks: reloadedTasks.length,
+                    });
+                } catch (error) {
+                    logger.warn("BC task reload after queue trigger failed", {
+                        requestId,
+                        projectNo: projNo,
+                        attempt,
+                        error: (error as Error)?.message,
+                    });
+                }
+            }
+        }
+
         let sorted = tasks.length ? sortTasksByTaskNo(tasks) : [];
         const currentSection = { name: null as string | null };
 
