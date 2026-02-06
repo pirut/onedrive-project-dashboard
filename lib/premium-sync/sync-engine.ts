@@ -396,6 +396,10 @@ async function runWithConcurrency<T, R>(
     return results;
 }
 
+function sleep(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 function createEmptyTaskIndex(): TaskIndex {
     return { byId: new Set(), byTaskNo: new Map(), byTitle: new Map() };
 }
@@ -870,30 +874,47 @@ async function getProjectBucketId(
     if (cache.has(projectId)) {
         return cache.get(projectId) || null;
     }
-    try {
-        const result = await dataverse.list<DataverseEntity>("msdyn_projectbuckets", {
-            select: ["msdyn_projectbucketid"],
-            filter: `_msdyn_project_value eq ${formatODataGuid(projectId)}`,
-            top: 1,
-        });
-        const bucketId = result.value[0]?.msdyn_projectbucketid;
-        const resolved = typeof bucketId === "string" && bucketId.trim() ? bucketId.trim() : null;
-        if (resolved) {
-            await ensureProjectDefaultBucket(dataverse, projectId, resolved);
-            cache.set(projectId, resolved);
-            return resolved;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+            const result = await dataverse.list<DataverseEntity>("msdyn_projectbuckets", {
+                select: ["msdyn_projectbucketid"],
+                filter: `_msdyn_project_value eq ${formatODataGuid(projectId)}`,
+                top: 1,
+            });
+            const bucketId = result.value[0]?.msdyn_projectbucketid;
+            const resolved = typeof bucketId === "string" && bucketId.trim() ? bucketId.trim() : null;
+            if (resolved) {
+                await ensureProjectDefaultBucket(dataverse, projectId, resolved);
+                cache.set(projectId, resolved);
+                return resolved;
+            }
+            const created = await createProjectBucket(dataverse, projectId, "General");
+            if (created) {
+                await ensureProjectDefaultBucket(dataverse, projectId, created);
+                cache.set(projectId, created);
+                return created;
+            }
+        } catch (error) {
+            lastError = error;
+            logger.warn("Dataverse bucket lookup failed", {
+                projectId,
+                attempt,
+                error: (error as Error)?.message,
+            });
         }
-        const created = await createProjectBucket(dataverse, projectId, "General");
-        if (created) {
-            await ensureProjectDefaultBucket(dataverse, projectId, created);
+        if (attempt < 3) {
+            await sleep(attempt * 500);
         }
-        cache.set(projectId, created);
-        return created;
-    } catch (error) {
-        logger.warn("Dataverse bucket lookup failed", { projectId, error: (error as Error)?.message });
-        cache.set(projectId, null);
-        return null;
     }
+    if (lastError) {
+        logger.warn("Dataverse bucket unavailable after retries", {
+            projectId,
+            error: (lastError as Error)?.message,
+        });
+    }
+    cache.set(projectId, null);
+    return null;
 }
 
 function getAssigneeName(task: BcProjectTask) {
@@ -1781,7 +1802,6 @@ async function syncTaskToDataverse(
         taskOnly?: boolean;
         preferPlanner?: boolean;
         plannerModifiedGraceMs?: number;
-        skipCreate?: boolean;
         taskIndex?: TaskIndex;
         scheduleFallbackState?: ScheduleFallbackState;
         requireScheduleApi?: boolean;
@@ -2041,7 +2061,7 @@ async function syncTaskToDataverse(
         }
     }
 
-    if (!mapping.allowTaskCreate || options.taskOnly || options.skipCreate) {
+    if (!mapping.allowTaskCreate || options.taskOnly) {
         return { action: "skipped", taskId: "" };
     }
 
@@ -2820,11 +2840,14 @@ export async function syncBcToPremium(
                         projectNo: projNo,
                         error: (error as Error)?.message,
                     });
-                    const skipCreate = isInvalidDefaultBucketError(error);
-                    if (skipCreate) {
-                        logger.warn("Dataverse default bucket invalid; skipping task creates during retry", {
+                    if (isInvalidDefaultBucketError(error)) {
+                        bucketCache.delete(projectId);
+                        const recoveredBucket = await getProjectBucketId(dataverse, projectId, bucketCache);
+                        logger.warn("Dataverse default bucket invalid; refreshed bucket before retry", {
                             requestId,
                             projectNo: projNo,
+                            projectId,
+                            recovered: Boolean(recoveredBucket),
                         });
                     }
                     if (scheduleTasks.length) {
@@ -2854,7 +2877,6 @@ export async function syncBcToPremium(
                                     touchOperationSet: undefined,
                                     preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
                                     plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
-                                    skipCreate,
                                     taskIndex,
                                     scheduleFallbackState,
                                     requireScheduleApi,
