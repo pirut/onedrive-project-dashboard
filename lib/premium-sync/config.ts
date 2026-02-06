@@ -57,6 +57,7 @@ export function getPremiumSyncConfig() {
         previewPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_PREVIEW_PAGE_SIZE", 50))),
         previewMaxPages: Math.max(1, Math.floor(readNumberEnv("PREMIUM_PREVIEW_MAX_PAGES", 1))),
         useScheduleApi: readBoolEnv("DATAVERSE_USE_SCHEDULE_API", true),
+        requireScheduleApi: readBoolEnv("DATAVERSE_REQUIRE_SCHEDULE_API", true),
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
         allowedTaskNumbers: readNumberListEnv("SYNC_TASK_NO_ALLOWLIST", DEFAULT_SYNC_TASK_NUMBERS),

@@ -199,6 +199,14 @@ function isAllowedSyncTaskNo(taskNo: string | number | null | undefined, allowli
     return allowlist.has(taskNumber);
 }
 
+function normalizeEntitySetName(value: string | undefined | null) {
+    return (value || "").trim().replace(/^\/+/, "").toLowerCase();
+}
+
+function isScheduleManagedTaskEntity(mapping: ReturnType<typeof getDataverseMappingConfig>) {
+    return normalizeEntitySetName(mapping.taskEntitySet) === "msdyn_projecttasks";
+}
+
 function warnNonGuidPlannerPlanId(projectNo: string | undefined, projectId: string) {
     const key = (projectNo || "").trim() || projectId;
     if (!key) return;
@@ -545,13 +553,28 @@ const BC_PERCENT_FIELDS = ["percentComplete", "percentcomplete", "percentComplet
 const BC_START_FIELDS = ["manualStartDate", "startDate", "plannedStartDate", "plannedStart", "startingDate"];
 const BC_FINISH_FIELDS = ["manualEndDate", "endDate", "plannedEndDate", "plannedEnd", "finishDate", "dueDate"];
 
+function hasUsableBcTaskValue(value: unknown) {
+    if (value == null) return false;
+    if (typeof value === "string") return Boolean(value.trim());
+    return true;
+}
+
 function readBcTaskField(task: BcProjectTask, candidates: string[]): BcTaskSyncField<unknown> {
+    let found = false;
+    let firstPresent: unknown = null;
     for (const key of candidates) {
         if (hasField(task, key)) {
-            return { present: true, value: task[key] };
+            const value = task[key];
+            if (!found) {
+                found = true;
+                firstPresent = value;
+            }
+            if (hasUsableBcTaskValue(value)) {
+                return { present: true, value };
+            }
         }
     }
-    return { present: false, value: null };
+    return found ? { present: true, value: firstPresent } : { present: false, value: null };
 }
 
 function toNullableTrimmedString(value: unknown) {
@@ -1714,12 +1737,14 @@ async function syncTaskToDataverse(
         skipCreate?: boolean;
         taskIndex?: TaskIndex;
         scheduleFallbackState?: ScheduleFallbackState;
+        requireScheduleApi?: boolean;
     }
 ) {
     const bcFields = resolveBcTaskSyncFields(task);
     const payload = buildTaskPayload(task, projectId, mapping, dataverse, bcFields);
     const payloadTitle = payload[mapping.taskTitleField];
     const titleKey = typeof payloadTitle === "string" && payloadTitle.trim() ? payloadTitle.trim().toLowerCase() : "";
+    const requireScheduleApi = Boolean(options.requireScheduleApi);
     const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
     let taskId = existingId || "";
     if (taskId && !isGuid(taskId)) {
@@ -1769,11 +1794,10 @@ async function syncTaskToDataverse(
             mapping.percentMin,
             mapping.percentMax
         );
-        const bcStart = bcFields.start.value;
-        const bcFinish = bcFields.finish.value;
         let percentOverride: number | null | undefined;
         let startOverride: string | null | undefined;
         let finishOverride: string | null | undefined;
+
         if (options.useScheduleApi && (!bcFields.percent.present || !bcFields.start.present || !bcFields.finish.present)) {
             try {
                 const snapshot = await getDataverseTaskScheduleSnapshot(dataverse, taskId, mapping);
@@ -1845,39 +1869,56 @@ async function syncTaskToDataverse(
                     assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
                     assignmentLookups: options.assignmentLookups,
                 });
-                const updates = {
-                    plannerTaskId: taskId,
-                    plannerPlanId: projectId,
-                    lastPlannerEtag: task.lastPlannerEtag || "",
-                    lastSyncAt: new Date().toISOString(),
-                };
+            }
+            const updates = {
+                plannerTaskId: taskId,
+                plannerPlanId: projectId,
+                lastPlannerEtag: task.lastPlannerEtag || "",
+                lastSyncAt: new Date().toISOString(),
+            };
             addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
             return { action: "updated", taskId, pendingUpdate: { task, updates } };
         }
-        const updates = {
-            plannerTaskId: taskId,
-            plannerPlanId: projectId,
-            lastPlannerEtag: task.lastPlannerEtag || "",
-            lastSyncAt: new Date().toISOString(),
-        };
-        addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
-        return { action: "updated", taskId, pendingUpdate: { task, updates } };
-    }
+
+        if (requireScheduleApi) {
+            if (options.scheduleFallbackState?.unavailable) {
+                throw new Error(
+                    `Dataverse schedule API unavailable for BC -> Premium update (${options.scheduleFallbackState.reason || "unknown"})`
+                );
+            }
+            return runScheduleUpdateFallback({
+                bcClient,
+                dataverse,
+                task,
+                taskId,
+                projectId,
+                requestId: options.requestId,
+                mapping,
+                resourceCache: options.resourceCache,
+                teamCache: options.teamCache,
+                assignmentCache: options.assignmentCache,
+                assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+                assignmentLookups: options.assignmentLookups,
+                percentOverride: percentOverride ?? bcPercent ?? undefined,
+                startOverride: startOverride ?? undefined,
+                finishOverride: finishOverride ?? undefined,
+            });
+        }
 
         if (options.taskOnly) {
             const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
             await markPremiumTaskWrite(taskId, { requestId: options.requestId, projectNo: task.projectNo, taskNo: task.taskNo });
             const updateResult = await dataverse.update(mapping.taskEntitySet, taskId, payload, { ifMatch });
-        const updates = {
-            plannerTaskId: taskId,
-            plannerPlanId: projectId,
-            lastPlannerEtag: updateResult.etag || task.lastPlannerEtag || "",
-            lastSyncAt: new Date().toISOString(),
-        };
-        await updateBcTaskWithSyncLock(bcClient, task, updates);
-        addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
-        return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
-    }
+            const updates = {
+                plannerTaskId: taskId,
+                plannerPlanId: projectId,
+                lastPlannerEtag: updateResult.etag || task.lastPlannerEtag || "",
+                lastSyncAt: new Date().toISOString(),
+            };
+            await updateBcTaskWithSyncLock(bcClient, task, updates);
+            addToTaskIndex(options.taskIndex, taskId, task, payloadTitle as string);
+            return { action: "updated", taskId, etag: updateResult.etag || task.lastPlannerEtag };
+        }
 
         const ifMatch = task.lastPlannerEtag ? String(task.lastPlannerEtag) : undefined;
         try {
@@ -1985,6 +2026,28 @@ async function syncTaskToDataverse(
         };
         addToTaskIndex(options.taskIndex, newTaskId, task, payloadTitle as string);
         return { action: "created", taskId: newTaskId, pendingUpdate: { task, updates } };
+    }
+
+    if (requireScheduleApi) {
+        if (options.scheduleFallbackState?.unavailable) {
+            throw new Error(
+                `Dataverse schedule API unavailable for BC -> Premium create (${options.scheduleFallbackState.reason || "unknown"})`
+            );
+        }
+        return runScheduleCreateFallback({
+            bcClient,
+            dataverse,
+            task,
+            projectId,
+            requestId: options.requestId,
+            mapping,
+            bucketCache: options.bucketCache,
+            resourceCache: options.resourceCache,
+            teamCache: options.teamCache,
+            assignmentCache: options.assignmentCache,
+            assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+            assignmentLookups: options.assignmentLookups,
+        });
     }
 
     try {
@@ -2271,6 +2334,7 @@ export async function syncBcToPremium(
     const syncConfig = getPremiumSyncConfig();
     const allowedTaskNumbers = buildAllowedTaskNumberSet(syncConfig);
     const mapping = getDataverseMappingConfig();
+    const requireScheduleApi = Boolean(syncConfig.requireScheduleApi && isScheduleManagedTaskEntity(mapping));
     const bcClient = new BusinessCentralClient();
     const dataverse = new DataverseClient();
     const plannerGroupId = syncConfig.plannerGroupId;
@@ -2472,8 +2536,7 @@ export async function syncBcToPremium(
         if (useScheduleApi) {
             const bucketId = await getProjectBucketId(dataverse, projectId, bucketCache);
             if (!bucketId) {
-                useScheduleApi = false;
-                logger.warn("Dataverse bucket unavailable; falling back to direct updates", {
+                logger.warn("Dataverse bucket unavailable; continuing with schedule API updates (task creates may fail)", {
                     requestId,
                     projectNo: projNo,
                     projectId,
@@ -2491,7 +2554,7 @@ export async function syncBcToPremium(
                 });
                 if (!operationSetId) {
                     useScheduleApi = false;
-                    logger.warn("Dataverse schedule API unavailable; falling back to direct updates", {
+                    logger.warn("Dataverse schedule API unavailable; using per-task schedule fallback", {
                         requestId,
                         projectNo: projNo,
                     });
@@ -2502,7 +2565,7 @@ export async function syncBcToPremium(
                     scheduleFallbackState.unavailable = true;
                     scheduleFallbackState.reason = "operation_set_capacity";
                 }
-                logger.warn("Dataverse schedule API init failed; falling back to direct updates", {
+                logger.warn("Dataverse schedule API init failed; using per-task schedule fallback", {
                     requestId,
                     projectNo: projNo,
                     error: (error as Error)?.message,
@@ -2633,6 +2696,7 @@ export async function syncBcToPremium(
                         plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
                         taskIndex,
                         scheduleFallbackState,
+                        requireScheduleApi,
                     });
                     if (res.pendingUpdate) {
                         pendingUpdates.push(res.pendingUpdate);
@@ -2713,11 +2777,16 @@ export async function syncBcToPremium(
                         });
                     }
                     if (scheduleTasks.length) {
-                        logger.warn("Retrying tasks via direct Dataverse API", {
-                            requestId,
-                            projectNo: projNo,
-                            count: scheduleTasks.length,
-                        });
+                        logger.warn(
+                            requireScheduleApi
+                                ? "Retrying tasks via per-task schedule operation sets"
+                                : "Retrying tasks via direct Dataverse API",
+                            {
+                                requestId,
+                                projectNo: projNo,
+                                count: scheduleTasks.length,
+                            }
+                        );
                         for (const task of scheduleTasks) {
                             try {
                                 const res = await syncTaskToDataverse(bcClient, dataverse, task, projectId, mapping, {
@@ -2737,6 +2806,7 @@ export async function syncBcToPremium(
                                     skipCreate,
                                     taskIndex,
                                     scheduleFallbackState,
+                                    requireScheduleApi,
                                 });
                                 if (res.action === "created") {
                                     result.created += 1;
@@ -2751,7 +2821,7 @@ export async function syncBcToPremium(
                                 }
                             } catch (retryError) {
                                 result.errors += 1;
-                                logger.warn("Premium task direct retry failed", {
+                                logger.warn("Premium task retry failed", {
                                     requestId,
                                     projectNo: projNo,
                                     taskNo: task.taskNo,
