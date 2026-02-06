@@ -3004,13 +3004,15 @@ export async function syncBcToPremium(
                 const projectHadErrors = result.errors > projectErrorsStart;
                 const projectHadTaskReads = result.tasks > projectTasksStart;
                 const projectHadSyncActivity = result.created + result.updated + result.skipped > projectActivityStart;
+                const usedFullProjectScope = !scopedTaskSystemIdSet;
                 for (const queueEntry of scopedQueueEntries) {
                     const entryId = normalizeTaskSystemId(queueEntry.queueEntryId);
                     if (!entryId || seenEntryIds.has(entryId)) continue;
                     seenEntryIds.add(entryId);
                     const taskId = canonicalTaskSystemId(queueEntry.taskSystemId);
                     const canDelete = taskId
-                        ? successfulTaskSystemIds.has(taskId)
+                        ? successfulTaskSystemIds.has(taskId) ||
+                          (usedFullProjectScope && !projectHadErrors && (projectHadTaskReads || projectHadSyncActivity))
                         : !projectHadErrors && (projectHadTaskReads || projectHadSyncActivity);
                     if (!canDelete) continue;
                     try {

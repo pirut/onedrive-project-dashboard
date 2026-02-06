@@ -29,20 +29,61 @@ async function readJsonBody(req) {
 function extractTaskIds(payload) {
     if (!payload || typeof payload !== "object") return [];
     const ids = new Set();
-    const maybeAdd = (value) => {
-        if (typeof value === "string" && value.trim()) ids.add(value.trim());
+    const guidPattern = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+    const normalizeGuid = (value) => {
+        const trimmed = String(value || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+        return guidPattern.test(trimmed) ? trimmed : "";
     };
-    maybeAdd(payload.Id || payload.id || payload.primaryEntityId || payload.PrimaryEntityId);
-    const inputParams = payload.InputParameters || payload.inputParameters;
-    if (Array.isArray(inputParams)) {
-        for (const param of inputParams) {
-            maybeAdd(param?.Value?.Id || param?.value?.Id || param?.Value?.id || param?.value?.id);
+    const maybeAdd = (value) => {
+        const guid = normalizeGuid(value);
+        if (guid) ids.add(guid);
+    };
+    const maybeExtractFromEntityRef = (value) => {
+        if (!value || typeof value !== "object") return;
+        maybeAdd(value.Id || value.id);
+    };
+    const extractFromObject = (value) => {
+        if (!value || typeof value !== "object") return;
+        maybeAdd(value.Id || value.id || value.primaryEntityId || value.PrimaryEntityId);
+        maybeExtractFromEntityRef(value.Target || value.target);
+        maybeExtractFromEntityRef(value.EntityReference || value.entityReference);
+
+        const inputParams = value.InputParameters || value.inputParameters;
+        if (Array.isArray(inputParams)) {
+            for (const param of inputParams) {
+                maybeExtractFromEntityRef(param?.Value || param?.value);
+                maybeExtractFromEntityRef(param?.Parameter || param?.parameter);
+            }
+        } else if (inputParams && typeof inputParams === "object") {
+            for (const paramValue of Object.values(inputParams)) {
+                maybeExtractFromEntityRef(paramValue?.Value || paramValue?.value || paramValue);
+            }
+        }
+
+        const imageCollections = [
+            value.PreEntityImages,
+            value.PostEntityImages,
+            value.preEntityImages,
+            value.postEntityImages,
+        ];
+        for (const collection of imageCollections) {
+            if (!collection || typeof collection !== "object") continue;
+            for (const image of Object.values(collection)) {
+                maybeExtractFromEntityRef(image);
+            }
+        }
+    };
+
+    const items = Array.isArray(payload.value) ? payload.value : [payload];
+    for (const item of items) {
+        extractFromObject(item);
+        if (Array.isArray(item?.value)) {
+            for (const nested of item.value) {
+                extractFromObject(nested);
+            }
         }
     }
-    const target = payload.Target || payload.target;
-    if (target) {
-        maybeAdd(target.Id || target.id);
-    }
+
     return Array.from(ids);
 }
 
@@ -116,8 +157,12 @@ export default async function handler(req, res) {
     });
 
     if (!filtered.length) {
-        logger.warn("Dataverse webhook missing task ids", { requestId });
         const reason = taskIds.length ? "bc_origin" : "no_task_ids";
+        if (reason === "bc_origin") {
+            logger.info("Dataverse webhook ignored BC-origin task ids", { requestId, ignored: ignored.length });
+        } else {
+            logger.warn("Dataverse webhook missing task ids", { requestId });
+        }
         await appendPremiumWebhookLog({ ts: new Date().toISOString(), requestId, type: "skipped", reason });
         res.status(200).json({ ok: true, skipped: true, reason, ignored });
         return;
