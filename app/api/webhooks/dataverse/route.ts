@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     }
 
     try {
-        const result = await syncPremiumTaskIds(taskIds, { requestId });
+        const result = await syncPremiumTaskIds(taskIds, { requestId, respectPreferBc: false });
         return new Response(JSON.stringify({ ok: true, taskIds, result }, null, 2), {
             status: 200,
             headers: { "Content-Type": "application/json" },

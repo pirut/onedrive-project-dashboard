@@ -5,6 +5,7 @@ import { DataverseClient, DataverseEntity } from "../dataverse-client.js";
 import { getDataverseDeltaLink, saveDataverseDeltaLink } from "./delta-store.js";
 import { getDataverseMappingConfig, getPremiumSyncConfig } from "./config.js";
 import { markPremiumTaskIdsFromBc } from "./bc-write-store.js";
+import { markBcTaskSystemIdsFromPremium, wasBcTaskSystemIdUpdatedByPremium } from "./premium-write-store.js";
 import crypto from "crypto";
 
 const HEADING_TASK_SECTIONS = new Map<number, string | null>([
@@ -2135,6 +2136,20 @@ async function markPremiumTaskWrite(taskId: string, meta: Record<string, unknown
     }
 }
 
+async function markBcTaskWrite(systemId: string, meta: Record<string, unknown> = {}) {
+    const normalizedSystemId = canonicalTaskSystemId(systemId);
+    if (!normalizedSystemId) return;
+    try {
+        await markBcTaskSystemIdsFromPremium([normalizedSystemId]);
+    } catch (error) {
+        logger.warn("Failed to mark BC task write", {
+            systemId: normalizedSystemId,
+            ...meta,
+            error: (error as Error)?.message,
+        });
+    }
+}
+
 export async function syncBcToPremium(
     projectNo?: string,
     options: {
@@ -2448,8 +2463,8 @@ export async function syncBcToPremium(
         const toSync: BcProjectTask[] = [];
         for (const task of sorted) {
             const skipForSection = shouldSkipTaskForSection(task, currentSection);
-                    const systemId = typeof task.systemId === "string" ? canonicalTaskSystemId(task.systemId) : "";
-                    const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
+            const systemId = typeof task.systemId === "string" ? canonicalTaskSystemId(task.systemId) : "";
+            const isTarget = !taskSystemIdSet || (systemId && taskSystemIdSet.has(systemId));
             if (!isTarget) {
                 continue;
             }
@@ -2460,6 +2475,19 @@ export async function syncBcToPremium(
             }
             if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) {
                 result.skipped += 1;
+                continue;
+            }
+            if (systemId && (await wasBcTaskSystemIdUpdatedByPremium(systemId))) {
+                result.skipped += 1;
+                successfulTaskSystemIds.add(systemId);
+                if (requestId) {
+                    logger.info("BC -> Premium skipped (premium-origin writeback window)", {
+                        requestId,
+                        projectNo: task.projectNo,
+                        taskNo: task.taskNo,
+                        systemId,
+                    });
+                }
                 continue;
             }
             toSync.push(task);
@@ -2889,6 +2917,11 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                             lastPlannerEtag: "",
                             lastSyncAt: new Date().toISOString(),
                         });
+                        await markBcTaskWrite(bcTask.systemId, {
+                            requestId,
+                            taskId: trimmedTaskId,
+                            action: "clear_link",
+                        });
                         outcome.cleared += 1;
                     } catch (error) {
                         outcome.errors += 1;
@@ -2988,6 +3021,11 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                 plannerPlanId: typeof planId === "string" ? planId : cleanTask.plannerPlanId,
             };
             await updateBcTaskWithSyncLock(bcClient, cleanTask, finalUpdates);
+            await markBcTaskWrite(cleanTask.systemId, {
+                requestId,
+                taskId: typeof taskId === "string" ? taskId : cleanTask.plannerTaskId,
+                action: "update",
+            });
             outcome.updated += 1;
         } catch (error) {
             outcome.errors += 1;
@@ -3017,9 +3055,10 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
 
 export async function syncPremiumTaskIds(
     taskIds: string[],
-    options: { requestId?: string } = {}
+    options: { requestId?: string; respectPreferBc?: boolean } = {}
 ) {
     const requestId = options.requestId || "";
+    const respectPreferBc = options.respectPreferBc === true;
     const syncConfig = getPremiumSyncConfig();
     const allowedTaskNumbers = buildAllowedTaskNumberSet(syncConfig);
     const mapping = getDataverseMappingConfig();
@@ -3081,6 +3120,11 @@ export async function syncPremiumTaskIds(
                             lastPlannerEtag: "",
                             lastSyncAt: new Date().toISOString(),
                         });
+                        await markBcTaskWrite(bcTask.systemId, {
+                            requestId,
+                            taskId,
+                            action: "clear_link",
+                        });
                         outcome.cleared += 1;
                     } catch (clearError) {
                         outcome.errors += 1;
@@ -3121,7 +3165,7 @@ export async function syncPremiumTaskIds(
             return outcome;
         }
 
-        if (syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
+        if (respectPreferBc && syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
             outcome.skipped += 1;
             return outcome;
         }
@@ -3135,6 +3179,7 @@ export async function syncPremiumTaskIds(
                 plannerPlanId: typeof planId === "string" ? planId : cleanTask.plannerPlanId,
             };
             await updateBcTaskWithSyncLock(bcClient, cleanTask, finalUpdates);
+            await markBcTaskWrite(cleanTask.systemId, { requestId, taskId, action: "update" });
             outcome.updated += 1;
         } catch (error) {
             outcome.errors += 1;

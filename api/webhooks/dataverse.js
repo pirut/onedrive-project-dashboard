@@ -124,7 +124,7 @@ export default async function handler(req, res) {
     }
 
     try {
-        const result = await syncPremiumTaskIds(filtered, { requestId });
+        const result = await syncPremiumTaskIds(filtered, { requestId, respectPreferBc: false });
         res.status(200).json({ ok: true, taskIds: filtered, ignored, result });
     } catch (error) {
         logger.error("Dataverse webhook processing failed", { requestId, error: error?.message || String(error) });
