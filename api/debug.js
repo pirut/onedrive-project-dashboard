@@ -51,6 +51,7 @@ export default async function handler(req, res) {
 
     const routes = {
         "POST /api/sync/bc-to-premium": "BC → Planner Premium sync",
+        "POST /api/sync/bc-to-premium-reseed": "BC → Premium force task recreate (ignore stale Planner task IDs)",
         "POST /api/sync/premium-to-bc": "Premium → BC sync (Dataverse delta)",
         "POST /api/sync/auto": "Auto sync (choose most recent changes)",
         "GET /api/sync/premium-project-link": "Resolve Premium plan link for a BC project",

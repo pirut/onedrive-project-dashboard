@@ -9,19 +9,18 @@ async function readJsonBody(request: Request) {
     }
 }
 
-async function handle(request: Request) {
-    const body = request.method === "POST" ? await readJsonBody(request) : null;
+export async function POST(request: Request) {
+    const body = await readJsonBody(request);
     const projectNo = body?.projectNo ? String(body.projectNo).trim() : "";
     const projectNos = Array.isArray(body?.projectNos) ? body.projectNos.map((value: unknown) => String(value).trim()).filter(Boolean) : [];
     const includePremiumChanges = body?.includePremiumChanges === true;
-    const forceTaskRecreate = body?.forceTaskRecreate === true;
 
     try {
         const bcResult = await syncBcToPremium(projectNo || undefined, {
             requestId: body?.requestId ? String(body.requestId) : undefined,
             projectNos: projectNos.length ? projectNos : undefined,
             preferPlanner: false,
-            forceTaskRecreate,
+            forceTaskRecreate: true,
         });
         let premiumResult = null;
         if (includePremiumChanges) {
@@ -32,18 +31,10 @@ async function handle(request: Request) {
             headers: { "Content-Type": "application/json" },
         });
     } catch (error) {
-        logger.error("BC to Premium sync failed", { error: (error as Error)?.message || String(error) });
+        logger.error("BC to Premium reseed failed", { error: (error as Error)?.message || String(error) });
         return new Response(JSON.stringify({ ok: false, error: (error as Error)?.message || String(error) }, null, 2), {
             status: 400,
             headers: { "Content-Type": "application/json" },
         });
     }
-}
-
-export async function GET(request: Request) {
-    return handle(request);
-}
-
-export async function POST(request: Request) {
-    return handle(request);
 }

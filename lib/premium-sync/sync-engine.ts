@@ -1835,6 +1835,7 @@ async function syncTaskToDataverse(
         taskIndex?: TaskIndex;
         scheduleFallbackState?: ScheduleFallbackState;
         requireScheduleApi?: boolean;
+        forceTaskRecreate?: boolean;
     }
 ) {
     const bcFields = resolveBcTaskSyncFields(task);
@@ -1842,7 +1843,8 @@ async function syncTaskToDataverse(
     const payloadTitle = payload[mapping.taskTitleField];
     const titleKey = typeof payloadTitle === "string" && payloadTitle.trim() ? payloadTitle.trim().toLowerCase() : "";
     const requireScheduleApi = Boolean(options.requireScheduleApi);
-    const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
+    const forceTaskRecreate = Boolean(options.forceTaskRecreate);
+    const existingId = forceTaskRecreate ? "" : task.plannerTaskId ? task.plannerTaskId.trim() : "";
     let taskId = existingId || "";
     if (taskId && !isGuid(taskId)) {
         warnNonGuidPlannerTaskId(task.projectNo, task.taskNo, taskId);
@@ -1865,7 +1867,7 @@ async function syncTaskToDataverse(
     }
 
     let existingTask: DataverseEntity | null = null;
-    if (!taskId && task.taskNo) {
+    if (!forceTaskRecreate && !taskId && task.taskNo) {
         const indexed = options.taskIndex?.byTaskNo?.get(String(task.taskNo).trim());
         if (indexed) {
             taskId = indexed;
@@ -1875,7 +1877,7 @@ async function syncTaskToDataverse(
         }
     }
 
-    if (!taskId && !options.taskOnly) {
+    if (!forceTaskRecreate && !taskId && !options.taskOnly) {
         if (titleKey && options.taskIndex?.byTitle?.has(titleKey)) {
             taskId = options.taskIndex.byTitle.get(titleKey) || "";
         } else {
@@ -2428,6 +2430,7 @@ export async function syncBcToPremium(
         taskOnly?: boolean;
         preferPlanner?: boolean;
         forceProjectCreate?: boolean;
+        forceTaskRecreate?: boolean;
         disableProjectConcurrency?: boolean;
     } = {}
 ) {
@@ -2501,6 +2504,7 @@ export async function syncBcToPremium(
                 taskOnly: options.taskOnly,
                 preferPlanner: options.preferPlanner,
                 forceProjectCreate: options.forceProjectCreate,
+                forceTaskRecreate: options.forceTaskRecreate,
                 disableProjectConcurrency: true,
             });
         });
@@ -2866,6 +2870,7 @@ export async function syncBcToPremium(
                 skippedBySection,
                 skippedByAllowlist,
                 skippedByPremiumWriteback,
+                forceTaskRecreate: Boolean(options.forceTaskRecreate),
             });
         }
 
@@ -2917,6 +2922,7 @@ export async function syncBcToPremium(
                         taskIndex,
                         scheduleFallbackState,
                         requireScheduleApi,
+                        forceTaskRecreate: options.forceTaskRecreate,
                     });
                     if (res.pendingUpdate) {
                         pendingUpdates.push(res.pendingUpdate);
@@ -2938,11 +2944,15 @@ export async function syncBcToPremium(
             // Keep create operations ordered while allowing updates to parallelize.
             const likelyCreates: BcProjectTask[] = [];
             const likelyUpdates: BcProjectTask[] = [];
-            for (const task of toSync) {
-                if (hasLikelyExistingDataverseTask(task, taskIndex, options.taskOnly)) {
-                    likelyUpdates.push(task);
-                } else {
-                    likelyCreates.push(task);
+            if (options.forceTaskRecreate) {
+                likelyCreates.push(...toSync);
+            } else {
+                for (const task of toSync) {
+                    if (hasLikelyExistingDataverseTask(task, taskIndex, options.taskOnly)) {
+                        likelyUpdates.push(task);
+                    } else {
+                        likelyCreates.push(task);
+                    }
                 }
             }
             const createOutcomes = await syncTaskBatch(likelyCreates, 1);
@@ -3029,6 +3039,7 @@ export async function syncBcToPremium(
                                     taskIndex,
                                     scheduleFallbackState,
                                     requireScheduleApi,
+                                    forceTaskRecreate: options.forceTaskRecreate,
                                 });
                                 if (res.action === "created") {
                                     result.created += 1;
@@ -3098,6 +3109,7 @@ export async function syncBcToPremium(
                     errors: result.errors - projectErrorsStart,
                     usedScheduleApi: useScheduleApi,
                     operationSetId: operationSetId || null,
+                    forceTaskRecreate: Boolean(options.forceTaskRecreate),
                 });
             }
         } finally {
