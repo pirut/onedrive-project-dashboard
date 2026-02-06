@@ -40,7 +40,7 @@ function readNumberListEnv(name: string, fallback: number[]) {
     return parsed.length ? parsed : fallback;
 }
 
-const DEFAULT_SYNC_TASK_NUMBERS = [1100, 1200, 1300, 1400, 1500, 2100, 2200, 2300, 2400];
+const DEFAULT_SYNC_TASK_NUMBERS: number[] = [];
 
 export function getPremiumSyncConfig() {
     return {

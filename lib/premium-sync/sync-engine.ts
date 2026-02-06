@@ -527,20 +527,95 @@ function normalizeProjectKey(value: string | undefined | null) {
     return normalizeProjectNo(value || "");
 }
 
-function buildTaskTitle(task: BcProjectTask) {
-    const description = (task.description || "").trim();
-    const taskNo = (task.taskNo || "").trim();
-    return description || taskNo || "Untitled Task";
+type BcTaskSyncField<T> = {
+    present: boolean;
+    value: T | null;
+};
+
+type BcTaskSyncFields = {
+    title: string;
+    description: BcTaskSyncField<string>;
+    percent: BcTaskSyncField<number>;
+    start: BcTaskSyncField<string>;
+    finish: BcTaskSyncField<string>;
+};
+
+const BC_DESCRIPTION_FIELDS = ["description", "taskDescription", "title", "name"];
+const BC_PERCENT_FIELDS = ["percentComplete", "percentcomplete", "percentCompleted", "percentageComplete", "completionPercent"];
+const BC_START_FIELDS = ["manualStartDate", "startDate", "plannedStartDate", "plannedStart", "startingDate"];
+const BC_FINISH_FIELDS = ["manualEndDate", "endDate", "plannedEndDate", "plannedEnd", "finishDate", "dueDate"];
+
+function readBcTaskField(task: BcProjectTask, candidates: string[]): BcTaskSyncField<unknown> {
+    for (const key of candidates) {
+        if (hasField(task, key)) {
+            return { present: true, value: task[key] };
+        }
+    }
+    return { present: false, value: null };
 }
 
-function toDataversePercent(value: number | null | undefined, scale: number, min: number, max: number) {
-    if (typeof value !== "number" || Number.isNaN(value)) return null;
-    let raw = !scale || scale === 1 ? value : value / scale;
+function toNullableTrimmedString(value: unknown) {
+    if (value == null) return null;
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed || null;
+    }
+    const text = String(value).trim();
+    return text || null;
+}
+
+function resolveBcDescriptionField(task: BcProjectTask): BcTaskSyncField<string> {
+    const raw = readBcTaskField(task, BC_DESCRIPTION_FIELDS);
+    return {
+        present: raw.present,
+        value: toNullableTrimmedString(raw.value),
+    };
+}
+
+function resolveBcPercentField(task: BcProjectTask): BcTaskSyncField<number> {
+    const raw = readBcTaskField(task, BC_PERCENT_FIELDS);
+    if (!raw.present) return { present: false, value: null };
+    if (raw.value == null) return { present: true, value: null };
+    const parsed = typeof raw.value === "number" ? raw.value : Number(String(raw.value).trim());
+    return { present: true, value: Number.isFinite(parsed) ? parsed : null };
+}
+
+function resolveBcDateField(task: BcProjectTask, candidates: string[]): BcTaskSyncField<string> {
+    const raw = readBcTaskField(task, candidates);
+    if (!raw.present) return { present: false, value: null };
+    const asString = toNullableTrimmedString(raw.value);
+    if (!asString) return { present: true, value: null };
+    return { present: true, value: resolveTaskDate(asString) };
+}
+
+function resolveBcTaskSyncFields(task: BcProjectTask): BcTaskSyncFields {
+    const description = resolveBcDescriptionField(task);
+    const taskNo = (task.taskNo || "").trim();
+    const title = description.value || taskNo || "Untitled Task";
+    return {
+        title,
+        description,
+        percent: resolveBcPercentField(task),
+        start: resolveBcDateField(task, BC_START_FIELDS),
+        finish: resolveBcDateField(task, BC_FINISH_FIELDS),
+    };
+}
+
+function buildTaskTitle(task: BcProjectTask) {
+    return resolveBcTaskSyncFields(task).title;
+}
+
+function toDataversePercent(value: unknown, scale: number, min: number, max: number) {
+    if (value == null) return null;
+    const parsed = typeof value === "number" ? value : Number(String(value).trim());
+    if (!Number.isFinite(parsed) || Number.isNaN(parsed)) return null;
+    const numericValue = parsed;
+    let raw = !scale || scale === 1 ? numericValue : numericValue / scale;
     if (!Number.isFinite(raw)) return null;
     const lower = Number.isFinite(min) ? min : 0;
     const upper = Number.isFinite(max) ? max : 100;
-    if (scale === 1 && upper <= 1 && raw > upper && value <= 100) {
-        raw = value / 100;
+    if (scale === 1 && upper <= 1 && raw > upper && numericValue <= 100) {
+        raw = numericValue / 100;
     }
     if (raw < lower) return lower;
     if (raw > upper) return upper;
@@ -670,6 +745,7 @@ function buildScheduleTaskEntity(params: {
     projectId: string;
     bucketId?: string | null;
     task: BcProjectTask;
+    bcFields?: BcTaskSyncFields;
     mapping: ReturnType<typeof getDataverseMappingConfig>;
     dataverse: DataverseClient;
     mode?: "create" | "update";
@@ -677,39 +753,53 @@ function buildScheduleTaskEntity(params: {
     startOverride?: string | null;
     finishOverride?: string | null;
 }) {
-    const { taskId, projectId, bucketId, task, mapping, dataverse, mode, percentOverride, startOverride, finishOverride } =
+    const { taskId, projectId, bucketId, task, bcFields, mapping, dataverse, mode, percentOverride, startOverride, finishOverride } =
         params;
     const isCreate = mode === "create";
+    const fields = bcFields || resolveBcTaskSyncFields(task);
     const entity: DataverseEntity = {
         "@odata.type": "Microsoft.Dynamics.CRM.msdyn_projecttask",
         [mapping.taskIdField]: taskId,
     };
 
-    const title = buildTaskTitle(task);
+    const title = fields.title;
     entity[mapping.taskTitleField] = title;
 
     if (isCreate && mapping.taskBcNoField && task.taskNo) {
         entity[mapping.taskBcNoField] = String(task.taskNo).trim();
     }
 
-    const start = startOverride ?? resolveTaskDate(task.manualStartDate || task.startDate || null);
-    const finish = finishOverride ?? resolveTaskDate(task.manualEndDate || task.endDate || null);
+    const start = startOverride !== undefined ? startOverride : fields.start.value;
+    const finish = finishOverride !== undefined ? finishOverride : fields.finish.value;
     if (start) {
         entity[mapping.taskStartField] = start;
+    } else if (!isCreate && fields.start.present) {
+        entity[mapping.taskStartField] = null;
     }
     if (finish) {
         if (!start || Date.parse(finish) >= Date.parse(start)) {
             entity[mapping.taskFinishField] = finish;
         }
+    } else if (!isCreate && fields.finish.present) {
+        entity[mapping.taskFinishField] = null;
     }
 
     const percent =
-        percentOverride ??
-        toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
-    if (percent != null) entity[mapping.taskPercentField] = percent;
+        percentOverride !== undefined
+            ? percentOverride
+            : toDataversePercent(fields.percent.value, mapping.percentScale, mapping.percentMin, mapping.percentMax);
+    if (percent != null) {
+        entity[mapping.taskPercentField] = percent;
+    } else if (!isCreate && fields.percent.present) {
+        entity[mapping.taskPercentField] = null;
+    }
 
-    if (mapping.taskDescriptionField && task.description) {
-        entity[mapping.taskDescriptionField] = task.description;
+    if (mapping.taskDescriptionField) {
+        if (fields.description.value) {
+            entity[mapping.taskDescriptionField] = fields.description.value;
+        } else if (!isCreate && fields.description.present) {
+            entity[mapping.taskDescriptionField] = null;
+        }
     }
 
     if (isCreate) {
@@ -1262,26 +1352,36 @@ function buildTaskPayload(
     task: BcProjectTask,
     projectId: string,
     mapping: ReturnType<typeof getDataverseMappingConfig>,
-    dataverse: DataverseClient
+    dataverse: DataverseClient,
+    bcFields?: BcTaskSyncFields
 ) {
+    const fields = bcFields || resolveBcTaskSyncFields(task);
     const payload: Record<string, unknown> = {};
-    const title = buildTaskTitle(task);
+    const title = fields.title;
     payload[mapping.taskTitleField] = title;
 
-    const start = resolveTaskDate(task.manualStartDate || task.startDate || null);
-    const finish = resolveTaskDate(task.manualEndDate || task.endDate || null);
+    const start = fields.start.value;
+    const finish = fields.finish.value;
     if (start) payload[mapping.taskStartField] = start;
+    else if (fields.start.present) payload[mapping.taskStartField] = null;
     if (finish) {
         if (!start || Date.parse(finish) >= Date.parse(start)) {
             payload[mapping.taskFinishField] = finish;
         }
+    } else if (fields.finish.present) {
+        payload[mapping.taskFinishField] = null;
     }
 
-    const percent = toDataversePercent(task.percentComplete ?? null, mapping.percentScale, mapping.percentMin, mapping.percentMax);
+    const percent = toDataversePercent(fields.percent.value, mapping.percentScale, mapping.percentMin, mapping.percentMax);
     if (percent != null) payload[mapping.taskPercentField] = percent;
+    else if (fields.percent.present) payload[mapping.taskPercentField] = null;
 
-    if (mapping.taskDescriptionField && task.description) {
-        payload[mapping.taskDescriptionField] = task.description;
+    if (mapping.taskDescriptionField) {
+        if (fields.description.value) {
+            payload[mapping.taskDescriptionField] = fields.description.value;
+        } else if (fields.description.present) {
+            payload[mapping.taskDescriptionField] = null;
+        }
     }
 
     if (mapping.taskBcNoField && task.taskNo) {
@@ -1616,7 +1716,8 @@ async function syncTaskToDataverse(
         scheduleFallbackState?: ScheduleFallbackState;
     }
 ) {
-    const payload = buildTaskPayload(task, projectId, mapping, dataverse);
+    const bcFields = resolveBcTaskSyncFields(task);
+    const payload = buildTaskPayload(task, projectId, mapping, dataverse, bcFields);
     const payloadTitle = payload[mapping.taskTitleField];
     const titleKey = typeof payloadTitle === "string" && payloadTitle.trim() ? payloadTitle.trim().toLowerCase() : "";
     const existingId = task.plannerTaskId ? task.plannerTaskId.trim() : "";
@@ -1663,22 +1764,22 @@ async function syncTaskToDataverse(
 
     if (taskId) {
         const bcPercent = toDataversePercent(
-            task.percentComplete ?? null,
+            bcFields.percent.value,
             mapping.percentScale,
             mapping.percentMin,
             mapping.percentMax
         );
-        const bcStart = resolveTaskDate(task.manualStartDate || task.startDate || null);
-        const bcFinish = resolveTaskDate(task.manualEndDate || task.endDate || null);
+        const bcStart = bcFields.start.value;
+        const bcFinish = bcFields.finish.value;
         let percentOverride: number | null | undefined;
         let startOverride: string | null | undefined;
         let finishOverride: string | null | undefined;
-        if (options.useScheduleApi && (bcPercent == null || !bcStart || !bcFinish)) {
+        if (options.useScheduleApi && (!bcFields.percent.present || !bcFields.start.present || !bcFields.finish.present)) {
             try {
                 const snapshot = await getDataverseTaskScheduleSnapshot(dataverse, taskId, mapping);
-                if (bcPercent == null) percentOverride = snapshot.percent ?? null;
-                if (!bcStart) startOverride = snapshot.start ?? null;
-                if (!bcFinish) finishOverride = snapshot.finish ?? null;
+                if (!bcFields.percent.present) percentOverride = snapshot.percent ?? null;
+                if (!bcFields.start.present) startOverride = snapshot.start ?? null;
+                if (!bcFields.finish.present) finishOverride = snapshot.finish ?? null;
             } catch (error) {
                 logger.debug("Dataverse schedule snapshot lookup failed; proceeding with BC update", {
                     requestId: options.requestId,
@@ -1726,6 +1827,7 @@ async function syncTaskToDataverse(
                 projectId,
                 bucketId: null,
                 task,
+                bcFields,
                 mapping,
                 dataverse,
                 mode: "update",
@@ -1861,6 +1963,7 @@ async function syncTaskToDataverse(
             projectId,
             bucketId,
             task,
+            bcFields,
             mapping,
             dataverse,
             mode: "create",
