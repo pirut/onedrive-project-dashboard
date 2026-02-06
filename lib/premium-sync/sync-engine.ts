@@ -1969,6 +1969,11 @@ function normalizeTaskSystemId(raw: string) {
     return value.trim();
 }
 
+function canonicalTaskSystemId(raw: string) {
+    const normalized = normalizeTaskSystemId(raw);
+    return normalized ? normalized.toLowerCase() : "";
+}
+
 type BcQueueTargetInfo = {
     queueEntries: Array<Record<string, unknown>>;
     queueRows: number;
@@ -2537,7 +2542,7 @@ export async function syncBcToPremium(
                 result.errors += 1;
                 continue;
             }
-            const outcomeSystemId = normalizeTaskSystemId(String(outcome.task?.systemId || ""));
+            const outcomeSystemId = canonicalTaskSystemId(String(outcome.task?.systemId || ""));
             if ((outcome.action === "created" || outcome.action === "updated") && outcomeSystemId) {
                 successfulTaskSystemIds.add(outcomeSystemId);
             }
@@ -2604,11 +2609,11 @@ export async function syncBcToPremium(
                                 });
                                 if (res.action === "created") {
                                     result.created += 1;
-                                    const taskId = normalizeTaskSystemId(String(task.systemId || ""));
+                                    const taskId = canonicalTaskSystemId(String(task.systemId || ""));
                                     if (taskId) successfulTaskSystemIds.add(taskId);
                                 } else if (res.action === "updated") {
                                     result.updated += 1;
-                                    const taskId = normalizeTaskSystemId(String(task.systemId || ""));
+                                    const taskId = canonicalTaskSystemId(String(task.systemId || ""));
                                     if (taskId) successfulTaskSystemIds.add(taskId);
                                 } else {
                                     result.skipped += 1;
@@ -2633,7 +2638,7 @@ export async function syncBcToPremium(
                     const entryId = normalizeTaskSystemId(queueEntry.queueEntryId);
                     if (!entryId || seenEntryIds.has(entryId)) continue;
                     seenEntryIds.add(entryId);
-                    const taskId = normalizeTaskSystemId(queueEntry.taskSystemId);
+                    const taskId = canonicalTaskSystemId(queueEntry.taskSystemId);
                     const canDelete = taskId
                         ? successfulTaskSystemIds.has(taskId)
                         : !projectHadErrors;
