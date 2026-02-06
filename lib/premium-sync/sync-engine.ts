@@ -363,15 +363,11 @@ async function updateBcTaskWithSyncLock(
         throw new Error("BC task missing systemId");
     }
     const patch = buildBcPatch(task, updates);
-    if (!Object.keys(patch).length) return;
-
     if (hasField(task, "syncLock")) {
-        await bcClient.patchProjectTask(task.systemId, { syncLock: true });
+        patch.syncLock = false;
     }
-    await bcClient.patchProjectTask(task.systemId, {
-        ...patch,
-        ...(hasField(task, "syncLock") ? { syncLock: false } : {}),
-    });
+    if (!Object.keys(patch).length) return;
+    await bcClient.patchProjectTask(task.systemId, patch);
 }
 
 function normalizeProjectKey(value: string | undefined | null) {
@@ -794,6 +790,8 @@ async function ensureAssignmentForTask(
         resourceCache: Map<string, string | null>;
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
+        assignmentSnapshotLoaded?: boolean;
+        assignmentLookups?: { project: string; task: string; team: string };
     }
 ) {
     const assignee = getAssigneeName(task);
@@ -816,24 +814,25 @@ async function ensureAssignmentForTask(
     }
     const assignmentKey = `${taskId}:${teamId}`;
     if (options.assignmentCache.has(assignmentKey)) return;
-    try {
-        const lookups = await getAssignmentLookupFields(dataverse);
-        const filter = `_${lookups.task}_value eq ${formatODataGuid(taskId)} and _${lookups.team}_value eq ${formatODataGuid(
-            teamId
-        )}`;
-        const existing = await dataverse.list<DataverseEntity>("msdyn_resourceassignments", {
-            select: ["msdyn_resourceassignmentid"],
-            filter,
-            top: 1,
-        });
-        if (existing.value[0]?.msdyn_resourceassignmentid) {
-            options.assignmentCache.add(assignmentKey);
-            return;
+    const lookups = options.assignmentLookups || (await getAssignmentLookupFields(dataverse));
+    if (!options.assignmentSnapshotLoaded) {
+        try {
+            const filter = `_${lookups.task}_value eq ${formatODataGuid(taskId)} and _${lookups.team}_value eq ${formatODataGuid(
+                teamId
+            )}`;
+            const existing = await dataverse.list<DataverseEntity>("msdyn_resourceassignments", {
+                select: ["msdyn_resourceassignmentid"],
+                filter,
+                top: 1,
+            });
+            if (existing.value[0]?.msdyn_resourceassignmentid) {
+                options.assignmentCache.add(assignmentKey);
+                return;
+            }
+        } catch (error) {
+            logger.debug("Dataverse assignment lookup failed", { projectId, taskId, assignee, error: (error as Error)?.message });
         }
-    } catch (error) {
-        logger.debug("Dataverse assignment lookup failed", { projectId, taskId, assignee, error: (error as Error)?.message });
     }
-    const lookups = await getAssignmentLookupFields(dataverse);
     const projectBinding = dataverse.buildLookupBinding("msdyn_projects", projectId);
     const teamBinding = dataverse.buildLookupBinding("msdyn_projectteams", teamId);
     const taskBinding = dataverse.buildLookupBinding("msdyn_projecttasks", taskId);
@@ -855,6 +854,44 @@ async function ensureAssignmentForTask(
         options.assignmentCache.add(assignmentKey);
     } catch (error) {
         logger.warn("Dataverse assignment create failed", { projectId, taskId, assignee, error: (error as Error)?.message });
+    }
+}
+
+async function preloadProjectAssignments(
+    dataverse: DataverseClient,
+    projectId: string,
+    assignmentCache: Set<string>
+) {
+    try {
+        const lookups = await getAssignmentLookupFields(dataverse);
+        const taskLookupField = `_${lookups.task}_value`;
+        const teamLookupField = `_${lookups.team}_value`;
+        const filter = `_${lookups.project}_value eq ${formatODataGuid(projectId)}`;
+        const params = new URLSearchParams();
+        params.set("$select", [taskLookupField, teamLookupField].join(","));
+        params.set("$filter", filter);
+        let next: string | null = `/msdyn_resourceassignments?${params.toString()}`;
+        while (next) {
+            const res = await dataverse.requestRaw(next, {
+                headers: {
+                    Prefer: "odata.maxpagesize=500",
+                },
+            });
+            const data = (await res.json()) as { value?: DataverseEntity[]; "@odata.nextLink"?: string };
+            const rows = Array.isArray(data?.value) ? data.value : [];
+            for (const row of rows) {
+                const taskId = row?.[taskLookupField];
+                const teamId = row?.[teamLookupField];
+                if (typeof taskId === "string" && taskId.trim() && typeof teamId === "string" && teamId.trim()) {
+                    assignmentCache.add(`${taskId.trim()}:${teamId.trim()}`);
+                }
+            }
+            next = data?.["@odata.nextLink"] || null;
+        }
+        return { loaded: true, lookups };
+    } catch (error) {
+        logger.debug("Dataverse assignment preload failed", { projectId, error: (error as Error)?.message });
+        return { loaded: false, lookups: undefined };
     }
 }
 
@@ -1157,6 +1194,28 @@ function sortTasksByTaskNo(tasks: BcProjectTask[]) {
     });
 }
 
+function hasLikelyExistingDataverseTask(
+    task: BcProjectTask,
+    taskIndex: TaskIndex,
+    taskOnly: boolean | undefined
+) {
+    const plannerTaskId = (task.plannerTaskId || "").trim();
+    if (plannerTaskId && isGuid(plannerTaskId)) {
+        return true;
+    }
+    const taskNo = (task.taskNo || "").trim();
+    if (taskNo && taskIndex.byTaskNo.has(taskNo)) {
+        return true;
+    }
+    if (!taskOnly) {
+        const titleKey = buildTaskTitle(task).toLowerCase();
+        if (titleKey && taskIndex.byTitle.has(titleKey)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function buildBcUpdateFromPremium(
     bcTask: BcProjectTask,
     dataverseTask: DataverseEntity,
@@ -1231,6 +1290,8 @@ async function runScheduleUpdateFallback(options: {
     resourceCache: Map<string, string | null>;
     teamCache: Map<string, string | null>;
     assignmentCache: Set<string>;
+    assignmentSnapshotLoaded?: boolean;
+    assignmentLookups?: { project: string; task: string; team: string };
     percentOverride?: number | null;
     startOverride?: string | null;
     finishOverride?: string | null;
@@ -1262,6 +1323,8 @@ async function runScheduleUpdateFallback(options: {
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
+            assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+            assignmentLookups: options.assignmentLookups,
         });
         await options.dataverse.executeOperationSet(operationSetId);
         await updateBcTaskWithSyncLock(options.bcClient, options.task, {
@@ -1286,6 +1349,8 @@ async function runScheduleCreateFallback(options: {
     resourceCache: Map<string, string | null>;
     teamCache: Map<string, string | null>;
     assignmentCache: Set<string>;
+    assignmentSnapshotLoaded?: boolean;
+    assignmentLookups?: { project: string; task: string; team: string };
 }) {
     const operationSetId = await options.dataverse.createOperationSet(
         options.projectId,
@@ -1313,6 +1378,8 @@ async function runScheduleCreateFallback(options: {
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
+            assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+            assignmentLookups: options.assignmentLookups,
         });
         await options.dataverse.executeOperationSet(operationSetId);
         await updateBcTaskWithSyncLock(options.bcClient, options.task, {
@@ -1377,6 +1444,8 @@ async function syncTaskToDataverse(
         resourceCache: Map<string, string | null>;
         teamCache: Map<string, string | null>;
         assignmentCache: Set<string>;
+        assignmentSnapshotLoaded?: boolean;
+        assignmentLookups?: { project: string; task: string; team: string };
         touchOperationSet?: () => void;
         taskOnly?: boolean;
         preferPlanner?: boolean;
@@ -1509,6 +1578,8 @@ async function syncTaskToDataverse(
                     resourceCache: options.resourceCache,
                     teamCache: options.teamCache,
                     assignmentCache: options.assignmentCache,
+                    assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+                    assignmentLookups: options.assignmentLookups,
                 });
                 const updates = {
                     plannerTaskId: taskId,
@@ -1570,6 +1641,8 @@ async function syncTaskToDataverse(
                         resourceCache: options.resourceCache,
                         teamCache: options.teamCache,
                         assignmentCache: options.assignmentCache,
+                        assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+                        assignmentLookups: options.assignmentLookups,
                         percentOverride: percentOverride ?? bcPercent ?? undefined,
                         startOverride: startOverride ?? undefined,
                         finishOverride: finishOverride ?? undefined,
@@ -1610,6 +1683,8 @@ async function syncTaskToDataverse(
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
+            assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+            assignmentLookups: options.assignmentLookups,
         });
         const updates = {
             plannerTaskId: newTaskId,
@@ -1638,6 +1713,8 @@ async function syncTaskToDataverse(
             resourceCache: options.resourceCache,
             teamCache: options.teamCache,
             assignmentCache: options.assignmentCache,
+            assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+            assignmentLookups: options.assignmentLookups,
         });
         return { action: "created", taskId: created.entityId };
     } catch (error) {
@@ -1653,6 +1730,8 @@ async function syncTaskToDataverse(
                     resourceCache: options.resourceCache,
                     teamCache: options.teamCache,
                     assignmentCache: options.assignmentCache,
+                    assignmentSnapshotLoaded: options.assignmentSnapshotLoaded,
+                    assignmentLookups: options.assignmentLookups,
                 });
             } catch (fallbackError) {
                 logger.warn("Schedule create fallback failed", {
@@ -1696,6 +1775,7 @@ export async function syncBcToPremium(
         taskOnly?: boolean;
         preferPlanner?: boolean;
         forceProjectCreate?: boolean;
+        disableProjectConcurrency?: boolean;
     } = {}
 ) {
     const requestId = options.requestId || "";
@@ -1740,6 +1820,51 @@ export async function syncBcToPremium(
     if (!projectNos.length && syncConfig.maxProjectsPerRun > 0) {
         const projects = await bcClient.listProjects();
         projectNos = projects.map((project) => project.projectNo || "").filter(Boolean).slice(0, syncConfig.maxProjectsPerRun);
+    }
+
+    if (
+        !options.disableProjectConcurrency &&
+        !taskSystemIdSet &&
+        syncConfig.projectConcurrency > 1 &&
+        projectNos.length > 1
+    ) {
+        const runs = await runWithConcurrency(projectNos, syncConfig.projectConcurrency, async (projNo) =>
+            syncBcToPremium(projNo, {
+                requestId,
+                skipProjectAccess: options.skipProjectAccess,
+                taskOnly: options.taskOnly,
+                preferPlanner: options.preferPlanner,
+                forceProjectCreate: options.forceProjectCreate,
+                disableProjectConcurrency: true,
+            })
+        );
+        const mergedProjectNos = new Set<string>();
+        let projects = 0;
+        let tasks = 0;
+        let created = 0;
+        let updated = 0;
+        let skipped = 0;
+        let errors = 0;
+        for (const run of runs) {
+            projects += run.projects || 0;
+            tasks += run.tasks || 0;
+            created += run.created || 0;
+            updated += run.updated || 0;
+            skipped += run.skipped || 0;
+            errors += run.errors || 0;
+            for (const proj of run.projectNos || []) {
+                if (proj) mergedProjectNos.add(proj);
+            }
+        }
+        return {
+            projects,
+            tasks,
+            created,
+            updated,
+            skipped,
+            errors,
+            projectNos: Array.from(mergedProjectNos),
+        };
     }
 
     const result = {
@@ -1816,7 +1941,10 @@ export async function syncBcToPremium(
             continue;
         }
 
-        const taskIndex = await loadProjectTaskIndex(dataverse, projectId, mapping);
+        const shouldLoadTaskIndex = !taskSystemIdSet;
+        const taskIndex = shouldLoadTaskIndex
+            ? await loadProjectTaskIndex(dataverse, projectId, mapping)
+            : createEmptyTaskIndex();
 
         const pendingUpdates: Array<{ task: BcProjectTask; updates: Record<string, unknown> }> = [];
         const bucketCache = new Map<string, string | null>();
@@ -1936,48 +2064,76 @@ export async function syncBcToPremium(
             toSync.push(task);
         }
 
+        let assignmentSnapshotLoaded = false;
+        let assignmentLookups: { project: string; task: string; team: string } | undefined;
+        if (!options.taskOnly && toSync.length) {
+            const preload = await preloadProjectAssignments(dataverse, projectId, assignmentCache);
+            assignmentSnapshotLoaded = preload.loaded;
+            assignmentLookups = preload.lookups;
+        }
+
         const usingOperationSet = Boolean(useScheduleApi && operationSetId);
-        // Keep operation-set writes in strict BC order so Planner task order stays stable.
-        const taskConcurrency = usingOperationSet ? 1 : syncConfig.taskConcurrency;
-        const outcomes = await runWithConcurrency(toSync, taskConcurrency, async (task) => {
-            const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
-            if (cleanTask.syncLock) {
-                return { action: "skipped" as const, task: cleanTask };
-            }
-            if (usingOperationSet) {
-                scheduleTasks.push(cleanTask);
-            }
-            try {
-                const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
-                    requestId,
-                    useScheduleApi,
-                    operationSetId: useScheduleApi ? operationSetId : undefined,
-                    bucketCache,
-                    resourceCache,
-                    teamCache,
-                    assignmentCache,
-                    taskOnly: options.taskOnly,
-                    touchOperationSet: () => {
-                        operationSetTouched = true;
-                    },
-                    preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
-                    plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
-                    taskIndex,
-                });
-                if (res.pendingUpdate) {
-                    pendingUpdates.push(res.pendingUpdate);
+        const syncTaskBatch = async (batch: BcProjectTask[], concurrency: number) =>
+            runWithConcurrency(batch, concurrency, async (task) => {
+                const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
+                if (cleanTask.syncLock) {
+                    return { action: "skipped" as const, task: cleanTask };
                 }
-                return { action: res.action as "created" | "updated" | "skipped" | "error", task: cleanTask };
-            } catch (error) {
-                logger.warn("Premium task sync failed", {
-                    requestId,
-                    projectNo: projNo,
-                    taskNo: cleanTask.taskNo,
-                    error: (error as Error)?.message,
-                });
-                return { action: "error" as const, task: cleanTask };
+                if (usingOperationSet) {
+                    scheduleTasks.push(cleanTask);
+                }
+                try {
+                    const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
+                        requestId,
+                        useScheduleApi,
+                        operationSetId: useScheduleApi ? operationSetId : undefined,
+                        bucketCache,
+                        resourceCache,
+                        teamCache,
+                        assignmentCache,
+                        assignmentSnapshotLoaded,
+                        assignmentLookups,
+                        taskOnly: options.taskOnly,
+                        touchOperationSet: () => {
+                            operationSetTouched = true;
+                        },
+                        preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
+                        plannerModifiedGraceMs: syncConfig.premiumModifiedGraceMs,
+                        taskIndex,
+                    });
+                    if (res.pendingUpdate) {
+                        pendingUpdates.push(res.pendingUpdate);
+                    }
+                    return { action: res.action as "created" | "updated" | "skipped" | "error", task: cleanTask };
+                } catch (error) {
+                    logger.warn("Premium task sync failed", {
+                        requestId,
+                        projectNo: projNo,
+                        taskNo: cleanTask.taskNo,
+                        error: (error as Error)?.message,
+                    });
+                    return { action: "error" as const, task: cleanTask };
+                }
+            });
+
+        let outcomes: Array<{ action: "created" | "updated" | "skipped" | "error"; task: BcProjectTask }> = [];
+        if (usingOperationSet) {
+            // Keep create operations ordered while allowing updates to parallelize.
+            const likelyCreates: BcProjectTask[] = [];
+            const likelyUpdates: BcProjectTask[] = [];
+            for (const task of toSync) {
+                if (hasLikelyExistingDataverseTask(task, taskIndex, options.taskOnly)) {
+                    likelyUpdates.push(task);
+                } else {
+                    likelyCreates.push(task);
+                }
             }
-        });
+            const createOutcomes = await syncTaskBatch(likelyCreates, 1);
+            const updateOutcomes = await syncTaskBatch(likelyUpdates, Math.max(1, syncConfig.taskConcurrency));
+            outcomes = [...createOutcomes, ...updateOutcomes];
+        } else {
+            outcomes = await syncTaskBatch(toSync, syncConfig.taskConcurrency);
+        }
 
         for (const outcome of outcomes) {
             if (outcome.action === "error") {
@@ -2035,6 +2191,8 @@ export async function syncBcToPremium(
                                     resourceCache,
                                     teamCache,
                                     assignmentCache,
+                                    assignmentSnapshotLoaded,
+                                    assignmentLookups,
                                     taskOnly: options.taskOnly,
                                     touchOperationSet: undefined,
                                     preferPlanner: options.preferPlanner ?? !syncConfig.preferBc,
@@ -2069,6 +2227,125 @@ export async function syncBcToPremium(
     return result;
 }
 
+type PrefetchedBcTaskIndex = {
+    byPlannerTaskId: Map<string, BcProjectTask>;
+    byProjectTaskNo: Map<string, BcProjectTask>;
+};
+
+function buildProjectTaskNoKey(projectNo: string, taskNo: string) {
+    return `${projectNo.trim().toLowerCase()}::${taskNo.trim()}`;
+}
+
+function addBcTaskToPrefetchIndex(index: PrefetchedBcTaskIndex, task: BcProjectTask) {
+    const plannerTaskId = (task.plannerTaskId || "").trim();
+    if (plannerTaskId) {
+        index.byPlannerTaskId.set(plannerTaskId, task);
+    }
+    const projectNo = (task.projectNo || "").trim();
+    const taskNo = (task.taskNo || "").trim();
+    if (projectNo && taskNo) {
+        index.byProjectTaskNo.set(buildProjectTaskNoKey(projectNo, taskNo), task);
+    }
+}
+
+async function resolveDataverseProjectNo(
+    dataverse: DataverseClient,
+    dataverseTask: DataverseEntity,
+    mapping: ReturnType<typeof getDataverseMappingConfig>,
+    projectCache: Map<string, string | null>
+) {
+    if (!mapping.projectBcNoField) return null;
+
+    const directProjectNo = dataverseTask[mapping.projectBcNoField];
+    if (typeof directProjectNo === "string" && directProjectNo.trim()) {
+        return directProjectNo.trim();
+    }
+
+    const projectIdRaw = dataverseTask[mapping.taskProjectIdField];
+    const projectId = typeof projectIdRaw === "string" ? projectIdRaw.trim() : "";
+    if (!projectId) return null;
+
+    if (projectCache.has(projectId)) {
+        return projectCache.get(projectId) || null;
+    }
+
+    try {
+        const project = await dataverse.getById<DataverseEntity>(mapping.projectEntitySet, projectId, [
+            mapping.projectBcNoField,
+        ]);
+        const projectNo = project?.[mapping.projectBcNoField];
+        const resolved = typeof projectNo === "string" && projectNo.trim() ? projectNo.trim() : null;
+        projectCache.set(projectId, resolved);
+        return resolved;
+    } catch (error) {
+        logger.warn("Dataverse project lookup failed", {
+            projectId,
+            error: (error as Error)?.message,
+        });
+        projectCache.set(projectId, null);
+        return null;
+    }
+}
+
+async function preloadBcTasksForDataverseChanges(
+    bcClient: BusinessCentralClient,
+    dataverse: DataverseClient,
+    items: DataverseEntity[],
+    mapping: ReturnType<typeof getDataverseMappingConfig>,
+    projectCache: Map<string, string | null>,
+    concurrency: number
+): Promise<PrefetchedBcTaskIndex> {
+    const index: PrefetchedBcTaskIndex = {
+        byPlannerTaskId: new Map<string, BcProjectTask>(),
+        byProjectTaskNo: new Map<string, BcProjectTask>(),
+    };
+
+    const projectNos = new Set<string>();
+    const pendingProjectItems: DataverseEntity[] = [];
+    for (const item of items) {
+        const removed = item["@removed"] as { reason?: string } | undefined;
+        if (removed) continue;
+        const directProjectNo =
+            mapping.projectBcNoField && typeof item[mapping.projectBcNoField] === "string"
+                ? String(item[mapping.projectBcNoField]).trim()
+                : "";
+        if (directProjectNo) {
+            projectNos.add(directProjectNo);
+            continue;
+        }
+        pendingProjectItems.push(item);
+    }
+
+    if (pendingProjectItems.length) {
+        await runWithConcurrency(pendingProjectItems, Math.max(1, concurrency), async (item) => {
+            const projectNo = await resolveDataverseProjectNo(dataverse, item, mapping, projectCache);
+            if (projectNo) {
+                projectNos.add(projectNo);
+            }
+        });
+    }
+
+    const projectList = Array.from(projectNos);
+    if (!projectList.length) return index;
+
+    await runWithConcurrency(projectList, Math.max(1, concurrency), async (projectNo) => {
+        try {
+            const filter = `projectNo eq '${escapeODataString(projectNo)}'`;
+            const tasks = await bcClient.listProjectTasks(filter);
+            for (const task of tasks || []) {
+                addBcTaskToPrefetchIndex(index, task);
+            }
+        } catch (error) {
+            logger.warn("BC task preload failed", {
+                projectNo,
+                error: (error as Error)?.message,
+            });
+        }
+    });
+
+    return index;
+}
+
 async function resolveBcTaskFromDataverse(
     bcClient: BusinessCentralClient,
     dataverse: DataverseClient,
@@ -2084,39 +2361,7 @@ async function resolveBcTaskFromDataverse(
 
     const taskNo = mapping.taskBcNoField ? dataverseTask[mapping.taskBcNoField] : null;
     const taskNoValue = typeof taskNo === "string" && taskNo.trim() ? taskNo.trim() : null;
-    let projectNoValue: string | null = null;
-
-    if (mapping.projectBcNoField) {
-        const directProjectNo = dataverseTask[mapping.projectBcNoField];
-        if (typeof directProjectNo === "string" && directProjectNo.trim()) {
-            projectNoValue = directProjectNo.trim();
-        }
-    }
-
-    if (!projectNoValue && mapping.projectBcNoField) {
-        const projectIdRaw = dataverseTask[mapping.taskProjectIdField];
-        const projectId = typeof projectIdRaw === "string" ? projectIdRaw.trim() : "";
-        if (projectId) {
-            if (projectCache.has(projectId)) {
-                projectNoValue = projectCache.get(projectId) || null;
-            } else {
-                try {
-                    const project = await dataverse.getById<DataverseEntity>(mapping.projectEntitySet, projectId, [
-                        mapping.projectBcNoField,
-                    ]);
-                    const projectNo = project?.[mapping.projectBcNoField];
-                    projectNoValue = typeof projectNo === "string" && projectNo.trim() ? projectNo.trim() : null;
-                } catch (error) {
-                    logger.warn("Dataverse project lookup failed", {
-                        projectId,
-                        error: (error as Error)?.message,
-                    });
-                    projectNoValue = null;
-                }
-                projectCache.set(projectId, projectNoValue);
-            }
-        }
-    }
+    const projectNoValue = await resolveDataverseProjectNo(dataverse, dataverseTask, mapping, projectCache);
 
     if (taskNoValue && projectNoValue) {
         return bcClient.findProjectTaskByProjectAndTaskNo(projectNoValue, taskNoValue);
@@ -2164,21 +2409,37 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
     };
 
     const projectCache = new Map<string, string | null>();
+    const premiumToBcConcurrency = Math.max(
+        1,
+        Math.floor(Number(process.env.SYNC_PREMIUM_TO_BC_CONCURRENCY || syncConfig.taskConcurrency || 1))
+    );
+    const prefetchedTasks = await preloadBcTasksForDataverseChanges(
+        bcClient,
+        dataverse,
+        value,
+        mapping,
+        projectCache,
+        premiumToBcConcurrency
+    );
 
-    for (const item of value) {
+    const outcomes = await runWithConcurrency(value, premiumToBcConcurrency, async (item) => {
+        const outcome = { updated: 0, skipped: 0, cleared: 0, errors: 0 };
         const removed = item["@removed"] as { reason?: string } | undefined;
         if (removed) {
             if (syncConfig.deleteBehavior === "ignore") {
-                summary.skipped += 1;
-                continue;
+                outcome.skipped += 1;
+                return outcome;
             }
             const taskId = item[mapping.taskIdField];
             if (typeof taskId === "string" && taskId.trim()) {
-                const bcTask = await bcClient.findProjectTaskByPlannerTaskId(taskId.trim());
+                const trimmedTaskId = taskId.trim();
+                const bcTask =
+                    prefetchedTasks.byPlannerTaskId.get(trimmedTaskId) ||
+                    (await bcClient.findProjectTaskByPlannerTaskId(trimmedTaskId));
                 if (bcTask && bcTask.systemId) {
                     if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
-                        summary.skipped += 1;
-                        continue;
+                        outcome.skipped += 1;
+                        return outcome;
                     }
                     try {
                         await updateBcTaskWithSyncLock(bcClient, bcTask, {
@@ -2188,27 +2449,45 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                             lastPlannerEtag: "",
                             lastSyncAt: new Date().toISOString(),
                         });
-                        summary.cleared += 1;
+                        outcome.cleared += 1;
                     } catch (error) {
-                        summary.errors += 1;
+                        outcome.errors += 1;
                         logger.warn("Failed clearing BC link for deleted premium task", {
                             requestId,
-                            taskId,
+                            taskId: trimmedTaskId,
                             error: (error as Error)?.message,
                         });
                     }
                 } else {
-                    summary.skipped += 1;
+                    outcome.skipped += 1;
                 }
             } else {
-                summary.skipped += 1;
+                outcome.skipped += 1;
             }
-            continue;
+            return outcome;
         }
 
-        const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
+        let bcTask: BcProjectTask | null = null;
+        const taskId = item[mapping.taskIdField];
+        if (typeof taskId === "string" && taskId.trim()) {
+            bcTask = prefetchedTasks.byPlannerTaskId.get(taskId.trim()) || null;
+        }
+        if (!bcTask && mapping.taskBcNoField) {
+            const taskNoRaw = item[mapping.taskBcNoField];
+            const taskNo = typeof taskNoRaw === "string" ? taskNoRaw.trim() : "";
+            if (taskNo) {
+                const projectNo = await resolveDataverseProjectNo(dataverse, item, mapping, projectCache);
+                if (projectNo) {
+                    bcTask = prefetchedTasks.byProjectTaskNo.get(buildProjectTaskNoKey(projectNo, taskNo)) || null;
+                }
+            }
+        }
         if (!bcTask) {
-            summary.skipped += 1;
+            bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
+        }
+
+        if (!bcTask) {
+            outcome.skipped += 1;
             if (requestId) {
                 logger.warn("Premium -> BC skipped (no BC task match)", {
                     requestId,
@@ -2217,10 +2496,10 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                     projectId: item[mapping.taskProjectIdField],
                 });
             }
-            continue;
+            return outcome;
         }
         if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
-            summary.skipped += 1;
+            outcome.skipped += 1;
             if (requestId) {
                 logger.warn("Premium -> BC skipped (taskNo not in allowlist)", {
                     requestId,
@@ -2228,12 +2507,12 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                     taskNo: bcTask.taskNo,
                 });
             }
-            continue;
+            return outcome;
         }
 
         const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, bcTask, syncConfig.syncLockTimeoutMinutes);
         if (cleanTask.syncLock) {
-            summary.skipped += 1;
+            outcome.skipped += 1;
             if (requestId) {
                 logger.warn("Premium -> BC skipped (syncLock)", {
                     requestId,
@@ -2241,11 +2520,11 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                     taskNo: cleanTask.taskNo,
                 });
             }
-            continue;
+            return outcome;
         }
 
         if (syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
-            summary.skipped += 1;
+            outcome.skipped += 1;
             if (requestId) {
                 logger.warn("Premium -> BC skipped (BC newer)", {
                     requestId,
@@ -2257,12 +2536,11 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                     modifiedAt: cleanTask.modifiedAt,
                 });
             }
-            continue;
+            return outcome;
         }
 
         try {
             const updates = buildBcUpdateFromPremium(cleanTask, item, mapping);
-            const taskId = item[mapping.taskIdField];
             const planId = item[mapping.taskProjectIdField];
             const finalUpdates = {
                 ...updates,
@@ -2270,15 +2548,23 @@ export async function syncPremiumChanges(options: { requestId?: string; deltaLin
                 plannerPlanId: typeof planId === "string" ? planId : cleanTask.plannerPlanId,
             };
             await updateBcTaskWithSyncLock(bcClient, cleanTask, finalUpdates);
-            summary.updated += 1;
+            outcome.updated += 1;
         } catch (error) {
-            summary.errors += 1;
+            outcome.errors += 1;
             logger.warn("Premium -> BC update failed", {
                 requestId,
                 taskId: item[mapping.taskIdField],
                 error: (error as Error)?.message,
             });
         }
+        return outcome;
+    });
+
+    for (const outcome of outcomes) {
+        summary.updated += outcome.updated;
+        summary.skipped += outcome.skipped;
+        summary.cleared += outcome.cleared;
+        summary.errors += outcome.errors;
     }
 
     if (newDelta) {
@@ -2325,7 +2611,12 @@ export async function syncPremiumTaskIds(
         taskIds: uniqueIds,
     };
 
-    for (const taskId of uniqueIds) {
+    const premiumToBcConcurrency = Math.max(
+        1,
+        Math.floor(Number(process.env.SYNC_PREMIUM_TO_BC_CONCURRENCY || syncConfig.taskConcurrency || 1))
+    );
+    const outcomes = await runWithConcurrency(uniqueIds, premiumToBcConcurrency, async (taskId) => {
+        const outcome = { updated: 0, skipped: 0, cleared: 0, errors: 0 };
         let item: DataverseEntity | null = null;
         try {
             item = await dataverse.getById<DataverseEntity>(mapping.taskEntitySet, taskId, selectFields);
@@ -2333,14 +2624,14 @@ export async function syncPremiumTaskIds(
             const message = (error as Error)?.message || String(error);
             if (message.includes("-> 404")) {
                 if (syncConfig.deleteBehavior === "ignore") {
-                    summary.skipped += 1;
-                    continue;
+                    outcome.skipped += 1;
+                    return outcome;
                 }
                 const bcTask = await bcClient.findProjectTaskByPlannerTaskId(taskId);
                 if (bcTask && bcTask.systemId) {
                     if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
-                        summary.skipped += 1;
-                        continue;
+                        outcome.skipped += 1;
+                        return outcome;
                     }
                     try {
                         await updateBcTaskWithSyncLock(bcClient, bcTask, {
@@ -2350,9 +2641,9 @@ export async function syncPremiumTaskIds(
                             lastPlannerEtag: "",
                             lastSyncAt: new Date().toISOString(),
                         });
-                        summary.cleared += 1;
+                        outcome.cleared += 1;
                     } catch (clearError) {
-                        summary.errors += 1;
+                        outcome.errors += 1;
                         logger.warn("Failed clearing BC link for deleted premium task", {
                             requestId,
                             taskId,
@@ -2360,39 +2651,39 @@ export async function syncPremiumTaskIds(
                         });
                     }
                 } else {
-                    summary.skipped += 1;
+                    outcome.skipped += 1;
                 }
-                continue;
+                return outcome;
             }
-            summary.errors += 1;
+            outcome.errors += 1;
             logger.warn("Premium -> BC task lookup failed", { requestId, taskId, error: message });
-            continue;
+            return outcome;
         }
 
         if (!item) {
-            summary.skipped += 1;
-            continue;
+            outcome.skipped += 1;
+            return outcome;
         }
 
         const bcTask = await resolveBcTaskFromDataverse(bcClient, dataverse, item, mapping, projectCache);
         if (!bcTask) {
-            summary.skipped += 1;
-            continue;
+            outcome.skipped += 1;
+            return outcome;
         }
         if (!isAllowedSyncTaskNo(bcTask.taskNo, allowedTaskNumbers)) {
-            summary.skipped += 1;
-            continue;
+            outcome.skipped += 1;
+            return outcome;
         }
 
         const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, bcTask, syncConfig.syncLockTimeoutMinutes);
         if (cleanTask.syncLock) {
-            summary.skipped += 1;
-            continue;
+            outcome.skipped += 1;
+            return outcome;
         }
 
         if (syncConfig.preferBc && isBcChangedSinceLastSync(cleanTask, syncConfig.bcModifiedGraceMs)) {
-            summary.skipped += 1;
-            continue;
+            outcome.skipped += 1;
+            return outcome;
         }
 
         try {
@@ -2404,15 +2695,23 @@ export async function syncPremiumTaskIds(
                 plannerPlanId: typeof planId === "string" ? planId : cleanTask.plannerPlanId,
             };
             await updateBcTaskWithSyncLock(bcClient, cleanTask, finalUpdates);
-            summary.updated += 1;
+            outcome.updated += 1;
         } catch (error) {
-            summary.errors += 1;
+            outcome.errors += 1;
             logger.warn("Premium -> BC task update failed", {
                 requestId,
                 taskId,
                 error: (error as Error)?.message,
             });
         }
+        return outcome;
+    });
+
+    for (const outcome of outcomes) {
+        summary.updated += outcome.updated;
+        summary.skipped += outcome.skipped;
+        summary.cleared += outcome.cleared;
+        summary.errors += outcome.errors;
     }
 
     return summary;
@@ -2531,8 +2830,8 @@ export async function previewPremiumChanges(options: { requestId?: string; delta
             select: Array.from(new Set(selectFields)),
             deltaLink,
             orderBy: modifiedField ? `${modifiedField} desc` : undefined,
-            maxPages: syncConfig.pollMaxPages,
-            top: syncConfig.pollPageSize,
+            maxPages: syncConfig.previewMaxPages,
+            top: syncConfig.previewPageSize,
         });
         let latestMs: number | null = null;
         for (const item of value) {

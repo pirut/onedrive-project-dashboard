@@ -24,7 +24,7 @@
         },
         {
             "path": "/api/sync/auto?cronSecret=YOUR_CRON_SECRET",
-            "schedule": "*/5 * * * *"
+            "schedule": "*/10 * * * *"
         }
     ],
     "headers": [

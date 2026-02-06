@@ -22,6 +22,27 @@ type ResolveResult = {
     forceFullSync?: boolean;
 };
 
+async function runWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    handler: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+    if (!items.length) return [];
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const results: R[] = new Array(items.length);
+    let nextIndex = 0;
+    const workers = new Array(Math.min(safeLimit, items.length)).fill(0).map(async () => {
+        while (true) {
+            const index = nextIndex;
+            if (index >= items.length) return;
+            nextIndex += 1;
+            results[index] = await handler(items[index], index);
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
+
 function normalizeSystemId(raw: string) {
     let value = (raw || "").trim();
     if (!value) return "";
@@ -191,11 +212,13 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
     }
 
     let processed = 0;
-    for (const projectNo of projectNos) {
+    const projectConcurrency = Math.max(1, Math.floor(Number(process.env.BC_JOB_PROJECT_CONCURRENCY || 3)));
+    const projectList = Array.from(projectNos);
+    const projectOutcomes = await runWithConcurrency(projectList, projectConcurrency, async (projectNo) => {
         const taskIds = taskIdsByProject.get(projectNo) || new Set<string>();
         const forceFullSync = fullSyncProjects.has(projectNo);
         if (!taskIds.size && !forceFullSync) {
-            continue;
+            return { processed: false, errors: 0 };
         }
         try {
             await syncBcToPremium(projectNo, {
@@ -221,15 +244,19 @@ export async function processBcJobQueue(options: { maxJobs?: number; requestId?:
                     }
                 }
             }
-            processed += 1;
+            return { processed: true, errors: 0 };
         } catch (error) {
-            errors += 1;
             logger.warn("BC webhook sync failed", {
                 requestId,
                 projectNo,
                 error: (error as Error)?.message,
             });
+            return { processed: false, errors: 1 };
         }
+    });
+    for (const outcome of projectOutcomes) {
+        if (outcome.processed) processed += 1;
+        if (outcome.errors) errors += outcome.errors;
     }
 
     return {
