@@ -70,7 +70,7 @@ const PROCESS_QUEUE_ONLY = parseBool(
     process.env.BC_WEBHOOK_PROCESS_QUEUE_ONLY,
     Boolean(QUEUE_ENTITY_SET && QUEUE_ENTITY_SET.toLowerCase() !== "projecttasks")
 );
-const QUEUE_FORCE_FULL_SYNC = parseBool(process.env.BC_QUEUE_FORCE_FULL_SYNC, true);
+const QUEUE_FORCE_FULL_SYNC = parseBool(process.env.BC_QUEUE_FORCE_FULL_SYNC, false);
 
 async function resolveProjectNo(bcClient: BusinessCentralClient, job: BcWebhookJob): Promise<ResolveResult> {
     const entitySet = (job.entitySet || "").trim();

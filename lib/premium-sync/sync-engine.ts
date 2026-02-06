@@ -2527,6 +2527,9 @@ export async function syncBcToPremium(
         const projectErrorsStart = result.errors;
         const projectTasksStart = result.tasks;
         const projectActivityStart = result.created + result.updated + result.skipped;
+        const projectCreatedStart = result.created;
+        const projectUpdatedStart = result.updated;
+        const projectSkippedStart = result.skipped;
 
         let tasks: BcProjectTask[] = [];
         let scopedTaskSystemIdSet =
@@ -2782,23 +2785,31 @@ export async function syncBcToPremium(
         }
 
         const toSync: BcProjectTask[] = [];
+        let skippedByTarget = 0;
+        let skippedBySection = 0;
+        let skippedByAllowlist = 0;
+        let skippedByPremiumWriteback = 0;
         for (const task of sorted) {
             const skipForSection = shouldSkipTaskForSection(task, currentSection);
             const systemId = typeof task.systemId === "string" ? canonicalTaskSystemId(task.systemId) : "";
             const isTarget = !scopedTaskSystemIdSet || (systemId && scopedTaskSystemIdSet.has(systemId));
             if (!isTarget) {
+                skippedByTarget += 1;
                 continue;
             }
             result.tasks += 1;
             if (!options.taskOnly && skipForSection) {
+                skippedBySection += 1;
                 result.skipped += 1;
                 continue;
             }
             if (!isAllowedSyncTaskNo(task.taskNo, allowedTaskNumbers)) {
+                skippedByAllowlist += 1;
                 result.skipped += 1;
                 continue;
             }
             if (systemId && (await wasBcTaskSystemIdUpdatedByPremium(systemId))) {
+                skippedByPremiumWriteback += 1;
                 result.skipped += 1;
                 successfulTaskSystemIds.add(systemId);
                 if (requestId) {
@@ -2812,6 +2823,20 @@ export async function syncBcToPremium(
                 continue;
             }
             toSync.push(task);
+        }
+
+        if (requestId) {
+            logger.info("BC -> Premium task selection summary", {
+                requestId,
+                projectNo: projNo,
+                totalProjectTasks: sorted.length,
+                scopedTaskCount: scopedTaskSystemIdSet?.size || 0,
+                candidates: toSync.length,
+                skippedByTarget,
+                skippedBySection,
+                skippedByAllowlist,
+                skippedByPremiumWriteback,
+            });
         }
 
         if (!toSync.length) {
@@ -3031,6 +3056,19 @@ export async function syncBcToPremium(
 
             result.projects += 1;
             result.projectNos.push(projNo);
+            if (requestId) {
+                logger.info("BC -> Premium project sync summary", {
+                    requestId,
+                    projectNo: projNo,
+                    tasksExamined: result.tasks - projectTasksStart,
+                    created: result.created - projectCreatedStart,
+                    updated: result.updated - projectUpdatedStart,
+                    skipped: result.skipped - projectSkippedStart,
+                    errors: result.errors - projectErrorsStart,
+                    usedScheduleApi: useScheduleApi,
+                    operationSetId: operationSetId || null,
+                });
+            }
         } finally {
             await cleanupOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
         }
