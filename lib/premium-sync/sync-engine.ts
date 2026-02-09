@@ -1007,28 +1007,55 @@ async function getBookableResourceIdByName(
 async function findBookableResourceByAadObjectId(dataverse: DataverseClient, aadObjectId: string) {
     const trimmed = (aadObjectId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
     if (!trimmed) return null;
-    const fields = ["msdyn_aadobjectid", "aadobjectid"];
+    const fallbackFields = ["msdyn_aadobjectid", "aadobjectid", "azureactivedirectoryobjectid", "msdyn_azureactivedirectoryobjectid"];
+    let fields = fallbackFields;
+    try {
+        const res = await dataverse.requestRaw(
+            "/EntityDefinitions(LogicalName='bookableresource')/Attributes?$select=LogicalName,IsValidForRead"
+        );
+        const data = (await res.json()) as { value?: Array<Record<string, unknown>> };
+        const attrs = Array.isArray(data?.value) ? data.value : [];
+        const discovered = attrs
+            .map((attr) => ({
+                logicalName: String((attr as { LogicalName?: string }).LogicalName || "").trim(),
+                readable: (attr as { IsValidForRead?: boolean }).IsValidForRead !== false,
+            }))
+            .filter((attr) => attr.logicalName && attr.readable)
+            .filter((attr) => {
+                const logical = attr.logicalName.toLowerCase();
+                return logical.includes("aad") || logical.includes("objectid");
+            })
+            .map((attr) => attr.logicalName);
+        fields = Array.from(new Set([...fallbackFields, ...discovered]));
+    } catch (error) {
+        logger.debug("Dataverse resource metadata lookup failed", { error: (error as Error)?.message });
+    }
     for (const field of fields) {
-        try {
-            const filter = `${field} eq ${formatODataGuid(trimmed)}`;
-            const res = await dataverse.list<DataverseEntity>("bookableresources", {
-                select: ["bookableresourceid", "name", field],
-                filter,
-                top: 1,
-            });
-            const row = res.value[0];
-            if (row?.bookableresourceid) {
-                return {
-                    id: String(row.bookableresourceid),
-                    name: row.name ? String(row.name) : "",
-                };
+        const filters = [`${field} eq ${formatODataGuid(trimmed)}`, `${field} eq '${escapeODataString(trimmed)}'`];
+        for (const filter of filters) {
+            try {
+                const res = await dataverse.list<DataverseEntity>("bookableresources", {
+                    select: ["bookableresourceid", "name", field],
+                    filter,
+                    top: 1,
+                });
+                const row = res.value[0];
+                if (row?.bookableresourceid) {
+                    return {
+                        id: String(row.bookableresourceid),
+                        name: row.name ? String(row.name) : "",
+                    };
+                }
+            } catch (error) {
+                const message = (error as Error)?.message || "";
+                if (message.includes("Could not find a property named")) {
+                    break;
+                }
+                if (message.includes("Unrecognized 'Edm.String' literal 'guid'")) {
+                    continue;
+                }
+                logger.debug("Dataverse bookable resource lookup failed", { field, filter, error: message });
             }
-        } catch (error) {
-            const message = (error as Error)?.message || "";
-            if (message.includes("Could not find a property named")) {
-                continue;
-            }
-            logger.debug("Dataverse bookable resource lookup failed", { field, error: message });
         }
     }
     return null;
@@ -1253,7 +1280,11 @@ async function ensureProjectGroupAccess(
     if (!groupId) return "resource_not_found";
     const groupResource = await findBookableResourceByAadObjectId(dataverse, groupId);
     if (!groupResource) {
-        logger.warn("Dataverse group resource not found", { projectId, groupId });
+        logger.warn("Dataverse group resource not found", {
+            projectId,
+            groupId,
+            hint: "Verify bookableresource AAD mapping or set PLANNER_GROUP_RESOURCE_IDS to explicit Dataverse resource IDs",
+        });
         return "resource_not_found";
     }
     const teamId = await getProjectTeamMemberId(dataverse, projectId, groupResource.id, teamCache);
