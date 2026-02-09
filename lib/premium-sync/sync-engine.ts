@@ -1241,21 +1241,23 @@ async function preloadProjectAssignments(
     }
 }
 
+type ProjectAccessStatus = "added" | "already_member" | "resource_not_found";
+
 async function ensureProjectGroupAccess(
     dataverse: DataverseClient,
     projectId: string,
     operationSetId: string | undefined,
     groupId: string,
     teamCache: Map<string, string | null>
-) {
-    if (!groupId) return false;
+): Promise<ProjectAccessStatus> {
+    if (!groupId) return "resource_not_found";
     const groupResource = await findBookableResourceByAadObjectId(dataverse, groupId);
     if (!groupResource) {
         logger.warn("Dataverse group resource not found", { projectId, groupId });
-        return false;
+        return "resource_not_found";
     }
     const teamId = await getProjectTeamMemberId(dataverse, projectId, groupResource.id, teamCache);
-    if (teamId) return false;
+    if (teamId) return "already_member";
     const created = await createProjectTeamMember(
         dataverse,
         projectId,
@@ -1263,7 +1265,7 @@ async function ensureProjectGroupAccess(
         groupResource.name || "Planner Group",
         teamCache
     );
-    return Boolean(created);
+    return created ? "added" : "resource_not_found";
 }
 
 async function ensureProjectResourceAccess(
@@ -1273,10 +1275,10 @@ async function ensureProjectResourceAccess(
     resourceId: string,
     resourceName: string,
     teamCache: Map<string, string | null>
-) {
-    if (!resourceId) return false;
+): Promise<ProjectAccessStatus> {
+    if (!resourceId) return "resource_not_found";
     const teamId = await getProjectTeamMemberId(dataverse, projectId, resourceId, teamCache);
-    if (teamId) return false;
+    if (teamId) return "already_member";
     const created = await createProjectTeamMember(
         dataverse,
         projectId,
@@ -1287,7 +1289,106 @@ async function ensureProjectResourceAccess(
     if (created) {
         teamCache.set(`${projectId}:${resourceId}`, created);
     }
-    return Boolean(created);
+    return created ? "added" : "resource_not_found";
+}
+
+function normalizePlannerGroupResourceIds(values: string[] | undefined) {
+    return Array.from(new Set((values || []).map((value) => value.trim()).filter(Boolean)));
+}
+
+function resolveProjectAccessTargets(options: { plannerGroupId?: string; plannerGroupResourceIds?: string[] } = {}) {
+    const syncConfig = getPremiumSyncConfig();
+    const plannerGroupId =
+        options.plannerGroupId !== undefined ? options.plannerGroupId.trim() : (syncConfig.plannerGroupId || "").trim();
+    const plannerGroupResourceIds =
+        options.plannerGroupResourceIds !== undefined
+            ? normalizePlannerGroupResourceIds(options.plannerGroupResourceIds)
+            : normalizePlannerGroupResourceIds(syncConfig.plannerGroupResourceIds || []);
+    return { plannerGroupId, plannerGroupResourceIds };
+}
+
+export async function ensurePremiumProjectTeamAccess(
+    dataverse: DataverseClient,
+    projectId: string,
+    options: {
+        requestId?: string;
+        projectNo?: string;
+        plannerGroupId?: string;
+        plannerGroupResourceIds?: string[];
+        teamCache?: Map<string, string | null>;
+        resourceNameCache?: Map<string, { id: string; name: string } | null>;
+    } = {}
+) {
+    const { plannerGroupId, plannerGroupResourceIds } = resolveProjectAccessTargets(options);
+    const teamCache = options.teamCache || new Map<string, string | null>();
+    const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
+    const result = {
+        configured: Boolean(plannerGroupId || plannerGroupResourceIds.length),
+        projectId,
+        projectNo: options.projectNo || "",
+        plannerGroupId: plannerGroupId || null,
+        plannerGroupResourceIds,
+        added: 0,
+        alreadyMember: 0,
+        missing: 0,
+        errors: [] as string[],
+    };
+    if (!result.configured) {
+        return result;
+    }
+
+    if (plannerGroupId) {
+        try {
+            const status = await ensureProjectGroupAccess(dataverse, projectId, undefined, plannerGroupId, teamCache);
+            if (status === "added") result.added += 1;
+            if (status === "already_member") result.alreadyMember += 1;
+            if (status === "resource_not_found") result.missing += 1;
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            result.errors.push(`group:${plannerGroupId}:${message}`);
+            logger.warn("Dataverse group share failed", {
+                requestId: options.requestId || "",
+                projectNo: options.projectNo || "",
+                projectId,
+                groupId: plannerGroupId,
+                error: message,
+            });
+        }
+    }
+
+    for (const resourceId of plannerGroupResourceIds) {
+        try {
+            const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
+            if (!resource) {
+                result.missing += 1;
+                logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
+                continue;
+            }
+            const status = await ensureProjectResourceAccess(
+                dataverse,
+                projectId,
+                undefined,
+                resource.id,
+                resource.name || "Planner Resource",
+                teamCache
+            );
+            if (status === "added") result.added += 1;
+            if (status === "already_member") result.alreadyMember += 1;
+            if (status === "resource_not_found") result.missing += 1;
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            result.errors.push(`resource:${resourceId}:${message}`);
+            logger.warn("Dataverse resource share failed", {
+                requestId: options.requestId || "",
+                projectNo: options.projectNo || "",
+                projectId,
+                resourceId,
+                error: message,
+            });
+        }
+    }
+
+    return result;
 }
 
 export async function resolveProjectFromBc(
@@ -1295,7 +1396,13 @@ export async function resolveProjectFromBc(
     dataverse: DataverseClient,
     projectNo: string,
     mapping: ReturnType<typeof getDataverseMappingConfig>,
-    options: { forceCreate?: boolean } = {}
+    options: {
+        forceCreate?: boolean;
+        requestId?: string;
+        skipProjectAccess?: boolean;
+        plannerGroupId?: string;
+        plannerGroupResourceIds?: string[];
+    } = {}
 ) {
     const normalized = (projectNo || "").trim();
     if (!normalized) return null;
@@ -1372,6 +1479,14 @@ export async function resolveProjectFromBc(
                 error: (error as Error)?.message,
             });
         }
+    }
+    if (!options.skipProjectAccess) {
+        await ensurePremiumProjectTeamAccess(dataverse, created.projectId, {
+            requestId: options.requestId,
+            projectNo: normalized,
+            plannerGroupId: options.plannerGroupId,
+            plannerGroupResourceIds: options.plannerGroupResourceIds,
+        });
     }
     return {
         [mapping.projectIdField]: created.projectId,
@@ -2721,6 +2836,10 @@ export async function syncBcToPremium(
             try {
                 const projectEntity = await resolveProjectFromBc(bcClient, dataverse, projNo, mapping, {
                     forceCreate: options.forceProjectCreate,
+                    requestId,
+                    skipProjectAccess: options.skipProjectAccess,
+                    plannerGroupId,
+                    plannerGroupResourceIds,
                 });
                 resolvedProjectId = resolveProjectId(projectEntity, mapping) || "";
             } catch (error) {
@@ -2867,49 +2986,14 @@ export async function syncBcToPremium(
 
         try {
             if (!options.skipProjectAccess) {
-                if (plannerGroupId) {
-                    try {
-                        await ensureProjectGroupAccess(
-                            dataverse,
-                            projectId,
-                            useScheduleApi ? operationSetId : undefined,
-                            plannerGroupId,
-                            teamCache
-                        );
-                    } catch (error) {
-                        logger.warn("Dataverse group share failed", {
-                            requestId,
-                            projectNo: projNo,
-                            error: (error as Error)?.message,
-                        });
-                    }
-                }
-                if (plannerGroupResourceIds.length) {
-                    for (const resourceId of plannerGroupResourceIds) {
-                        try {
-                            const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
-                            if (!resource) {
-                                logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
-                                continue;
-                            }
-                            await ensureProjectResourceAccess(
-                                dataverse,
-                                projectId,
-                                useScheduleApi ? operationSetId : undefined,
-                                resource.id,
-                                resource.name || "Planner Resource",
-                                teamCache
-                            );
-                        } catch (error) {
-                            logger.warn("Dataverse resource share failed", {
-                                requestId,
-                                projectNo: projNo,
-                                resourceId,
-                                error: (error as Error)?.message,
-                            });
-                        }
-                    }
-                }
+                await ensurePremiumProjectTeamAccess(dataverse, projectId, {
+                    requestId,
+                    projectNo: projNo,
+                    plannerGroupId,
+                    plannerGroupResourceIds,
+                    teamCache,
+                    resourceNameCache,
+                });
             }
 
         if (!sorted.length) {

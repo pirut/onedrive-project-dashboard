@@ -67,7 +67,7 @@ export default async function handler(req, res) {
         "POST /api/webhooks/dataverse": "Dataverse webhook receiver",
         "POST /api/webhooks/bc": "Business Central webhook receiver",
         "GET /api/sync/projects": "Premium project list + sync state",
-        "POST /api/sync/projects": "Toggle per-project sync or clear links",
+        "POST /api/sync/projects": "Toggle per-project sync, clear links, or share project access",
         "POST /api/sync/bc-jobs/process": "Process BC webhook job queue",
         "POST /api/sync/clear-bc-sync-lock": "Clear BC syncLock for a task",
         "POST /api/sync/bc-audit": "Daily BC audit (batch sync with cursor)",

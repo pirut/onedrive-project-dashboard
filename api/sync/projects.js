@@ -5,6 +5,8 @@ import {
     normalizeProjectNo,
     saveProjectSyncSettings,
 } from "../../lib/planner-sync/project-sync-store.js";
+import { DataverseClient } from "../../lib/dataverse-client.js";
+import { ensurePremiumProjectTeamAccess } from "../../lib/premium-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
 
 const BC_SYNC_FIELDS = ["lastSyncAt"];
@@ -179,6 +181,7 @@ export default async function handler(req, res) {
             body?.disabled === 1 ||
             body?.disabled === "1";
         const note = typeof body?.note === "string" ? body.note.trim() : "";
+        const premiumProjectId = String(body?.premiumProjectId || body?.projectId || "").trim();
 
         if (action === "clear-links" || action === "clearlinks") {
             await setProjectSyncDisabled(projectNo, true, note);
@@ -189,6 +192,34 @@ export default async function handler(req, res) {
             }
             res.status(200).json({ ok: true, projectNo, disabled: true, clearedTasks });
             return;
+        }
+
+        if (action === "share-access" || action === "shareaccess" || action === "share-team" || action === "shareteam") {
+            if (!premiumProjectId) {
+                res.status(400).json({ ok: false, error: "premiumProjectId (or projectId) required" });
+                return;
+            }
+            try {
+                const dataverse = new DataverseClient();
+                const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
+                if (!access.configured) {
+                    res.status(400).json({
+                        ok: false,
+                        error: "No project access targets configured. Set PLANNER_GROUP_ID or PLANNER_GROUP_RESOURCE_IDS.",
+                    });
+                    return;
+                }
+                res.status(200).json({ ok: true, projectNo, premiumProjectId, access });
+                return;
+            } catch (error) {
+                logger.error("Failed to share Premium project access", {
+                    projectNo,
+                    premiumProjectId,
+                    error: error?.message || String(error),
+                });
+                res.status(500).json({ ok: false, error: error?.message || String(error) });
+                return;
+            }
         }
 
         await setProjectSyncDisabled(projectNo, disabled, note);

@@ -5,7 +5,7 @@ import { BusinessCentralClient } from "../lib/planner-sync/bc-client.js";
 import { DataverseClient } from "../lib/dataverse-client.js";
 import { getDataverseMappingConfig, getPremiumSyncConfig } from "../lib/premium-sync/config.js";
 import { getPremiumProjectUrlTemplate, getTenantIdForUrl } from "../lib/premium-sync/premium-url.js";
-import { syncBcToPremium } from "../lib/premium-sync/index.js";
+import { ensurePremiumProjectTeamAccess, syncBcToPremium } from "../lib/premium-sync/index.js";
 import { logger } from "../lib/planner-sync/logger.js";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../lib/planner-sync/project-sync-store.js";
 
@@ -593,7 +593,16 @@ export default async function handler(req, res) {
                                 continue;
                             }
                         }
+                        const access = await ensurePremiumProjectTeamAccess(dataverse, projectId, { projectNo: bcNo || title || planId });
                         results.push({ id: planId, ok: true, projectId });
+                        if (access?.configured) {
+                            results[results.length - 1].shared = {
+                                added: access.added,
+                                alreadyMember: access.alreadyMember,
+                                missing: access.missing,
+                                errors: access.errors?.length || 0,
+                            };
+                        }
                     } catch (error) {
                         results.push({ id: planId, ok: false, error: error?.message || String(error) });
                     }

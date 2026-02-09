@@ -5,6 +5,8 @@ import {
     normalizeProjectNo,
     saveProjectSyncSettings,
 } from "../../../../lib/planner-sync/project-sync-store";
+import { DataverseClient } from "../../../../lib/dataverse-client";
+import { ensurePremiumProjectTeamAccess } from "../../../../lib/premium-sync";
 import { logger } from "../../../../lib/planner-sync/logger";
 
 const BC_SYNC_FIELDS = ["lastSyncAt"];
@@ -180,6 +182,7 @@ export async function POST(request: Request) {
         body?.disabled === 1 ||
         body?.disabled === "1";
     const note = typeof body?.note === "string" ? body.note.trim() : "";
+    const premiumProjectId = String(body?.premiumProjectId || body?.projectId || "").trim();
 
     if (action === "clear-links" || action === "clearlinks") {
         await setProjectSyncDisabled(projectNo, true, note);
@@ -192,6 +195,49 @@ export async function POST(request: Request) {
             status: 200,
             headers: { "Content-Type": "application/json" },
         });
+    }
+
+    if (action === "share-access" || action === "shareaccess" || action === "share-team" || action === "shareteam") {
+        if (!premiumProjectId) {
+            return new Response(JSON.stringify({ ok: false, error: "premiumProjectId (or projectId) required" }, null, 2), {
+                status: 400,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
+        try {
+            const dataverse = new DataverseClient();
+            const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
+            if (!access.configured) {
+                return new Response(
+                    JSON.stringify(
+                        {
+                            ok: false,
+                            error: "No project access targets configured. Set PLANNER_GROUP_ID or PLANNER_GROUP_RESOURCE_IDS.",
+                        },
+                        null,
+                        2
+                    ),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    }
+                );
+            }
+            return new Response(JSON.stringify({ ok: true, projectNo, premiumProjectId, access }, null, 2), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        } catch (error) {
+            logger.error("Failed to share Premium project access", {
+                projectNo,
+                premiumProjectId,
+                error: (error as Error)?.message || String(error),
+            });
+            return new Response(JSON.stringify({ ok: false, error: (error as Error)?.message || String(error) }, null, 2), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
+        }
     }
 
     await setProjectSyncDisabled(projectNo, disabled, note);

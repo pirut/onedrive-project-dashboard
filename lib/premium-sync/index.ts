@@ -7,6 +7,7 @@ export {
     previewPremiumChanges,
     decidePremiumSync,
     runPremiumSyncDecision,
+    ensurePremiumProjectTeamAccess,
 } from "./sync-engine.js";
 export { getDataverseMappingConfig, getPremiumSyncConfig } from "./config.js";
 export { getDataverseDeltaLink, saveDataverseDeltaLink, clearDataverseDeltaLink } from "./delta-store.js";
