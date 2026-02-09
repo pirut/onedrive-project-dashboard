@@ -366,11 +366,17 @@ export default async function handler(req, res) {
             const dataverseTasks = await listDataverseTasks(dataverse, mapping);
             const disabledSet = buildDisabledProjectSet(syncSettings);
             const premiumProjectSet = new Set();
+            const canonicalProjectIdByProjectNo = new Map();
             if (mapping.projectBcNoField) {
                 for (const project of dataverseProjects || []) {
                     const bcNo = project?.[mapping.projectBcNoField];
                     if (typeof bcNo === "string" && bcNo.trim()) {
-                        premiumProjectSet.add(normalizeProjectNo(bcNo));
+                        const key = normalizeProjectNo(bcNo);
+                        premiumProjectSet.add(key);
+                        const projectId = project?.[mapping.projectIdField];
+                        if (typeof projectId === "string" && projectId.trim() && !canonicalProjectIdByProjectNo.has(key)) {
+                            canonicalProjectIdByProjectNo.set(key, projectId.trim().toLowerCase());
+                        }
                     }
                 }
             }
@@ -410,6 +416,7 @@ export default async function handler(req, res) {
                 const currentSection = { name: null };
                 const first = sortedTasks[0] || {};
                 const entry = { projectNo: String(first.projectNo || key), total: 0, linked: 0, staleLinks: 0, lastSyncAt: "" };
+                const canonicalProjectId = canonicalProjectIdByProjectNo.get(key) || "";
                 for (const task of sortedTasks) {
                     if (shouldSkipTaskForSection(task, currentSection)) continue;
                     if (!isAllowedSyncTaskNo(task?.taskNo, allowedTaskNumbers)) continue;
@@ -417,8 +424,15 @@ export default async function handler(req, res) {
                     const planId = (task?.plannerPlanId || "").trim();
                     const plannerTaskId = (task?.plannerTaskId || "").trim();
                     let verifiedLinked = false;
-                    if (planId && plannerTaskId && isGuid(planId) && isGuid(plannerTaskId)) {
-                        const existing = dataverseTaskIdsByProjectId.get(planId.toLowerCase());
+                    if (
+                        canonicalProjectId &&
+                        planId &&
+                        plannerTaskId &&
+                        isGuid(planId) &&
+                        isGuid(plannerTaskId) &&
+                        planId.toLowerCase() === canonicalProjectId
+                    ) {
+                        const existing = dataverseTaskIdsByProjectId.get(canonicalProjectId);
                         verifiedLinked = Boolean(existing && existing.has(plannerTaskId.toLowerCase()));
                     }
                     if (verifiedLinked) {
