@@ -7,6 +7,7 @@ const DEFAULT_ENTITY_SETS = [
 ].filter(Boolean);
 const SUBSCRIPTION_TTL_HOURS = 48;
 const RENEWAL_BUFFER_HOURS = 6;
+const EXPIRY_BUFFER_MS = 60 * 1000;
 
 function resolveBaseUrl(req) {
     const proto = req.headers["x-forwarded-proto"] || "http";
@@ -16,6 +17,13 @@ function resolveBaseUrl(req) {
 
 function buildExpirationDate() {
     return new Date(Date.now() + SUBSCRIPTION_TTL_HOURS * 60 * 60 * 1000).toISOString();
+}
+
+function isExpiringSoon(expirationDateTime, bufferMs = EXPIRY_BUFFER_MS) {
+    if (!expirationDateTime) return true;
+    const expMs = Date.parse(String(expirationDateTime));
+    if (!Number.isFinite(expMs)) return true;
+    return expMs <= Date.now() + bufferMs;
 }
 
 async function readJsonBody(req) {
@@ -53,6 +61,11 @@ export default async function handler(req, res) {
             const normalized = (entitySet || "").trim();
             if (!normalized) continue;
             const stored = await getBcSubscription(normalized);
+            const notificationUrl =
+                stored?.notificationUrl ||
+                process.env.BC_WEBHOOK_NOTIFICATION_URL ||
+                `${resolveBaseUrl(req)}/api/webhooks/bc`;
+            const clientState = stored?.clientState || (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined;
             if (stored?.expirationDateTime) {
                 const expMs = Date.parse(stored.expirationDateTime);
                 const bufferMs = RENEWAL_BUFFER_HOURS * 60 * 60 * 1000;
@@ -82,11 +95,22 @@ export default async function handler(req, res) {
             }
 
             try {
+                if (stored?.id) {
+                    try {
+                        await bcClient.deleteWebhookSubscription(stored.id);
+                    } catch (error) {
+                        logger.warn("Failed to delete old BC subscription before recreate", {
+                            requestId,
+                            entitySet: normalized,
+                            subscriptionId: stored.id,
+                            error: error?.message || String(error),
+                        });
+                    }
+                }
                 const subscription = await bcClient.createWebhookSubscription({
                     entitySet: normalized,
-                    notificationUrl: stored?.notificationUrl || process.env.BC_WEBHOOK_NOTIFICATION_URL || `${resolveBaseUrl(req)}/api/webhooks/bc`,
-                    clientState: stored?.clientState || (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined,
-                    expirationDateTime,
+                    notificationUrl,
+                    clientState,
                 });
                 await saveBcSubscription(normalized, {
                     id: subscription?.id || "",
@@ -94,8 +118,8 @@ export default async function handler(req, res) {
                     resource: subscription?.resource,
                     expirationDateTime: subscription?.expirationDateTime || expirationDateTime,
                     createdAt: new Date().toISOString(),
-                    notificationUrl: stored?.notificationUrl || process.env.BC_WEBHOOK_NOTIFICATION_URL || `${resolveBaseUrl(req)}/api/webhooks/bc`,
-                    clientState: stored?.clientState || (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined,
+                    notificationUrl,
+                    clientState,
                 });
                 if (stored?.id && stored.id !== subscription?.id) {
                     try {
@@ -111,7 +135,25 @@ export default async function handler(req, res) {
                 }
                 created.push(normalized);
             } catch (error) {
-                failed.push({ entitySet: normalized, error: error?.message || String(error) });
+                const errorMessage = error?.message || String(error);
+                if (/subscription already exist/i.test(errorMessage)) {
+                    const list = await bcClient.listWebhookSubscriptions();
+                    const existing = list.find((item) => (item?.resource || "").toLowerCase().includes(normalized.toLowerCase()));
+                    if (existing?.id && !isExpiringSoon(existing?.expirationDateTime)) {
+                        await saveBcSubscription(normalized, {
+                            id: existing.id,
+                            entitySet: normalized,
+                            resource: existing.resource,
+                            expirationDateTime: existing.expirationDateTime,
+                            createdAt: new Date().toISOString(),
+                            notificationUrl,
+                            clientState,
+                        });
+                        renewed.push(normalized);
+                        continue;
+                    }
+                }
+                failed.push({ entitySet: normalized, error: errorMessage });
             }
         }
 

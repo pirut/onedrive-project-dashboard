@@ -6,6 +6,7 @@ import { logger } from "../../../lib/planner-sync/logger.js";
 const DEFAULT_ENTITY_SETS = [
     (process.env.BC_SYNC_QUEUE_ENTITY_SET || "").trim() || "premiumSyncQueue",
 ].filter(Boolean);
+const EXPIRY_BUFFER_MS = 60 * 1000;
 
 function normalizeValue(value) {
     return (value || "").trim().replace(/^\/+/, "").toLowerCase();
@@ -54,6 +55,13 @@ function pickSubscriptionId(item) {
         extractODataId(item) ||
         null
     );
+}
+
+function isExpiringSoon(expirationDateTime, bufferMs = EXPIRY_BUFFER_MS) {
+    if (!expirationDateTime) return true;
+    const expMs = Date.parse(String(expirationDateTime));
+    if (!Number.isFinite(expMs)) return true;
+    return expMs <= Date.now() + bufferMs;
 }
 
 async function readJsonBody(req) {
@@ -174,6 +182,44 @@ export default async function handler(req, res) {
                 const existingId = pickSubscriptionId(existing);
                 if (!existingId) {
                     throw error;
+                }
+
+                if (isExpiringSoon(existing?.expirationDateTime)) {
+                    try {
+                        await bcClient.deleteWebhookSubscription(existingId);
+                    } catch (deleteError) {
+                        logger.warn("Failed to delete expiring BC subscription before recreate", {
+                            requestId,
+                            entitySet: normalized,
+                            subscriptionId: existingId,
+                            error: deleteError?.message || String(deleteError),
+                        });
+                    }
+                    const recreated = await bcClient.createWebhookSubscription({
+                        entitySet: normalized,
+                        notificationUrl,
+                        clientState,
+                    });
+                    const recreatedId = pickSubscriptionId(recreated) || existingId;
+                    await saveBcSubscription(normalized, {
+                        id: recreatedId,
+                        entitySet: normalized,
+                        resource: recreated?.resource || existing?.resource,
+                        expirationDateTime: recreated?.expirationDateTime || existing?.expirationDateTime,
+                        createdAt: new Date().toISOString(),
+                        notificationUrl,
+                        clientState,
+                    });
+
+                    created.push({
+                        entitySet: normalized,
+                        id: recreatedId,
+                        resource: recreated?.resource || existing?.resource,
+                        expirationDateTime: recreated?.expirationDateTime || existing?.expirationDateTime,
+                        existing: false,
+                        recreated: true,
+                    });
+                    continue;
                 }
 
                 await saveBcSubscription(normalized, {
