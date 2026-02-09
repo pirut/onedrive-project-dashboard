@@ -207,22 +207,6 @@ export async function POST(request: Request) {
         try {
             const dataverse = new DataverseClient();
             const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
-            if (!access.configured) {
-                return new Response(
-                    JSON.stringify(
-                        {
-                            ok: false,
-                            error: "No project access targets configured. Set PLANNER_GROUP_ID or PLANNER_GROUP_RESOURCE_IDS.",
-                        },
-                        null,
-                        2
-                    ),
-                    {
-                        status: 400,
-                        headers: { "Content-Type": "application/json" },
-                    }
-                );
-            }
             return new Response(JSON.stringify({ ok: true, projectNo, premiumProjectId, access }, null, 2), {
                 status: 200,
                 headers: { "Content-Type": "application/json" },

@@ -61,8 +61,7 @@ export function getPremiumSyncConfig() {
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
         plannerPrimaryResourceId: (readEnv("PLANNER_PRIMARY_RESOURCE_ID") || "").trim(),
-        plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "").trim(),
-        plannerShareReminderTaskEnabled: readBoolEnv("PLANNER_SHARE_REMINDER_TASK_ENABLED", true),
+        plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "Connie Cochran").trim(),
         plannerShareReminderTaskTitle: (readEnv("PLANNER_SHARE_REMINDER_TASK_TITLE") || "Share Project").trim() || "Share Project",
         allowedTaskNumbers: readNumberListEnv("SYNC_TASK_NO_ALLOWLIST", DEFAULT_SYNC_TASK_NUMBERS),
     };

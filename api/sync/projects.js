@@ -202,13 +202,6 @@ export default async function handler(req, res) {
             try {
                 const dataverse = new DataverseClient();
                 const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
-                if (!access.configured) {
-                    res.status(400).json({
-                        ok: false,
-                        error: "No project access targets configured. Set PLANNER_GROUP_ID or PLANNER_GROUP_RESOURCE_IDS.",
-                    });
-                    return;
-                }
                 res.status(200).json({ ok: true, projectNo, premiumProjectId, access });
                 return;
             } catch (error) {

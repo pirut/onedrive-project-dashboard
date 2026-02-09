@@ -246,7 +246,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
   - Set `PLANNER_PRIMARY_RESOURCE_ID` (single bookable resource ID) or `PLANNER_PRIMARY_RESOURCE_NAME` (exact name) to always add a primary person to every project.
   - Optionally set `PLANNER_GROUP_RESOURCE_IDS` (comma-separated bookable resource IDs) for additional resources.
   - Optionally set `PLANNER_GROUP_ID` (AAD group id, if supported by your Dataverse schema).
-  - Optional manual fallback task: set `PLANNER_SHARE_REMINDER_TASK_ENABLED=true` to auto-create a `Share Project` task on each Premium project (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
+  - Standard reminder task: each Premium project auto-creates a `Share Project` task (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
 
 ### Admin endpoints
 
@@ -257,6 +257,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `GET /api/sync/projects` (list Premium projects + sync state)
 - `GET /api/sync/premium-project-link` (resolve a Premium plan link by projectNo/projectId)
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
+- `POST /api/sync/projects` with `{ action: "share-access" }` (ensure project access + `Share Project` reminder task)
 - `GET /api/sync/debug-operation-sets` (list Dataverse schedule API operation sets)
 - `POST /api/sync/clear-operation-sets` (delete Dataverse schedule API operation sets)
 - `GET /api/sync/debug-dataverse-webhook` (list Dataverse webhook endpoints + steps)
@@ -269,6 +270,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `POST /api/sync/bc-subscriptions/renew`
 - `POST /api/sync/bc-subscriptions/delete`
 - `POST /api/sync/bc-jobs/process`
+- Admin utility dashboard: `GET /api/share-reminders-dashboard` (bulk manage `Share Project` tasks)
 
 ### Example curl commands
 

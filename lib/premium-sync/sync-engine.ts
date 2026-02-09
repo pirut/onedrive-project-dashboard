@@ -1333,7 +1333,6 @@ function resolveProjectAccessTargets(
         plannerGroupResourceIds?: string[];
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
-        plannerShareReminderTaskEnabled?: boolean;
         plannerShareReminderTaskTitle?: string;
     } = {}
 ) {
@@ -1352,10 +1351,6 @@ function resolveProjectAccessTargets(
         options.plannerPrimaryResourceName !== undefined
             ? options.plannerPrimaryResourceName.trim()
             : (syncConfig.plannerPrimaryResourceName || "").trim();
-    const plannerShareReminderTaskEnabled =
-        options.plannerShareReminderTaskEnabled !== undefined
-            ? Boolean(options.plannerShareReminderTaskEnabled)
-            : Boolean(syncConfig.plannerShareReminderTaskEnabled);
     const plannerShareReminderTaskTitle =
         options.plannerShareReminderTaskTitle !== undefined
             ? options.plannerShareReminderTaskTitle.trim()
@@ -1365,7 +1360,6 @@ function resolveProjectAccessTargets(
         plannerGroupResourceIds,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
-        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle: plannerShareReminderTaskTitle || "Share Project",
     };
 }
@@ -1378,7 +1372,6 @@ async function ensureProjectShareReminderTask(
         projectNo?: string;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
-        plannerShareReminderTaskEnabled?: boolean;
         plannerShareReminderTaskTitle?: string;
         teamCache?: Map<string, string | null>;
         resourceCache?: Map<string, string | null>;
@@ -1388,12 +1381,11 @@ async function ensureProjectShareReminderTask(
     const {
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
-        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle,
     } = resolveProjectAccessTargets(options);
     const title = plannerShareReminderTaskTitle || "Share Project";
     const output = {
-        enabled: Boolean(plannerShareReminderTaskEnabled),
+        enabled: true,
         title,
         taskId: null as string | null,
         created: false,
@@ -1401,9 +1393,6 @@ async function ensureProjectShareReminderTask(
         assignmentAttempted: false,
         error: null as string | null,
     };
-    if (!output.enabled) {
-        return output;
-    }
     const mapping = getDataverseMappingConfig();
     const teamCache = options.teamCache || new Map<string, string | null>();
     const resourceCache = options.resourceCache || new Map<string, string | null>();
@@ -1513,7 +1502,6 @@ export async function ensurePremiumProjectTeamAccess(
         plannerGroupResourceIds,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
-        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle,
     } = resolveProjectAccessTargets(options);
     const teamCache = options.teamCache || new Map<string, string | null>();
@@ -1532,7 +1520,6 @@ export async function ensurePremiumProjectTeamAccess(
         plannerPrimaryResourceId: plannerPrimaryResourceId || null,
         plannerPrimaryResourceName: plannerPrimaryResourceName || null,
         plannerPrimaryResolvedResourceId: null as string | null,
-        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle,
         added: 0,
         alreadyMember: 0,
@@ -1638,7 +1625,6 @@ export async function ensurePremiumProjectTeamAccess(
             projectNo: options.projectNo,
             plannerPrimaryResourceId: result.plannerPrimaryResolvedResourceId || plannerPrimaryResourceId,
             plannerPrimaryResourceName,
-            plannerShareReminderTaskEnabled,
             plannerShareReminderTaskTitle,
             teamCache,
             resourceCache,
@@ -1648,7 +1634,7 @@ export async function ensurePremiumProjectTeamAccess(
         const message = (error as Error)?.message || String(error);
         result.errors.push(`share_reminder_task_failed:${message}`);
         result.shareReminderTask = {
-            enabled: Boolean(plannerShareReminderTaskEnabled),
+            enabled: true,
             title: plannerShareReminderTaskTitle || "Share Project",
             taskId: null,
             created: false,
