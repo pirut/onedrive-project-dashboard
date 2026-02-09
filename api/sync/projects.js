@@ -27,6 +27,11 @@ function readString(value) {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function readOptionalString(value) {
+    const out = readString(value);
+    return out || undefined;
+}
+
 function readBool(value, fallback = false) {
     if (value == null) return fallback;
     if (typeof value === "boolean") return value;
@@ -34,6 +39,12 @@ function readBool(value, fallback = false) {
     if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
     if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
     return fallback;
+}
+
+function readOptionalBool(value) {
+    if (value == null) return undefined;
+    if (typeof value === "string" && !value.trim()) return undefined;
+    return readBool(value, false);
 }
 
 function readStringList(value) {
@@ -233,16 +244,16 @@ export default async function handler(req, res) {
                 const dataverse = new DataverseClient();
                 const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, {
                     projectNo,
-                    plannerOwnerTeamId: readString(body?.plannerOwnerTeamId || body?.ownerTeamId),
-                    plannerOwnerTeamAadGroupId: readString(
+                    plannerOwnerTeamId: readOptionalString(body?.plannerOwnerTeamId || body?.ownerTeamId),
+                    plannerOwnerTeamAadGroupId: readOptionalString(
                         body?.plannerOwnerTeamAadGroupId || body?.ownerTeamAadGroupId || body?.ownerAadGroupId
                     ),
-                    plannerGroupId: readString(body?.plannerGroupId),
+                    plannerGroupId: readOptionalString(body?.plannerGroupId),
                     plannerGroupResourceIds: readStringList(body?.plannerGroupResourceIds),
-                    plannerPrimaryResourceId: readString(body?.plannerPrimaryResourceId),
-                    plannerPrimaryResourceName: readString(body?.plannerPrimaryResourceName),
-                    plannerShareReminderTaskEnabled: readBool(body?.plannerShareReminderTaskEnabled, false),
-                    plannerShareReminderTaskTitle: readString(body?.plannerShareReminderTaskTitle),
+                    plannerPrimaryResourceId: readOptionalString(body?.plannerPrimaryResourceId),
+                    plannerPrimaryResourceName: readOptionalString(body?.plannerPrimaryResourceName),
+                    plannerShareReminderTaskEnabled: readOptionalBool(body?.plannerShareReminderTaskEnabled),
+                    plannerShareReminderTaskTitle: readOptionalString(body?.plannerShareReminderTaskTitle),
                 });
                 res.status(200).json({ ok: true, projectNo, premiumProjectId, access });
                 return;

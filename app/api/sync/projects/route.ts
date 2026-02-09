@@ -23,6 +23,11 @@ function readString(value: unknown) {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function readOptionalString(value: unknown) {
+    const out = readString(value);
+    return out || undefined;
+}
+
 function readBool(value: unknown, fallback = false) {
     if (value == null) return fallback;
     if (typeof value === "boolean") return value;
@@ -30,6 +35,12 @@ function readBool(value: unknown, fallback = false) {
     if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
     if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
     return fallback;
+}
+
+function readOptionalBool(value: unknown) {
+    if (value == null) return undefined;
+    if (typeof value === "string" && !value.trim()) return undefined;
+    return readBool(value, false);
 }
 
 function readStringList(value: unknown) {
@@ -239,18 +250,18 @@ export async function POST(request: Request) {
             const payload = body as Record<string, unknown>;
             const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, {
                 projectNo,
-                plannerOwnerTeamId: readString(payload?.plannerOwnerTeamId || payload?.ownerTeamId),
-                plannerOwnerTeamAadGroupId: readString(
+                plannerOwnerTeamId: readOptionalString(payload?.plannerOwnerTeamId || payload?.ownerTeamId),
+                plannerOwnerTeamAadGroupId: readOptionalString(
                     payload?.plannerOwnerTeamAadGroupId ||
                         payload?.ownerTeamAadGroupId ||
                         payload?.ownerAadGroupId
                 ),
-                plannerGroupId: readString(payload?.plannerGroupId),
+                plannerGroupId: readOptionalString(payload?.plannerGroupId),
                 plannerGroupResourceIds: readStringList(payload?.plannerGroupResourceIds),
-                plannerPrimaryResourceId: readString(payload?.plannerPrimaryResourceId),
-                plannerPrimaryResourceName: readString(payload?.plannerPrimaryResourceName),
-                plannerShareReminderTaskEnabled: readBool(payload?.plannerShareReminderTaskEnabled, false),
-                plannerShareReminderTaskTitle: readString(payload?.plannerShareReminderTaskTitle),
+                plannerPrimaryResourceId: readOptionalString(payload?.plannerPrimaryResourceId),
+                plannerPrimaryResourceName: readOptionalString(payload?.plannerPrimaryResourceName),
+                plannerShareReminderTaskEnabled: readOptionalBool(payload?.plannerShareReminderTaskEnabled),
+                plannerShareReminderTaskTitle: readOptionalString(payload?.plannerShareReminderTaskTitle),
             });
             return new Response(JSON.stringify({ ok: true, projectNo, premiumProjectId, access }, null, 2), {
                 status: 200,
