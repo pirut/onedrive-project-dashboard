@@ -36,6 +36,14 @@ const BC_QUEUE_TIME_FIELDS = [
 ];
 const BC_QUEUE_PAGE_SIZE = Math.max(1, Math.floor(Number(process.env.BC_SYNC_QUEUE_PAGE_SIZE || 5000)));
 const BC_QUEUE_MAX_PAGES = Math.max(1, Math.floor(Number(process.env.BC_SYNC_QUEUE_MAX_PAGES || 20)));
+const BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS = Math.max(
+    0,
+    Math.floor(Number(process.env.BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS || 4))
+);
+const BC_PROJECT_BOOTSTRAP_RETRY_DELAY_MS = Math.max(
+    100,
+    Math.floor(Number(process.env.BC_PROJECT_BOOTSTRAP_RETRY_DELAY_MS || 800))
+);
 const defaultBucketFieldCache = { value: undefined as string | null | undefined };
 const warnedDefaultBucketFields = new Set<string>();
 
@@ -399,6 +407,45 @@ async function runWithConcurrency<T, R>(
 
 function sleep(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function reloadProjectTasksAfterPropagationDelay(
+    bcClient: BusinessCentralClient,
+    projectNo: string,
+    options: {
+        requestId?: string;
+        attempts: number;
+        baseDelayMs: number;
+        minTaskCount: number;
+        reason: string;
+    }
+) {
+    const attempts = Math.max(0, Math.floor(options.attempts));
+    const minTaskCount = Math.max(1, Math.floor(options.minTaskCount));
+    if (!attempts) {
+        return { tasks: [] as BcProjectTask[], attempt: 0 };
+    }
+    const filter = `projectNo eq '${escapeODataString(projectNo)}'`;
+    let latest: BcProjectTask[] = [];
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        await sleep(attempt * Math.max(100, Math.floor(options.baseDelayMs)));
+        try {
+            const reloadedTasks = await bcClient.listProjectTasks(filter);
+            latest = reloadedTasks;
+            if (reloadedTasks.length >= minTaskCount) {
+                return { tasks: reloadedTasks, attempt };
+            }
+        } catch (error) {
+            logger.warn("BC task reload after propagation delay failed", {
+                requestId: options.requestId,
+                projectNo,
+                reason: options.reason,
+                attempt,
+                error: (error as Error)?.message,
+            });
+        }
+    }
+    return { tasks: latest, attempt: attempts };
 }
 
 function createEmptyTaskIndex(): TaskIndex {
@@ -2599,29 +2646,42 @@ export async function syncBcToPremium(
         }
 
         if (!tasks.length && scopedQueueEntries.length) {
-            const retryFilter = `projectNo eq '${escapeODataString(projNo)}'`;
-            for (let attempt = 1; attempt <= 3 && !tasks.length; attempt += 1) {
-                await sleep(attempt * 800);
-                try {
-                    const reloadedTasks = await bcClient.listProjectTasks(retryFilter);
-                    if (!reloadedTasks.length) continue;
-                    tasks = reloadedTasks;
-                    // Queue events can arrive before task rows are queryable. Once rows appear, seed the whole project.
-                    scopedTaskSystemIdSet = null;
-                    logger.info("Queue-triggered sync expanded after BC task propagation delay", {
-                        requestId,
-                        projectNo: projNo,
-                        attempt,
-                        loadedTasks: reloadedTasks.length,
-                    });
-                } catch (error) {
-                    logger.warn("BC task reload after queue trigger failed", {
-                        requestId,
-                        projectNo: projNo,
-                        attempt,
-                        error: (error as Error)?.message,
-                    });
-                }
+            const reloaded = await reloadProjectTasksAfterPropagationDelay(bcClient, projNo, {
+                requestId,
+                attempts: 3,
+                baseDelayMs: 800,
+                minTaskCount: 1,
+                reason: "queue_project_sync",
+            });
+            if (reloaded.tasks.length) {
+                tasks = reloaded.tasks;
+                // Queue events can arrive before task rows are queryable. Once rows appear, seed the whole project.
+                scopedTaskSystemIdSet = null;
+                logger.info("Queue-triggered sync expanded after BC task propagation delay", {
+                    requestId,
+                    projectNo: projNo,
+                    attempt: reloaded.attempt,
+                    loadedTasks: reloaded.tasks.length,
+                });
+            }
+        }
+
+        if (!tasks.length && !scopedTaskSystemIdSet && !scopedQueueEntries.length && BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS > 0) {
+            const reloaded = await reloadProjectTasksAfterPropagationDelay(bcClient, projNo, {
+                requestId,
+                attempts: BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS,
+                baseDelayMs: BC_PROJECT_BOOTSTRAP_RETRY_DELAY_MS,
+                minTaskCount: 1,
+                reason: "project_bootstrap_sync",
+            });
+            if (reloaded.tasks.length) {
+                tasks = reloaded.tasks;
+                logger.info("Project bootstrap sync expanded after BC task propagation delay", {
+                    requestId,
+                    projectNo: projNo,
+                    attempt: reloaded.attempt,
+                    loadedTasks: reloaded.tasks.length,
+                });
             }
         }
 
@@ -2681,6 +2741,29 @@ export async function syncBcToPremium(
                         projectId,
                         loadedTasks: projectSorted.length,
                     });
+
+                    if (BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS > 0) {
+                        const expanded = await reloadProjectTasksAfterPropagationDelay(bcClient, projNo, {
+                            requestId,
+                            attempts: BC_PROJECT_BOOTSTRAP_RETRY_ATTEMPTS,
+                            baseDelayMs: BC_PROJECT_BOOTSTRAP_RETRY_DELAY_MS,
+                            minTaskCount: projectSorted.length + 1,
+                            reason: "bootstrap_full_project_expand",
+                        });
+                        if (expanded.tasks.length > projectSorted.length) {
+                            const expandedSorted = sortTasksByTaskNo(expanded.tasks);
+                            tasks = expandedSorted;
+                            sorted = expandedSorted;
+                            logger.info("Expanded full project bootstrap sync after BC task propagation delay", {
+                                requestId,
+                                projectNo: projNo,
+                                projectId,
+                                attempt: expanded.attempt,
+                                loadedTasks: expanded.tasks.length,
+                                initialTasks: projectSorted.length,
+                            });
+                        }
+                    }
                 }
             } catch (error) {
                 logger.warn("Failed to evaluate bootstrap full-project sync eligibility", {
