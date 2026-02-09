@@ -1333,6 +1333,8 @@ function resolveProjectAccessTargets(
         plannerGroupResourceIds?: string[];
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
+        plannerShareReminderTaskEnabled?: boolean;
+        plannerShareReminderTaskTitle?: string;
     } = {}
 ) {
     const syncConfig = getPremiumSyncConfig();
@@ -1350,7 +1352,145 @@ function resolveProjectAccessTargets(
         options.plannerPrimaryResourceName !== undefined
             ? options.plannerPrimaryResourceName.trim()
             : (syncConfig.plannerPrimaryResourceName || "").trim();
-    return { plannerGroupId, plannerGroupResourceIds, plannerPrimaryResourceId, plannerPrimaryResourceName };
+    const plannerShareReminderTaskEnabled =
+        options.plannerShareReminderTaskEnabled !== undefined
+            ? Boolean(options.plannerShareReminderTaskEnabled)
+            : Boolean(syncConfig.plannerShareReminderTaskEnabled);
+    const plannerShareReminderTaskTitle =
+        options.plannerShareReminderTaskTitle !== undefined
+            ? options.plannerShareReminderTaskTitle.trim()
+            : (syncConfig.plannerShareReminderTaskTitle || "").trim();
+    return {
+        plannerGroupId,
+        plannerGroupResourceIds,
+        plannerPrimaryResourceId,
+        plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
+        plannerShareReminderTaskTitle: plannerShareReminderTaskTitle || "Share Project",
+    };
+}
+
+async function ensureProjectShareReminderTask(
+    dataverse: DataverseClient,
+    projectId: string,
+    options: {
+        requestId?: string;
+        projectNo?: string;
+        plannerPrimaryResourceId?: string;
+        plannerPrimaryResourceName?: string;
+        plannerShareReminderTaskEnabled?: boolean;
+        plannerShareReminderTaskTitle?: string;
+        teamCache?: Map<string, string | null>;
+        resourceCache?: Map<string, string | null>;
+        resourceNameCache?: Map<string, { id: string; name: string } | null>;
+    } = {}
+) {
+    const {
+        plannerPrimaryResourceId,
+        plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
+        plannerShareReminderTaskTitle,
+    } = resolveProjectAccessTargets(options);
+    const title = plannerShareReminderTaskTitle || "Share Project";
+    const output = {
+        enabled: Boolean(plannerShareReminderTaskEnabled),
+        title,
+        taskId: null as string | null,
+        created: false,
+        assigneeName: null as string | null,
+        assignmentAttempted: false,
+        error: null as string | null,
+    };
+    if (!output.enabled) {
+        return output;
+    }
+    const mapping = getDataverseMappingConfig();
+    const teamCache = options.teamCache || new Map<string, string | null>();
+    const resourceCache = options.resourceCache || new Map<string, string | null>();
+    const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
+
+    let assigneeName = plannerPrimaryResourceName || "";
+    if (!assigneeName && plannerPrimaryResourceId) {
+        const resource = await getBookableResourceById(dataverse, plannerPrimaryResourceId, resourceNameCache);
+        assigneeName = (resource?.name || "").trim();
+    }
+    output.assigneeName = assigneeName || null;
+
+    const existing = await findDataverseTaskByTitle(dataverse, projectId, title, mapping);
+    let taskId = resolveTaskId(existing, mapping) || "";
+    if (!taskId) {
+        const reminderTask: BcProjectTask = {
+            projectNo: options.projectNo || "",
+            description: title,
+            percentComplete: 0,
+            assignedPersonName: assigneeName || "",
+        };
+        const payload = buildTaskPayload(reminderTask, projectId, mapping, dataverse);
+        try {
+            const created = await dataverse.create(mapping.taskEntitySet, payload);
+            taskId = created.entityId || "";
+        } catch (error) {
+            if (isDirectTaskWriteBlocked(error)) {
+                const operationSetId = await createOperationSetWithRecovery({
+                    dataverse,
+                    projectId,
+                    projectNo: options.projectNo || "",
+                    requestId: options.requestId,
+                    description: `Share reminder ${options.projectNo || projectId} ${new Date().toISOString()}`,
+                });
+                if (!operationSetId) {
+                    throw error;
+                }
+                const newTaskId = crypto.randomUUID();
+                try {
+                    const bucketCache = new Map<string, string | null>();
+                    const bucketId = await getProjectBucketId(dataverse, projectId, bucketCache);
+                    const entity = buildScheduleTaskEntity({
+                        taskId: newTaskId,
+                        projectId,
+                        bucketId,
+                        task: reminderTask,
+                        mapping,
+                        dataverse,
+                        mode: "create",
+                    });
+                    await dataverse.pssCreate(entity, operationSetId);
+                    await dataverse.executeOperationSet(operationSetId);
+                    taskId = newTaskId;
+                } finally {
+                    await cleanupOperationSet(dataverse, operationSetId, {
+                        projectId,
+                        projectNo: options.projectNo || "",
+                        requestId: options.requestId,
+                        reason: "share_reminder_task",
+                    });
+                }
+            } else {
+                throw error;
+            }
+        }
+        output.created = Boolean(taskId);
+    }
+    output.taskId = taskId || null;
+    if (taskId && assigneeName) {
+        output.assignmentAttempted = true;
+        await ensureAssignmentForTask(
+            dataverse,
+            {
+                projectNo: options.projectNo || "",
+                description: title,
+                assignedPersonName: assigneeName,
+            } as BcProjectTask,
+            projectId,
+            taskId,
+            {
+                resourceCache,
+                teamCache,
+                assignmentCache: new Set<string>(),
+            }
+        );
+    }
+    return output;
 }
 
 export async function ensurePremiumProjectTeamAccess(
@@ -1368,8 +1508,14 @@ export async function ensurePremiumProjectTeamAccess(
         resourceNameCache?: Map<string, { id: string; name: string } | null>;
     } = {}
 ) {
-    const { plannerGroupId, plannerGroupResourceIds, plannerPrimaryResourceId, plannerPrimaryResourceName } =
-        resolveProjectAccessTargets(options);
+    const {
+        plannerGroupId,
+        plannerGroupResourceIds,
+        plannerPrimaryResourceId,
+        plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
+        plannerShareReminderTaskTitle,
+    } = resolveProjectAccessTargets(options);
     const teamCache = options.teamCache || new Map<string, string | null>();
     const resourceCache = options.resourceCache || new Map<string, string | null>();
     const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
@@ -1386,10 +1532,21 @@ export async function ensurePremiumProjectTeamAccess(
         plannerPrimaryResourceId: plannerPrimaryResourceId || null,
         plannerPrimaryResourceName: plannerPrimaryResourceName || null,
         plannerPrimaryResolvedResourceId: null as string | null,
+        plannerShareReminderTaskEnabled,
+        plannerShareReminderTaskTitle,
         added: 0,
         alreadyMember: 0,
         missing: 0,
         errors: [] as string[],
+        shareReminderTask: null as null | {
+            enabled: boolean;
+            title: string;
+            taskId: string | null;
+            created: boolean;
+            assigneeName: string | null;
+            assignmentAttempted: boolean;
+            error: string | null;
+        },
     };
     if (!result.configured) {
         return result;
@@ -1473,6 +1630,38 @@ export async function ensurePremiumProjectTeamAccess(
                 error: message,
             });
         }
+    }
+
+    try {
+        result.shareReminderTask = await ensureProjectShareReminderTask(dataverse, projectId, {
+            requestId: options.requestId,
+            projectNo: options.projectNo,
+            plannerPrimaryResourceId: result.plannerPrimaryResolvedResourceId || plannerPrimaryResourceId,
+            plannerPrimaryResourceName,
+            plannerShareReminderTaskEnabled,
+            plannerShareReminderTaskTitle,
+            teamCache,
+            resourceCache,
+            resourceNameCache,
+        });
+    } catch (error) {
+        const message = (error as Error)?.message || String(error);
+        result.errors.push(`share_reminder_task_failed:${message}`);
+        result.shareReminderTask = {
+            enabled: Boolean(plannerShareReminderTaskEnabled),
+            title: plannerShareReminderTaskTitle || "Share Project",
+            taskId: null,
+            created: false,
+            assigneeName: plannerPrimaryResourceName || null,
+            assignmentAttempted: false,
+            error: message,
+        };
+        logger.warn("Share reminder task ensure failed", {
+            requestId: options.requestId || "",
+            projectNo: options.projectNo || "",
+            projectId,
+            error: message,
+        });
     }
 
     return result;
@@ -3079,6 +3268,7 @@ export async function syncBcToPremium(
                     plannerGroupId,
                     plannerGroupResourceIds,
                     teamCache,
+                    resourceCache,
                     resourceNameCache,
                 });
             }

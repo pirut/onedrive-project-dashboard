@@ -246,6 +246,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
   - Set `PLANNER_PRIMARY_RESOURCE_ID` (single bookable resource ID) or `PLANNER_PRIMARY_RESOURCE_NAME` (exact name) to always add a primary person to every project.
   - Optionally set `PLANNER_GROUP_RESOURCE_IDS` (comma-separated bookable resource IDs) for additional resources.
   - Optionally set `PLANNER_GROUP_ID` (AAD group id, if supported by your Dataverse schema).
+  - Optional manual fallback task: set `PLANNER_SHARE_REMINDER_TASK_ENABLED=true` to auto-create a `Share Project` task on each Premium project (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
 
 ### Admin endpoints
 
