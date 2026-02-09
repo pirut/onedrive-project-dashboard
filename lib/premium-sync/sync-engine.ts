@@ -1083,6 +1083,99 @@ async function getBookableResourceById(
     }
 }
 
+async function findDataverseTeamByAadObjectId(dataverse: DataverseClient, aadObjectId: string) {
+    const trimmed = (aadObjectId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+    if (!trimmed) return null;
+    const fields = ["azureactivedirectoryobjectid", "aadobjectid", "msdyn_aadobjectid", "msdyn_azureactivedirectoryobjectid"];
+    for (const field of fields) {
+        const filters = [`${field} eq ${formatODataGuid(trimmed)}`, `${field} eq '${escapeODataString(trimmed)}'`];
+        for (const filter of filters) {
+            try {
+                const res = await dataverse.list<DataverseEntity>("teams", {
+                    select: ["teamid", "name", field],
+                    filter,
+                    top: 1,
+                });
+                const row = res.value[0];
+                if (row?.teamid) {
+                    return {
+                        id: String(row.teamid).trim(),
+                        name: row.name ? String(row.name).trim() : "",
+                    };
+                }
+            } catch (error) {
+                const message = (error as Error)?.message || "";
+                if (message.includes("Could not find a property named")) {
+                    break;
+                }
+                if (message.includes("Unrecognized 'Edm.String' literal 'guid'")) {
+                    continue;
+                }
+                logger.debug("Dataverse team lookup by AAD object id failed", { field, filter, error: message });
+            }
+        }
+    }
+    return null;
+}
+
+async function getDataverseTeamById(
+    dataverse: DataverseClient,
+    teamId: string,
+    cache: Map<string, { id: string; name: string } | null>
+) {
+    const trimmed = (teamId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+    if (!trimmed) return null;
+    if (cache.has(trimmed)) return cache.get(trimmed) || null;
+    try {
+        const team = await dataverse.getById<DataverseEntity>("teams", trimmed, ["teamid", "name"]);
+        const record = {
+            id: team?.teamid ? String(team.teamid).trim() : trimmed,
+            name: team?.name ? String(team.name).trim() : "",
+        };
+        cache.set(trimmed, record);
+        return record;
+    } catch (error) {
+        logger.debug("Dataverse team lookup failed", { teamId: trimmed, error: (error as Error)?.message });
+        cache.set(trimmed, null);
+        return null;
+    }
+}
+
+async function getProjectOwnerId(
+    dataverse: DataverseClient,
+    projectId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    try {
+        const entity = await dataverse.getById<DataverseEntity>(mapping.projectEntitySet, projectId, ["_ownerid_value", "ownerid"]);
+        const raw = entity?._ownerid_value ?? entity?.ownerid;
+        if (typeof raw !== "string" || !raw.trim()) return null;
+        return raw.trim().replace(/^\{/, "").replace(/\}$/, "");
+    } catch (error) {
+        logger.debug("Dataverse project owner lookup failed", {
+            projectId,
+            error: (error as Error)?.message,
+        });
+        return null;
+    }
+}
+
+async function assignProjectOwnerTeam(
+    dataverse: DataverseClient,
+    projectId: string,
+    ownerTeamId: string,
+    mapping: ReturnType<typeof getDataverseMappingConfig>
+) {
+    const normalizedTeamId = (ownerTeamId || "").trim().replace(/^\{/, "").replace(/\}$/, "");
+    if (!normalizedTeamId) return false;
+    const teamBinding = dataverse.buildLookupBinding("teams", normalizedTeamId);
+    if (!teamBinding) return false;
+    await dataverse.update(mapping.projectEntitySet, projectId, {
+        "ownerid@odata.bind": teamBinding,
+    });
+    return true;
+}
+
 async function getProjectTeamMemberId(
     dataverse: DataverseClient,
     projectId: string,
@@ -1331,8 +1424,11 @@ function resolveProjectAccessTargets(
     options: {
         plannerGroupId?: string;
         plannerGroupResourceIds?: string[];
+        plannerOwnerTeamId?: string;
+        plannerOwnerTeamAadGroupId?: string;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
+        plannerShareReminderTaskEnabled?: boolean;
         plannerShareReminderTaskTitle?: string;
     } = {}
 ) {
@@ -1343,6 +1439,14 @@ function resolveProjectAccessTargets(
         options.plannerGroupResourceIds !== undefined
             ? normalizePlannerGroupResourceIds(options.plannerGroupResourceIds)
             : normalizePlannerGroupResourceIds(syncConfig.plannerGroupResourceIds || []);
+    const plannerOwnerTeamId =
+        options.plannerOwnerTeamId !== undefined
+            ? options.plannerOwnerTeamId.trim()
+            : (syncConfig.plannerOwnerTeamId || "").trim();
+    const plannerOwnerTeamAadGroupId =
+        options.plannerOwnerTeamAadGroupId !== undefined
+            ? options.plannerOwnerTeamAadGroupId.trim()
+            : (syncConfig.plannerOwnerTeamAadGroupId || "").trim();
     const plannerPrimaryResourceId =
         options.plannerPrimaryResourceId !== undefined
             ? options.plannerPrimaryResourceId.trim()
@@ -1351,6 +1455,10 @@ function resolveProjectAccessTargets(
         options.plannerPrimaryResourceName !== undefined
             ? options.plannerPrimaryResourceName.trim()
             : (syncConfig.plannerPrimaryResourceName || "").trim();
+    const plannerShareReminderTaskEnabled =
+        options.plannerShareReminderTaskEnabled !== undefined
+            ? Boolean(options.plannerShareReminderTaskEnabled)
+            : Boolean(syncConfig.plannerShareReminderTaskEnabled);
     const plannerShareReminderTaskTitle =
         options.plannerShareReminderTaskTitle !== undefined
             ? options.plannerShareReminderTaskTitle.trim()
@@ -1358,10 +1466,70 @@ function resolveProjectAccessTargets(
     return {
         plannerGroupId,
         plannerGroupResourceIds,
+        plannerOwnerTeamId,
+        plannerOwnerTeamAadGroupId,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle: plannerShareReminderTaskTitle || "Share Project",
     };
+}
+
+async function ensureProjectOwnerTeamAccess(
+    dataverse: DataverseClient,
+    projectId: string,
+    options: {
+        plannerOwnerTeamId?: string;
+        plannerOwnerTeamAadGroupId?: string;
+        ownerTeamCache?: Map<string, { id: string; name: string } | null>;
+    } = {}
+) {
+    const { plannerOwnerTeamId, plannerOwnerTeamAadGroupId } = resolveProjectAccessTargets(options);
+    const mapping = getDataverseMappingConfig();
+    const ownerTeamCache = options.ownerTeamCache || new Map<string, { id: string; name: string } | null>();
+    const output = {
+        configured: Boolean(plannerOwnerTeamId || plannerOwnerTeamAadGroupId),
+        targetTeamId: plannerOwnerTeamId || null,
+        targetAadGroupId: plannerOwnerTeamAadGroupId || null,
+        resolvedTeamId: null as string | null,
+        resolvedTeamName: null as string | null,
+        resolvedBy: null as "teamId" | "aadGroupId" | null,
+        ownerBefore: null as string | null,
+        changed: false,
+        alreadyOwned: false,
+        error: null as string | null,
+    };
+    if (!output.configured) {
+        return output;
+    }
+
+    let team: { id: string; name: string } | null = null;
+    if (plannerOwnerTeamId) {
+        team = await getDataverseTeamById(dataverse, plannerOwnerTeamId, ownerTeamCache);
+        output.resolvedBy = "teamId";
+    }
+    if (!team && plannerOwnerTeamAadGroupId) {
+        team = await findDataverseTeamByAadObjectId(dataverse, plannerOwnerTeamAadGroupId);
+        output.resolvedBy = "aadGroupId";
+    }
+    if (!team) {
+        output.error = "owner_team_not_found";
+        return output;
+    }
+
+    output.resolvedTeamId = team.id;
+    output.resolvedTeamName = team.name || null;
+    output.targetTeamId = output.targetTeamId || team.id;
+    ownerTeamCache.set(team.id, team);
+    output.ownerBefore = await getProjectOwnerId(dataverse, projectId, mapping);
+    if (output.ownerBefore && output.ownerBefore.toLowerCase() === team.id.toLowerCase()) {
+        output.alreadyOwned = true;
+        return output;
+    }
+
+    await assignProjectOwnerTeam(dataverse, projectId, team.id, mapping);
+    output.changed = true;
+    return output;
 }
 
 async function ensureProjectShareReminderTask(
@@ -1372,6 +1540,7 @@ async function ensureProjectShareReminderTask(
         projectNo?: string;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
+        plannerShareReminderTaskEnabled?: boolean;
         plannerShareReminderTaskTitle?: string;
         teamCache?: Map<string, string | null>;
         resourceCache?: Map<string, string | null>;
@@ -1381,11 +1550,12 @@ async function ensureProjectShareReminderTask(
     const {
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle,
     } = resolveProjectAccessTargets(options);
     const title = plannerShareReminderTaskTitle || "Share Project";
     const output = {
-        enabled: true,
+        enabled: Boolean(plannerShareReminderTaskEnabled),
         title,
         taskId: null as string | null,
         created: false,
@@ -1393,6 +1563,9 @@ async function ensureProjectShareReminderTask(
         assignmentAttempted: false,
         error: null as string | null,
     };
+    if (!output.enabled) {
+        return output;
+    }
     const mapping = getDataverseMappingConfig();
     const teamCache = options.teamCache || new Map<string, string | null>();
     const resourceCache = options.resourceCache || new Map<string, string | null>();
@@ -1490,41 +1663,71 @@ export async function ensurePremiumProjectTeamAccess(
         projectNo?: string;
         plannerGroupId?: string;
         plannerGroupResourceIds?: string[];
+        plannerOwnerTeamId?: string;
+        plannerOwnerTeamAadGroupId?: string;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
+        plannerShareReminderTaskEnabled?: boolean;
         teamCache?: Map<string, string | null>;
         resourceCache?: Map<string, string | null>;
         resourceNameCache?: Map<string, { id: string; name: string } | null>;
+        ownerTeamCache?: Map<string, { id: string; name: string } | null>;
     } = {}
 ) {
     const {
         plannerGroupId,
         plannerGroupResourceIds,
+        plannerOwnerTeamId,
+        plannerOwnerTeamAadGroupId,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
+        plannerShareReminderTaskEnabled,
         plannerShareReminderTaskTitle,
     } = resolveProjectAccessTargets(options);
     const teamCache = options.teamCache || new Map<string, string | null>();
     const resourceCache = options.resourceCache || new Map<string, string | null>();
     const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
+    const ownerTeamCache = options.ownerTeamCache || new Map<string, { id: string; name: string } | null>();
     const targetResourceIds = new Set<string>(plannerGroupResourceIds);
     if (plannerPrimaryResourceId) {
         targetResourceIds.add(plannerPrimaryResourceId);
     }
     const result = {
-        configured: Boolean(plannerGroupId || targetResourceIds.size || plannerPrimaryResourceName),
+        configured: Boolean(
+            plannerOwnerTeamId ||
+                plannerOwnerTeamAadGroupId ||
+                plannerGroupId ||
+                targetResourceIds.size ||
+                plannerPrimaryResourceName ||
+                plannerShareReminderTaskEnabled
+        ),
         projectId,
         projectNo: options.projectNo || "",
         plannerGroupId: plannerGroupId || null,
         plannerGroupResourceIds: Array.from(targetResourceIds),
+        plannerOwnerTeamId: plannerOwnerTeamId || null,
+        plannerOwnerTeamAadGroupId: plannerOwnerTeamAadGroupId || null,
         plannerPrimaryResourceId: plannerPrimaryResourceId || null,
         plannerPrimaryResourceName: plannerPrimaryResourceName || null,
         plannerPrimaryResolvedResourceId: null as string | null,
+        plannerShareReminderTaskEnabled: Boolean(plannerShareReminderTaskEnabled),
         plannerShareReminderTaskTitle,
         added: 0,
         alreadyMember: 0,
         missing: 0,
         errors: [] as string[],
+        ownerTeam: null as null | {
+            configured: boolean;
+            targetTeamId: string | null;
+            targetAadGroupId: string | null;
+            resolvedTeamId: string | null;
+            resolvedTeamName: string | null;
+            resolvedBy: "teamId" | "aadGroupId" | null;
+            ownerBefore: string | null;
+            changed: boolean;
+            alreadyOwned: boolean;
+            error: string | null;
+        },
         shareReminderTask: null as null | {
             enabled: boolean;
             title: string;
@@ -1537,6 +1740,42 @@ export async function ensurePremiumProjectTeamAccess(
     };
     if (!result.configured) {
         return result;
+    }
+
+    if (plannerOwnerTeamId || plannerOwnerTeamAadGroupId) {
+        try {
+            result.ownerTeam = await ensureProjectOwnerTeamAccess(dataverse, projectId, {
+                plannerOwnerTeamId,
+                plannerOwnerTeamAadGroupId,
+                ownerTeamCache,
+            });
+            if (result.ownerTeam.error) {
+                result.errors.push(`owner_team:${result.ownerTeam.error}`);
+            }
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            result.errors.push(`owner_team_failed:${message}`);
+            result.ownerTeam = {
+                configured: true,
+                targetTeamId: plannerOwnerTeamId || null,
+                targetAadGroupId: plannerOwnerTeamAadGroupId || null,
+                resolvedTeamId: null,
+                resolvedTeamName: null,
+                resolvedBy: null,
+                ownerBefore: null,
+                changed: false,
+                alreadyOwned: false,
+                error: message,
+            };
+            logger.warn("Dataverse owner team share failed", {
+                requestId: options.requestId || "",
+                projectNo: options.projectNo || "",
+                projectId,
+                ownerTeamId: plannerOwnerTeamId || "",
+                ownerTeamAadGroupId: plannerOwnerTeamAadGroupId || "",
+                error: message,
+            });
+        }
     }
 
     if (plannerGroupId) {
@@ -1625,6 +1864,7 @@ export async function ensurePremiumProjectTeamAccess(
             projectNo: options.projectNo,
             plannerPrimaryResourceId: result.plannerPrimaryResolvedResourceId || plannerPrimaryResourceId,
             plannerPrimaryResourceName,
+            plannerShareReminderTaskEnabled,
             plannerShareReminderTaskTitle,
             teamCache,
             resourceCache,
@@ -1634,7 +1874,7 @@ export async function ensurePremiumProjectTeamAccess(
         const message = (error as Error)?.message || String(error);
         result.errors.push(`share_reminder_task_failed:${message}`);
         result.shareReminderTask = {
-            enabled: true,
+            enabled: Boolean(plannerShareReminderTaskEnabled),
             title: plannerShareReminderTaskTitle || "Share Project",
             taskId: null,
             created: false,
@@ -1664,6 +1904,8 @@ export async function resolveProjectFromBc(
         skipProjectAccess?: boolean;
         plannerGroupId?: string;
         plannerGroupResourceIds?: string[];
+        plannerOwnerTeamId?: string;
+        plannerOwnerTeamAadGroupId?: string;
     } = {}
 ) {
     const normalized = (projectNo || "").trim();
@@ -1748,6 +1990,8 @@ export async function resolveProjectFromBc(
             projectNo: normalized,
             plannerGroupId: options.plannerGroupId,
             plannerGroupResourceIds: options.plannerGroupResourceIds,
+            plannerOwnerTeamId: options.plannerOwnerTeamId,
+            plannerOwnerTeamAadGroupId: options.plannerOwnerTeamAadGroupId,
         });
     }
     return {
@@ -2877,6 +3121,8 @@ export async function syncBcToPremium(
     const plannerGroupResourceIds = Array.from(
         new Set((syncConfig.plannerGroupResourceIds || []).map((value) => value.trim()).filter(Boolean))
     );
+    const plannerOwnerTeamId = (syncConfig.plannerOwnerTeamId || "").trim();
+    const plannerOwnerTeamAadGroupId = (syncConfig.plannerOwnerTeamAadGroupId || "").trim();
 
     const settings = await listProjectSyncSettings();
     const disabled = buildDisabledProjectSet(settings);
@@ -3102,6 +3348,8 @@ export async function syncBcToPremium(
                     skipProjectAccess: options.skipProjectAccess,
                     plannerGroupId,
                     plannerGroupResourceIds,
+                    plannerOwnerTeamId,
+                    plannerOwnerTeamAadGroupId,
                 });
                 resolvedProjectId = resolveProjectId(projectEntity, mapping) || "";
             } catch (error) {
@@ -3253,6 +3501,8 @@ export async function syncBcToPremium(
                     projectNo: projNo,
                     plannerGroupId,
                     plannerGroupResourceIds,
+                    plannerOwnerTeamId,
+                    plannerOwnerTeamAadGroupId,
                     teamCache,
                     resourceCache,
                     resourceNameCache,

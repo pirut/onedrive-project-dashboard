@@ -23,6 +23,36 @@ async function readJsonBody(req) {
     }
 }
 
+function readString(value) {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function readBool(value, fallback = false) {
+    if (value == null) return fallback;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return fallback;
+}
+
+function readStringList(value) {
+    if (Array.isArray(value)) {
+        return Array.from(new Set(value.map((item) => String(item || "").trim()).filter(Boolean)));
+    }
+    if (typeof value === "string") {
+        return Array.from(
+            new Set(
+                value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+            )
+        );
+    }
+    return undefined;
+}
+
 function parseDateMs(value) {
     if (!value) return null;
     const ms = Date.parse(String(value));
@@ -201,7 +231,19 @@ export default async function handler(req, res) {
             }
             try {
                 const dataverse = new DataverseClient();
-                const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
+                const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, {
+                    projectNo,
+                    plannerOwnerTeamId: readString(body?.plannerOwnerTeamId || body?.ownerTeamId),
+                    plannerOwnerTeamAadGroupId: readString(
+                        body?.plannerOwnerTeamAadGroupId || body?.ownerTeamAadGroupId || body?.ownerAadGroupId
+                    ),
+                    plannerGroupId: readString(body?.plannerGroupId),
+                    plannerGroupResourceIds: readStringList(body?.plannerGroupResourceIds),
+                    plannerPrimaryResourceId: readString(body?.plannerPrimaryResourceId),
+                    plannerPrimaryResourceName: readString(body?.plannerPrimaryResourceName),
+                    plannerShareReminderTaskEnabled: readBool(body?.plannerShareReminderTaskEnabled, false),
+                    plannerShareReminderTaskTitle: readString(body?.plannerShareReminderTaskTitle),
+                });
                 res.status(200).json({ ok: true, projectNo, premiumProjectId, access });
                 return;
             } catch (error) {

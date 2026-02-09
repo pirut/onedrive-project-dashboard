@@ -19,6 +19,36 @@ async function readJsonBody(request: Request) {
     }
 }
 
+function readString(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function readBool(value: unknown, fallback = false) {
+    if (value == null) return fallback;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return fallback;
+}
+
+function readStringList(value: unknown) {
+    if (Array.isArray(value)) {
+        return Array.from(new Set(value.map((item) => String(item || "").trim()).filter(Boolean)));
+    }
+    if (typeof value === "string") {
+        return Array.from(
+            new Set(
+                value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+            )
+        );
+    }
+    return undefined;
+}
+
 function parseDateMs(value: string | null | undefined) {
     if (!value) return null;
     const ms = Date.parse(String(value));
@@ -206,7 +236,22 @@ export async function POST(request: Request) {
         }
         try {
             const dataverse = new DataverseClient();
-            const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, { projectNo });
+            const payload = body as Record<string, unknown>;
+            const access = await ensurePremiumProjectTeamAccess(dataverse, premiumProjectId, {
+                projectNo,
+                plannerOwnerTeamId: readString(payload?.plannerOwnerTeamId || payload?.ownerTeamId),
+                plannerOwnerTeamAadGroupId: readString(
+                    payload?.plannerOwnerTeamAadGroupId ||
+                        payload?.ownerTeamAadGroupId ||
+                        payload?.ownerAadGroupId
+                ),
+                plannerGroupId: readString(payload?.plannerGroupId),
+                plannerGroupResourceIds: readStringList(payload?.plannerGroupResourceIds),
+                plannerPrimaryResourceId: readString(payload?.plannerPrimaryResourceId),
+                plannerPrimaryResourceName: readString(payload?.plannerPrimaryResourceName),
+                plannerShareReminderTaskEnabled: readBool(payload?.plannerShareReminderTaskEnabled, false),
+                plannerShareReminderTaskTitle: readString(payload?.plannerShareReminderTaskTitle),
+            });
             return new Response(JSON.stringify({ ok: true, projectNo, premiumProjectId, access }, null, 2), {
                 status: 200,
                 headers: { "Content-Type": "application/json" },

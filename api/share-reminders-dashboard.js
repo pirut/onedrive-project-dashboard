@@ -143,13 +143,22 @@ function layout(title, bodyHtml) {
 }
 
 function renderPage() {
+    const defaultOwnerTeamId = (process.env.PLANNER_OWNER_TEAM_ID || "").trim();
+    const defaultOwnerTeamAadGroupId = (process.env.PLANNER_OWNER_TEAM_AAD_GROUP_ID || "").trim();
+    const defaultPrimaryResourceName = (process.env.PLANNER_PRIMARY_RESOURCE_NAME || "").trim();
+    const defaultTaskTitle = (process.env.PLANNER_SHARE_REMINDER_TASK_TITLE || "Share Project").trim() || "Share Project";
+    const defaultEnableTask = ["1", "true", "yes", "y", "on"].includes(
+        String(process.env.PLANNER_SHARE_REMINDER_TASK_ENABLED || "")
+            .trim()
+            .toLowerCase()
+    );
     return layout(
-        "Share Project Task Manager",
+        "Project Sharing Manager",
         `
     <div class="topbar">
       <div>
-        <div class="title">Share Project Task Manager</div>
-        <div class="subtitle">Bulk create/verify <span class="mono">Share Project</span> tasks and assignment to Connie.</div>
+        <div class="title">Project Sharing Manager</div>
+        <div class="subtitle">Bulk apply Premium project sharing using owner team, with optional Share Project reminder task.</div>
       </div>
       <div class="actions">
         <a class="btn-ghost" href="/api/admin">Back to Admin</a>
@@ -159,13 +168,32 @@ function renderPage() {
 
     <div class="panel">
       <div class="row">
+        <input id="share-owner-team-id" value="${htmlEscape(defaultOwnerTeamId)}" placeholder="Owner Team ID (Dataverse teamid, preferred)" />
+        <input id="share-owner-team-aad-group-id" value="${htmlEscape(defaultOwnerTeamAadGroupId)}" placeholder="Owner Team AAD Group ID (fallback)" />
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="share-owner-team-search" placeholder="Find team name (optional)" />
+        <button class="btn-ghost" id="share-owner-team-load">List Dataverse Teams</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="small muted" style="display:inline-flex;gap:6px;align-items:center">
+          <input id="share-enable-task" type="checkbox"${defaultEnableTask ? " checked" : ""} />
+          Also create/assign Share Project task
+        </label>
+        <input id="share-primary-resource-name" value="${htmlEscape(defaultPrimaryResourceName)}" placeholder="Primary assignee name (for reminder task, e.g. Connie Cochran)" />
+        <input id="share-task-title" value="${htmlEscape(defaultTaskTitle)}" placeholder="Reminder task title" />
+      </div>
+      <div class="small muted" style="margin-top:8px">
+        Preferred model for Premium sharing is owner team assignment. Use reminder task only as optional operational cue.
+      </div>
+      <div class="row">
         <input id="share-reminders-filter" placeholder="Filter by project no, description, status, or premium id..." />
       </div>
       <div class="row" style="margin-top:8px">
         <button class="btn-ghost" id="share-reminders-select-all">Select all (filtered)</button>
         <button class="btn-ghost" id="share-reminders-clear">Clear</button>
-        <button class="btn" id="share-reminders-ensure-selected">Ensure tasks (selected)</button>
-        <button class="btn" id="share-reminders-ensure-filtered">Ensure tasks (all filtered)</button>
+        <button class="btn" id="share-reminders-ensure-selected">Apply sharing (selected)</button>
+        <button class="btn" id="share-reminders-ensure-filtered">Apply sharing (all filtered)</button>
         <span id="share-reminders-count" class="small muted">0 selected</span>
       </div>
       <div id="share-reminders-status" class="small muted" style="margin-top:8px">Loading projects…</div>
@@ -187,7 +215,7 @@ function renderPage() {
         </tbody>
       </table>
       <div class="small muted" style="margin-top:8px">
-        Standard behavior: each Premium project should have one <span class="mono">Share Project</span> task assigned to Connie.
+        Tip: set <span class="mono">PLANNER_OWNER_TEAM_ID</span> in env for automatic sharing on new project creation.
       </div>
     </div>`
     );

@@ -242,11 +242,11 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - Webhook receiver: `POST /api/webhooks/dataverse` (syncs only tasks referenced by the webhook payload; set `DATAVERSE_NOTIFICATION_URL` if you need a custom URL)
 - Webhook log storage: set `PREMIUM_WEBHOOK_LOG_TO_KV=false` to disable KV writes, or `PREMIUM_WEBHOOK_LOG_TYPES=error,invalid_json,unauthorized` to persist only specific log types.
 - If using webhooks, configure your Dataverse service endpoint to send notifications to the webhook URL and include the shared secret header (`x-dataverse-secret`) matching `DATAVERSE_WEBHOOK_SECRET`.
-- Optional team auto-add:
-  - Set `PLANNER_PRIMARY_RESOURCE_ID` (single bookable resource ID) or `PLANNER_PRIMARY_RESOURCE_NAME` (exact name) to always add a primary person to every project.
-  - Optionally set `PLANNER_GROUP_RESOURCE_IDS` (comma-separated bookable resource IDs) for additional resources.
-  - Optionally set `PLANNER_GROUP_ID` (AAD group id, if supported by your Dataverse schema).
-  - Standard reminder task: each Premium project auto-creates a `Share Project` task (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
+- Optional team auto-share:
+  - Preferred: set `PLANNER_OWNER_TEAM_ID` to a Dataverse `teamid` so each new Premium project is owned by that team (this is the most reliable way to share access consistently).
+  - Fallback: set `PLANNER_OWNER_TEAM_AAD_GROUP_ID` to resolve a Dataverse team from an Entra group object ID.
+  - Optional project-team membership: set `PLANNER_PRIMARY_RESOURCE_ID` / `PLANNER_PRIMARY_RESOURCE_NAME` and `PLANNER_GROUP_RESOURCE_IDS` if you also want explicit project team members added.
+  - Optional reminder task: set `PLANNER_SHARE_REMINDER_TASK_ENABLED=true` to auto-create a `Share Project` task (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
 
 ### Admin endpoints
 
@@ -257,11 +257,12 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `GET /api/sync/projects` (list Premium projects + sync state)
 - `GET /api/sync/premium-project-link` (resolve a Premium plan link by projectNo/projectId)
 - `POST /api/sync/projects` (toggle per-project sync or clear links)
-- `POST /api/sync/projects` with `{ action: "share-access" }` (ensure project access + `Share Project` reminder task)
+- `POST /api/sync/projects` with `{ action: "share-access" }` (apply owner-team sharing and optional team/reminder settings)
 - `GET /api/sync/debug-operation-sets` (list Dataverse schedule API operation sets)
 - `POST /api/sync/clear-operation-sets` (delete Dataverse schedule API operation sets)
 - `GET /api/sync/debug-dataverse-webhook` (list Dataverse webhook endpoints + steps)
 - `GET /api/sync/debug-dataverse-webhook-jobs` (list Dataverse webhook async jobs)
+- `GET /api/sync/list-owner-teams` (list Dataverse teams for owner-team sharing)
 - `POST /api/sync/clear-bc-sync-lock` (clear syncLock for a BC task)
 - `POST /api/sync/register-dataverse-webhook` (register Dataverse webhook + steps)
 - `POST /api/webhooks/dataverse` (Dataverse notification receiver)
@@ -270,7 +271,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `POST /api/sync/bc-subscriptions/renew`
 - `POST /api/sync/bc-subscriptions/delete`
 - `POST /api/sync/bc-jobs/process`
-- Admin utility dashboard: `GET /api/share-reminders-dashboard` (bulk manage `Share Project` tasks)
+- Admin utility dashboard: `GET /api/share-reminders-dashboard` (bulk manage project sharing retroactively)
 
 ### Example curl commands
 
@@ -302,6 +303,14 @@ curl -X POST \"https://your-domain.com/api/sync/clear-operation-sets\" \\
 
 # List Dataverse webhook endpoints + steps
 curl -X GET \"https://your-domain.com/api/sync/debug-dataverse-webhook\"
+
+# List Dataverse owner-team candidates (AAD-backed teams by default)
+curl -X GET \"https://your-domain.com/api/sync/list-owner-teams\"
+
+# Apply owner-team sharing for one project retroactively
+curl -X POST \"https://your-domain.com/api/sync/projects\" \\
+  -H 'Content-Type: application/json' \\
+  -d '{\"action\":\"share-access\",\"projectNo\":\"P-100\",\"premiumProjectId\":\"<premium-project-guid>\",\"plannerOwnerTeamId\":\"<dataverse-team-guid>\"}'
 
 # List Dataverse webhook async jobs (last 120 minutes)
 curl -X GET \"https://your-domain.com/api/sync/debug-dataverse-webhook-jobs?minutes=120\"

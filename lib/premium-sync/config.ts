@@ -60,8 +60,11 @@ export function getPremiumSyncConfig() {
         requireScheduleApi: readBoolEnv("DATAVERSE_REQUIRE_SCHEDULE_API", true),
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
+        plannerOwnerTeamId: (readEnv("PLANNER_OWNER_TEAM_ID") || "").trim(),
+        plannerOwnerTeamAadGroupId: (readEnv("PLANNER_OWNER_TEAM_AAD_GROUP_ID") || "").trim(),
         plannerPrimaryResourceId: (readEnv("PLANNER_PRIMARY_RESOURCE_ID") || "").trim(),
-        plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "Connie Cochran").trim(),
+        plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "").trim(),
+        plannerShareReminderTaskEnabled: readBoolEnv("PLANNER_SHARE_REMINDER_TASK_ENABLED", false),
         plannerShareReminderTaskTitle: (readEnv("PLANNER_SHARE_REMINDER_TASK_TITLE") || "Share Project").trim() || "Share Project",
         allowedTaskNumbers: readNumberListEnv("SYNC_TASK_NO_ALLOWLIST", DEFAULT_SYNC_TASK_NUMBERS),
     };
