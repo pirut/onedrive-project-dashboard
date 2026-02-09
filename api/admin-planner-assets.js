@@ -10,6 +10,16 @@ import { logger } from "../lib/planner-sync/logger.js";
 import { buildDisabledProjectSet, listProjectSyncSettings, normalizeProjectNo } from "../lib/planner-sync/project-sync-store.js";
 
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || "";
+const PLAN_MANAGER_FULL_SYNC_TASKS = Math.max(
+    0,
+    Math.floor(Number(process.env.PLAN_MANAGER_FULL_SYNC_TASKS || 9))
+);
+const HEADING_TASK_SECTIONS = new Map([
+    [1000, "Pre-Construction"],
+    [2000, "Installation"],
+    [3000, "Revenue"],
+    [4000, "Change Orders"],
+]);
 
 function signSession(data) {
     if (!ADMIN_SESSION_SECRET) return null;
@@ -108,6 +118,43 @@ function isAllowedSyncTaskNo(taskNo, allowlist) {
     const taskNumber = parseTaskNumber(taskNo);
     if (!Number.isFinite(taskNumber)) return false;
     return allowlist.has(taskNumber);
+}
+
+function shouldSkipTaskForSection(task, currentSection) {
+    const description = String(task?.description || "").trim();
+    if (description.toUpperCase() === "TOTAL") return true;
+    const taskNumber = parseTaskNumber(task?.taskNo);
+    if (Number.isFinite(taskNumber) && HEADING_TASK_SECTIONS.has(taskNumber)) {
+        currentSection.name = HEADING_TASK_SECTIONS.get(taskNumber) || null;
+        return true;
+    }
+    if (currentSection.name === "Revenue") return true;
+    return false;
+}
+
+function resolveDataverseTaskProjectId(task, mapping) {
+    const field = mapping.taskProjectIdField || "";
+    const raw = task?.[field] || task?._msdyn_project_value || task?.msdyn_projectid || "";
+    return typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : "";
+}
+
+async function listDataverseTasks(dataverse, mapping) {
+    const select = [mapping.taskIdField, mapping.taskProjectIdField, mapping.taskBcNoField].filter(Boolean);
+    const params = new URLSearchParams();
+    if (select.length) params.set("$select", select.join(","));
+    const items = [];
+    let next = `/${mapping.taskEntitySet}${params.toString() ? `?${params.toString()}` : ""}`;
+    while (next) {
+        const pageRes = await dataverse.requestRaw(next, {
+            headers: {
+                Prefer: "odata.maxpagesize=500",
+            },
+        });
+        const data = await pageRes.json();
+        if (Array.isArray(data?.value)) items.push(...data.value);
+        next = data?.["@odata.nextLink"] || null;
+    }
+    return items;
 }
 
 
@@ -304,32 +351,96 @@ export default async function handler(req, res) {
                 bcTasksPromise,
                 syncSettingsPromise,
             ]);
+            const dataverseTasks = await listDataverseTasks(dataverse, mapping);
             const disabledSet = buildDisabledProjectSet(syncSettings);
             const premiumProjectSet = new Set();
+            const projectNoByProjectId = new Map();
             if (mapping.projectBcNoField) {
                 for (const project of dataverseProjects || []) {
                     const bcNo = project?.[mapping.projectBcNoField];
                     if (typeof bcNo === "string" && bcNo.trim()) {
                         premiumProjectSet.add(normalizeProjectNo(bcNo));
                     }
+                    const projectId = project?.[mapping.projectIdField];
+                    if (
+                        typeof projectId === "string" &&
+                        projectId.trim() &&
+                        typeof bcNo === "string" &&
+                        bcNo.trim()
+                    ) {
+                        projectNoByProjectId.set(projectId.trim().toLowerCase(), normalizeProjectNo(bcNo));
+                    }
+                }
+            }
+            const dataverseTaskIdsByProjectId = new Map();
+            const dataverseTaskNosByProjectNo = new Map();
+            for (const task of dataverseTasks || []) {
+                const taskId = task?.[mapping.taskIdField];
+                const projectId = resolveDataverseTaskProjectId(task, mapping);
+                if (typeof taskId === "string" && taskId.trim() && projectId) {
+                    const key = projectId;
+                    const set = dataverseTaskIdsByProjectId.get(key) || new Set();
+                    set.add(taskId.trim().toLowerCase());
+                    dataverseTaskIdsByProjectId.set(key, set);
+                }
+                const bcTaskNo = mapping.taskBcNoField && typeof task?.[mapping.taskBcNoField] === "string"
+                    ? String(task[mapping.taskBcNoField]).trim()
+                    : "";
+                const projectNo = projectId ? projectNoByProjectId.get(projectId) || "" : "";
+                if (bcTaskNo && projectNo) {
+                    const set = dataverseTaskNosByProjectNo.get(projectNo) || new Set();
+                    set.add(bcTaskNo);
+                    dataverseTaskNosByProjectNo.set(projectNo, set);
                 }
             }
             const taskStats = new Map();
+            const targetTasksPerProject = allowedTaskNumbers.size || PLAN_MANAGER_FULL_SYNC_TASKS;
+            const tasksByProject = new Map();
             for (const task of bcTasks || []) {
                 const projectNo = (task?.projectNo || "").trim();
                 if (!projectNo) continue;
-                if (!isAllowedSyncTaskNo(task?.taskNo, allowedTaskNumbers)) continue;
                 const key = normalizeProjectNo(projectNo);
-                const entry = taskStats.get(key) || { projectNo, total: 0, linked: 0, lastSyncAt: "" };
-                entry.total += 1;
-                const planId = (task?.plannerPlanId || "").trim();
-                if (planId && isGuid(planId)) {
-                    entry.linked += 1;
-                }
-                const lastSyncAt = typeof task?.lastSyncAt === "string" ? task.lastSyncAt : "";
-                if (lastSyncAt) {
-                    if (!entry.lastSyncAt || Date.parse(lastSyncAt) > Date.parse(entry.lastSyncAt)) {
-                        entry.lastSyncAt = lastSyncAt;
+                const list = tasksByProject.get(key) || [];
+                list.push(task);
+                tasksByProject.set(key, list);
+            }
+            for (const [key, projectTasks] of tasksByProject.entries()) {
+                const sortedTasks = [...projectTasks].sort((a, b) => {
+                    const aNo = parseTaskNumber(a?.taskNo);
+                    const bNo = parseTaskNumber(b?.taskNo);
+                    if (Number.isFinite(aNo) && Number.isFinite(bNo) && aNo !== bNo) return aNo - bNo;
+                    const aRaw = String(a?.taskNo || "");
+                    const bRaw = String(b?.taskNo || "");
+                    return aRaw.localeCompare(bRaw, undefined, { numeric: true, sensitivity: "base" });
+                });
+                const currentSection = { name: null };
+                const first = sortedTasks[0] || {};
+                const entry = { projectNo: String(first.projectNo || key), total: 0, linked: 0, staleLinks: 0, lastSyncAt: "" };
+                for (const task of sortedTasks) {
+                    if (shouldSkipTaskForSection(task, currentSection)) continue;
+                    if (!isAllowedSyncTaskNo(task?.taskNo, allowedTaskNumbers)) continue;
+                    entry.total += 1;
+                    const planId = (task?.plannerPlanId || "").trim();
+                    const plannerTaskId = (task?.plannerTaskId || "").trim();
+                    let verifiedLinked = false;
+                    if (planId && plannerTaskId && isGuid(planId) && isGuid(plannerTaskId)) {
+                        const existing = dataverseTaskIdsByProjectId.get(planId.toLowerCase());
+                        verifiedLinked = Boolean(existing && existing.has(plannerTaskId.toLowerCase()));
+                    }
+                    if (!verifiedLinked && task?.taskNo) {
+                        const existingByNo = dataverseTaskNosByProjectNo.get(key);
+                        verifiedLinked = Boolean(existingByNo && existingByNo.has(String(task.taskNo).trim()));
+                    }
+                    if (verifiedLinked) {
+                        entry.linked += 1;
+                    } else if (planId || plannerTaskId) {
+                        entry.staleLinks += 1;
+                    }
+                    const lastSyncAt = typeof task?.lastSyncAt === "string" ? task.lastSyncAt : "";
+                    if (lastSyncAt) {
+                        if (!entry.lastSyncAt || Date.parse(lastSyncAt) > Date.parse(entry.lastSyncAt)) {
+                            entry.lastSyncAt = lastSyncAt;
+                        }
                     }
                 }
                 taskStats.set(key, entry);
@@ -341,18 +452,21 @@ export default async function handler(req, res) {
                 if (!projectNo) continue;
                 const key = normalizeProjectNo(projectNo);
                 seen.add(key);
-                const stats = taskStats.get(key) || { total: 0, linked: 0, lastSyncAt: "" };
+                const stats = taskStats.get(key) || { total: 0, linked: 0, staleLinks: 0, lastSyncAt: "" };
                 const total = stats.total || 0;
                 const linked = stats.linked || 0;
-                const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                const target = targetTasksPerProject > 0 ? targetTasksPerProject : total;
+                const syncState = target === 0 ? "empty" : linked === 0 ? "none" : linked >= target ? "linked" : "partial";
                 const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
                     projectNo,
                     description: project?.description || "",
                     status: project?.status || "",
                     syncEnabled: !disabledSet.has(key),
-                    tasksTotal: total,
+                    tasksTotal: target,
+                    tasksSyncable: total,
                     tasksLinked: linked,
+                    tasksStaleLinks: stats.staleLinks || 0,
                     lastSyncAt: stats.lastSyncAt || "",
                     syncState,
                     hasPremiumProject,
@@ -362,15 +476,18 @@ export default async function handler(req, res) {
                 if (seen.has(key)) continue;
                 const total = stats.total || 0;
                 const linked = stats.linked || 0;
-                const syncState = total === 0 ? "empty" : linked === 0 ? "none" : linked >= total ? "linked" : "partial";
+                const target = targetTasksPerProject > 0 ? targetTasksPerProject : total;
+                const syncState = target === 0 ? "empty" : linked === 0 ? "none" : linked >= target ? "linked" : "partial";
                 const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
                     projectNo: stats.projectNo || key,
                     description: "",
                     status: "",
                     syncEnabled: !disabledSet.has(key),
-                    tasksTotal: total,
+                    tasksTotal: target,
+                    tasksSyncable: total,
                     tasksLinked: linked,
+                    tasksStaleLinks: stats.staleLinks || 0,
                     lastSyncAt: stats.lastSyncAt || "",
                     syncState,
                     hasPremiumProject,
