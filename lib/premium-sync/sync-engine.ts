@@ -212,6 +212,14 @@ function normalizeEntitySetName(value: string | undefined | null) {
     return (value || "").trim().replace(/^\/+/, "").toLowerCase();
 }
 
+function parseBoolEnv(value: string | undefined | null, defaultValue: boolean) {
+    if (value == null || value === "") return defaultValue;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return defaultValue;
+}
+
 function isScheduleManagedTaskEntity(mapping: ReturnType<typeof getDataverseMappingConfig>) {
     return normalizeEntitySetName(mapping.taskEntitySet) === "msdyn_projecttasks";
 }
@@ -3002,20 +3010,40 @@ export async function syncBcToPremium(
         }
 
         const usingOperationSet = Boolean(useScheduleApi && operationSetId);
-        const syncTaskBatch = async (batch: BcProjectTask[], concurrency: number) =>
+        const syncTaskBatch = async (
+            batch: BcProjectTask[],
+            concurrency: number,
+            overrides: {
+                useScheduleApi?: boolean;
+                operationSetId?: string;
+                trackInOperationSet?: boolean;
+            } = {}
+        ) =>
             runWithConcurrency(batch, concurrency, async (task) => {
+                const batchUseScheduleApi =
+                    overrides.useScheduleApi !== undefined ? overrides.useScheduleApi : useScheduleApi;
+                const batchOperationSetId =
+                    overrides.operationSetId !== undefined
+                        ? overrides.operationSetId
+                        : batchUseScheduleApi
+                          ? operationSetId
+                          : undefined;
+                const trackInOperationSet =
+                    overrides.trackInOperationSet !== undefined
+                        ? overrides.trackInOperationSet
+                        : Boolean(batchUseScheduleApi && batchOperationSetId);
                 const cleanTask = await clearStaleSyncLockIfNeeded(bcClient, task, syncConfig.syncLockTimeoutMinutes);
                 if (cleanTask.syncLock) {
-                    return { action: "skipped" as const, task: cleanTask };
+                    return { action: "skipped" as const, task: cleanTask, batchedInOperationSet: false };
                 }
-                if (usingOperationSet) {
+                if (trackInOperationSet) {
                     scheduleTasks.push(cleanTask);
                 }
                 try {
                     const res = await syncTaskToDataverse(bcClient, dataverse, cleanTask, projectId, mapping, {
                         requestId,
-                        useScheduleApi,
-                        operationSetId: useScheduleApi ? operationSetId : undefined,
+                        useScheduleApi: batchUseScheduleApi,
+                        operationSetId: batchOperationSetId,
                         bucketCache,
                         resourceCache,
                         teamCache,
@@ -3036,7 +3064,11 @@ export async function syncBcToPremium(
                     if (res.pendingUpdate) {
                         pendingUpdates.push(res.pendingUpdate);
                     }
-                    return { action: res.action as "created" | "updated" | "skipped" | "error", task: cleanTask };
+                    return {
+                        action: res.action as "created" | "updated" | "skipped" | "error",
+                        task: cleanTask,
+                        batchedInOperationSet: trackInOperationSet,
+                    };
                 } catch (error) {
                     logger.warn("Premium task sync failed", {
                         requestId,
@@ -3044,12 +3076,26 @@ export async function syncBcToPremium(
                         taskNo: cleanTask.taskNo,
                         error: (error as Error)?.message,
                     });
-                    return { action: "error" as const, task: cleanTask };
+                    return { action: "error" as const, task: cleanTask, batchedInOperationSet: false };
                 }
             });
 
-        let outcomes: Array<{ action: "created" | "updated" | "skipped" | "error"; task: BcProjectTask }> = [];
+        const preserveTaskOrder = parseBoolEnv(process.env.DATAVERSE_PRESERVE_TASK_ORDER, true);
+
+        let outcomes: Array<{
+            action: "created" | "updated" | "skipped" | "error";
+            task: BcProjectTask;
+            batchedInOperationSet: boolean;
+        }> = [];
         if (usingOperationSet) {
+            if (preserveTaskOrder) {
+                outcomes = await syncTaskBatch(toSync, 1, {
+                    // Run one task at a time so Premium task order matches BC order.
+                    useScheduleApi: false,
+                    operationSetId: undefined,
+                    trackInOperationSet: false,
+                });
+            } else {
             // Keep create operations ordered while allowing updates to parallelize.
             const likelyCreates: BcProjectTask[] = [];
             const likelyUpdates: BcProjectTask[] = [];
@@ -3064,11 +3110,20 @@ export async function syncBcToPremium(
                     }
                 }
             }
-            const createOutcomes = await syncTaskBatch(likelyCreates, 1);
-            const updateOutcomes = await syncTaskBatch(likelyUpdates, Math.max(1, syncConfig.taskConcurrency));
+            const createOutcomes = await syncTaskBatch(likelyCreates, 1, {
+                useScheduleApi,
+                operationSetId,
+                trackInOperationSet: true,
+            });
+            const updateOutcomes = await syncTaskBatch(likelyUpdates, Math.max(1, syncConfig.taskConcurrency), {
+                useScheduleApi,
+                operationSetId,
+                trackInOperationSet: true,
+            });
             outcomes = [...createOutcomes, ...updateOutcomes];
+            }
         } else {
-            outcomes = await syncTaskBatch(toSync, syncConfig.taskConcurrency);
+            outcomes = await syncTaskBatch(toSync, preserveTaskOrder ? 1 : syncConfig.taskConcurrency);
         }
 
         for (const outcome of outcomes) {
@@ -3080,7 +3135,7 @@ export async function syncBcToPremium(
             if ((outcome.action === "created" || outcome.action === "updated") && outcomeSystemId) {
                 successfulTaskSystemIds.add(outcomeSystemId);
             }
-            if (usingOperationSet) {
+            if (usingOperationSet && outcome.batchedInOperationSet) {
                 if (outcome.action === "created") scheduleCounts.created += 1;
                 else if (outcome.action === "updated") scheduleCounts.updated += 1;
                 else scheduleCounts.skipped += 1;
