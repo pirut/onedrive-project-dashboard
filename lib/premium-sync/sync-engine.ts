@@ -1283,7 +1283,7 @@ async function ensureProjectGroupAccess(
         logger.warn("Dataverse group resource not found", {
             projectId,
             groupId,
-            hint: "Verify bookableresource AAD mapping or set PLANNER_GROUP_RESOURCE_IDS to explicit Dataverse resource IDs",
+            hint: "Verify bookableresource AAD mapping or set PLANNER_PRIMARY_RESOURCE_ID/PLANNER_GROUP_RESOURCE_IDS to explicit Dataverse resource IDs",
         });
         return "resource_not_found";
     }
@@ -1327,7 +1327,14 @@ function normalizePlannerGroupResourceIds(values: string[] | undefined) {
     return Array.from(new Set((values || []).map((value) => value.trim()).filter(Boolean)));
 }
 
-function resolveProjectAccessTargets(options: { plannerGroupId?: string; plannerGroupResourceIds?: string[] } = {}) {
+function resolveProjectAccessTargets(
+    options: {
+        plannerGroupId?: string;
+        plannerGroupResourceIds?: string[];
+        plannerPrimaryResourceId?: string;
+        plannerPrimaryResourceName?: string;
+    } = {}
+) {
     const syncConfig = getPremiumSyncConfig();
     const plannerGroupId =
         options.plannerGroupId !== undefined ? options.plannerGroupId.trim() : (syncConfig.plannerGroupId || "").trim();
@@ -1335,7 +1342,15 @@ function resolveProjectAccessTargets(options: { plannerGroupId?: string; planner
         options.plannerGroupResourceIds !== undefined
             ? normalizePlannerGroupResourceIds(options.plannerGroupResourceIds)
             : normalizePlannerGroupResourceIds(syncConfig.plannerGroupResourceIds || []);
-    return { plannerGroupId, plannerGroupResourceIds };
+    const plannerPrimaryResourceId =
+        options.plannerPrimaryResourceId !== undefined
+            ? options.plannerPrimaryResourceId.trim()
+            : (syncConfig.plannerPrimaryResourceId || "").trim();
+    const plannerPrimaryResourceName =
+        options.plannerPrimaryResourceName !== undefined
+            ? options.plannerPrimaryResourceName.trim()
+            : (syncConfig.plannerPrimaryResourceName || "").trim();
+    return { plannerGroupId, plannerGroupResourceIds, plannerPrimaryResourceId, plannerPrimaryResourceName };
 }
 
 export async function ensurePremiumProjectTeamAccess(
@@ -1346,19 +1361,31 @@ export async function ensurePremiumProjectTeamAccess(
         projectNo?: string;
         plannerGroupId?: string;
         plannerGroupResourceIds?: string[];
+        plannerPrimaryResourceId?: string;
+        plannerPrimaryResourceName?: string;
         teamCache?: Map<string, string | null>;
+        resourceCache?: Map<string, string | null>;
         resourceNameCache?: Map<string, { id: string; name: string } | null>;
     } = {}
 ) {
-    const { plannerGroupId, plannerGroupResourceIds } = resolveProjectAccessTargets(options);
+    const { plannerGroupId, plannerGroupResourceIds, plannerPrimaryResourceId, plannerPrimaryResourceName } =
+        resolveProjectAccessTargets(options);
     const teamCache = options.teamCache || new Map<string, string | null>();
+    const resourceCache = options.resourceCache || new Map<string, string | null>();
     const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
+    const targetResourceIds = new Set<string>(plannerGroupResourceIds);
+    if (plannerPrimaryResourceId) {
+        targetResourceIds.add(plannerPrimaryResourceId);
+    }
     const result = {
-        configured: Boolean(plannerGroupId || plannerGroupResourceIds.length),
+        configured: Boolean(plannerGroupId || targetResourceIds.size || plannerPrimaryResourceName),
         projectId,
         projectNo: options.projectNo || "",
         plannerGroupId: plannerGroupId || null,
-        plannerGroupResourceIds,
+        plannerGroupResourceIds: Array.from(targetResourceIds),
+        plannerPrimaryResourceId: plannerPrimaryResourceId || null,
+        plannerPrimaryResourceName: plannerPrimaryResourceName || null,
+        plannerPrimaryResolvedResourceId: null as string | null,
         added: 0,
         alreadyMember: 0,
         missing: 0,
@@ -1387,12 +1414,41 @@ export async function ensurePremiumProjectTeamAccess(
         }
     }
 
-    for (const resourceId of plannerGroupResourceIds) {
+    if (plannerPrimaryResourceName && !plannerPrimaryResourceId) {
+        try {
+            const resolved = await getBookableResourceIdByName(dataverse, plannerPrimaryResourceName, resourceCache);
+            if (resolved) {
+                result.plannerPrimaryResolvedResourceId = resolved;
+                targetResourceIds.add(resolved);
+            } else {
+                result.missing += 1;
+                result.errors.push(`primary_resource_name_not_found:${plannerPrimaryResourceName}`);
+                logger.warn("Primary planner resource not found by name", {
+                    requestId: options.requestId || "",
+                    projectNo: options.projectNo || "",
+                    projectId,
+                    plannerPrimaryResourceName,
+                });
+            }
+        } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            result.errors.push(`primary_resource_name_lookup_failed:${plannerPrimaryResourceName}:${message}`);
+            logger.warn("Primary planner resource lookup failed", {
+                requestId: options.requestId || "",
+                projectNo: options.projectNo || "",
+                projectId,
+                plannerPrimaryResourceName,
+                error: message,
+            });
+        }
+    }
+
+    for (const resourceId of targetResourceIds) {
         try {
             const resource = await getBookableResourceById(dataverse, resourceId, resourceNameCache);
             if (!resource) {
                 result.missing += 1;
-                logger.warn("Dataverse resource not found for plannerGroupResourceId", { projectId, resourceId });
+                logger.warn("Dataverse resource not found for configured project access resourceId", { projectId, resourceId });
                 continue;
             }
             const status = await ensureProjectResourceAccess(

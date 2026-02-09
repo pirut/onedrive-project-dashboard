@@ -60,6 +60,8 @@ export function getPremiumSyncConfig() {
         requireScheduleApi: readBoolEnv("DATAVERSE_REQUIRE_SCHEDULE_API", true),
         plannerGroupId: (readEnv("PLANNER_GROUP_ID") || "").trim(),
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
+        plannerPrimaryResourceId: (readEnv("PLANNER_PRIMARY_RESOURCE_ID") || "").trim(),
+        plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "").trim(),
         allowedTaskNumbers: readNumberListEnv("SYNC_TASK_NO_ALLOWLIST", DEFAULT_SYNC_TASK_NUMBERS),
     };
 }
