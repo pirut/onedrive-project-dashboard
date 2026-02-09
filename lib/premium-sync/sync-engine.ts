@@ -2688,24 +2688,50 @@ export async function syncBcToPremium(
         let sorted = tasks.length ? sortTasksByTaskNo(tasks) : [];
         const currentSection = { name: null as string | null };
 
-        let projectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
-        if (projectId && !isGuid(projectId)) {
-            warnNonGuidPlannerPlanId(projNo, projectId);
-            projectId = "";
+        let cachedProjectId = tasks.find((task) => (task.plannerPlanId || "").trim())?.plannerPlanId?.trim() || "";
+        if (cachedProjectId && !isGuid(cachedProjectId)) {
+            warnNonGuidPlannerPlanId(projNo, cachedProjectId);
+            cachedProjectId = "";
         }
-        if (projectId) {
+        if (cachedProjectId) {
             try {
-                await dataverse.getById(mapping.projectEntitySet, projectId, [mapping.projectIdField]);
+                await dataverse.getById(mapping.projectEntitySet, cachedProjectId, [mapping.projectIdField]);
             } catch (error) {
-                logger.debug("Cached Dataverse project lookup failed", { requestId, projectNo: projNo, projectId, error: (error as Error)?.message });
-                projectId = "";
+                logger.debug("Cached Dataverse project lookup failed", {
+                    requestId,
+                    projectNo: projNo,
+                    projectId: cachedProjectId,
+                    error: (error as Error)?.message,
+                });
+                cachedProjectId = "";
             }
         }
-        if (!projectId) {
-            const projectEntity = await resolveProjectFromBc(bcClient, dataverse, projNo, mapping, {
-                forceCreate: options.forceProjectCreate,
+
+        let resolvedProjectId = "";
+        const shouldResolveProjectFromBc = Boolean(mapping.projectBcNoField) || !cachedProjectId || Boolean(options.forceProjectCreate);
+        if (shouldResolveProjectFromBc) {
+            try {
+                const projectEntity = await resolveProjectFromBc(bcClient, dataverse, projNo, mapping, {
+                    forceCreate: options.forceProjectCreate,
+                });
+                resolvedProjectId = resolveProjectId(projectEntity, mapping) || "";
+            } catch (error) {
+                logger.warn("Dataverse project resolve by BC projectNo failed", {
+                    requestId,
+                    projectNo: projNo,
+                    error: (error as Error)?.message,
+                });
+            }
+        }
+
+        let projectId = resolvedProjectId || cachedProjectId;
+        if (resolvedProjectId && cachedProjectId && resolvedProjectId.toLowerCase() !== cachedProjectId.toLowerCase()) {
+            logger.warn("BC tasks reference stale plannerPlanId; using canonical Dataverse project for sync", {
+                requestId,
+                projectNo: projNo,
+                cachedProjectId,
+                resolvedProjectId,
             });
-            projectId = resolveProjectId(projectEntity, mapping) || "";
         }
         if (!projectId) {
             logger.warn("Dataverse project not found", { requestId, projectNo: projNo });
