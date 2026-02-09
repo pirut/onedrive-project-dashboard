@@ -139,20 +139,32 @@ function resolveDataverseTaskProjectId(task, mapping) {
 }
 
 async function listDataverseTasks(dataverse, mapping) {
-    const select = [mapping.taskIdField, mapping.taskProjectIdField, mapping.taskBcNoField].filter(Boolean);
+    const select = [mapping.taskIdField, mapping.taskProjectIdField, mapping.taskBcNoField, "statecode"].filter(Boolean);
     const params = new URLSearchParams();
     if (select.length) params.set("$select", select.join(","));
+    params.set("$filter", "statecode eq 0");
     const items = [];
     let next = `/${mapping.taskEntitySet}${params.toString() ? `?${params.toString()}` : ""}`;
     while (next) {
-        const pageRes = await dataverse.requestRaw(next, {
-            headers: {
-                Prefer: "odata.maxpagesize=500",
-            },
-        });
-        const data = await pageRes.json();
-        if (Array.isArray(data?.value)) items.push(...data.value);
-        next = data?.["@odata.nextLink"] || null;
+        try {
+            const pageRes = await dataverse.requestRaw(next, {
+                headers: {
+                    Prefer: "odata.maxpagesize=500",
+                },
+            });
+            const data = await pageRes.json();
+            if (Array.isArray(data?.value)) items.push(...data.value);
+            next = data?.["@odata.nextLink"] || null;
+        } catch (error) {
+            // Some environments may not expose/allow statecode filtering; fall back to unfiltered fetch once.
+            if (next.includes("statecode%20eq%200") || next.includes("statecode+eq+0")) {
+                const fallbackParams = new URLSearchParams();
+                if (select.length) fallbackParams.set("$select", select.join(","));
+                next = `/${mapping.taskEntitySet}${fallbackParams.toString() ? `?${fallbackParams.toString()}` : ""}`;
+                continue;
+            }
+            throw error;
+        }
     }
     return items;
 }
@@ -354,43 +366,25 @@ export default async function handler(req, res) {
             const dataverseTasks = await listDataverseTasks(dataverse, mapping);
             const disabledSet = buildDisabledProjectSet(syncSettings);
             const premiumProjectSet = new Set();
-            const projectNoByProjectId = new Map();
             if (mapping.projectBcNoField) {
                 for (const project of dataverseProjects || []) {
                     const bcNo = project?.[mapping.projectBcNoField];
                     if (typeof bcNo === "string" && bcNo.trim()) {
                         premiumProjectSet.add(normalizeProjectNo(bcNo));
                     }
-                    const projectId = project?.[mapping.projectIdField];
-                    if (
-                        typeof projectId === "string" &&
-                        projectId.trim() &&
-                        typeof bcNo === "string" &&
-                        bcNo.trim()
-                    ) {
-                        projectNoByProjectId.set(projectId.trim().toLowerCase(), normalizeProjectNo(bcNo));
-                    }
                 }
             }
             const dataverseTaskIdsByProjectId = new Map();
-            const dataverseTaskNosByProjectNo = new Map();
             for (const task of dataverseTasks || []) {
                 const taskId = task?.[mapping.taskIdField];
                 const projectId = resolveDataverseTaskProjectId(task, mapping);
+                const stateCode = Number(task?.statecode);
+                if (Number.isFinite(stateCode) && stateCode !== 0) continue;
                 if (typeof taskId === "string" && taskId.trim() && projectId) {
                     const key = projectId;
                     const set = dataverseTaskIdsByProjectId.get(key) || new Set();
                     set.add(taskId.trim().toLowerCase());
                     dataverseTaskIdsByProjectId.set(key, set);
-                }
-                const bcTaskNo = mapping.taskBcNoField && typeof task?.[mapping.taskBcNoField] === "string"
-                    ? String(task[mapping.taskBcNoField]).trim()
-                    : "";
-                const projectNo = projectId ? projectNoByProjectId.get(projectId) || "" : "";
-                if (bcTaskNo && projectNo) {
-                    const set = dataverseTaskNosByProjectNo.get(projectNo) || new Set();
-                    set.add(bcTaskNo);
-                    dataverseTaskNosByProjectNo.set(projectNo, set);
                 }
             }
             const taskStats = new Map();
@@ -427,10 +421,6 @@ export default async function handler(req, res) {
                         const existing = dataverseTaskIdsByProjectId.get(planId.toLowerCase());
                         verifiedLinked = Boolean(existing && existing.has(plannerTaskId.toLowerCase()));
                     }
-                    if (!verifiedLinked && task?.taskNo) {
-                        const existingByNo = dataverseTaskNosByProjectNo.get(key);
-                        verifiedLinked = Boolean(existingByNo && existingByNo.has(String(task.taskNo).trim()));
-                    }
                     if (verifiedLinked) {
                         entry.linked += 1;
                     } else if (planId || plannerTaskId) {
@@ -454,8 +444,9 @@ export default async function handler(req, res) {
                 seen.add(key);
                 const stats = taskStats.get(key) || { total: 0, linked: 0, staleLinks: 0, lastSyncAt: "" };
                 const total = stats.total || 0;
-                const linked = stats.linked || 0;
+                const linkedRaw = stats.linked || 0;
                 const target = targetTasksPerProject > 0 ? targetTasksPerProject : total;
+                const linked = Math.min(linkedRaw, target || linkedRaw);
                 const syncState = target === 0 ? "empty" : linked === 0 ? "none" : linked >= target ? "linked" : "partial";
                 const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
@@ -475,8 +466,9 @@ export default async function handler(req, res) {
             for (const [key, stats] of taskStats.entries()) {
                 if (seen.has(key)) continue;
                 const total = stats.total || 0;
-                const linked = stats.linked || 0;
+                const linkedRaw = stats.linked || 0;
                 const target = targetTasksPerProject > 0 ? targetTasksPerProject : total;
+                const linked = Math.min(linkedRaw, target || linkedRaw);
                 const syncState = target === 0 ? "empty" : linked === 0 ? "none" : linked >= target ? "linked" : "partial";
                 const hasPremiumProject = premiumProjectSet.has(key) || linked > 0;
                 bcProjects.push({
