@@ -1,5 +1,5 @@
 import { DataverseClient } from "../../../../../lib/dataverse-client";
-import { logger } from "../../../../../lib/logger";
+import { logger } from "../../../../../lib/planner-sync/logger";
 import type { DataverseEntity } from "../../../../../lib/dataverse-client";
 
 function readString(value: unknown) {
@@ -93,4 +93,3 @@ export async function GET(request: Request) {
         });
     }
 }
-

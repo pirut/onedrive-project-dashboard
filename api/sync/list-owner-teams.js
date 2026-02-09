@@ -1,5 +1,5 @@
 import { DataverseClient } from "../../lib/dataverse-client.js";
-import { logger } from "../../lib/logger.js";
+import { logger } from "../../lib/planner-sync/logger.js";
 
 function readString(value) {
     return typeof value === "string" ? value.trim() : "";
@@ -83,4 +83,3 @@ export default async function handler(req, res) {
         res.status(500).json({ ok: false, error: message });
     }
 }
-
