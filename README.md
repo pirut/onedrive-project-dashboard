@@ -374,7 +374,13 @@ curl -X POST https://your-domain.com/api/sync/bc-jobs/process?cronSecret=YOUR_SE
 curl -X POST https://your-domain.com/api/sync/bc-subscriptions/renew?cronSecret=YOUR_SECRET
 ```
 
-Vercel Cron will call `/api/sync/bc-subscriptions/renew` daily and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
+Use `forceRecreate=1` to delete/recreate subscriptions on every run (useful if your webhook expires frequently):
+
+```bash
+curl -X POST "https://your-domain.com/api/sync/bc-subscriptions/renew?forceRecreate=1&cronSecret=YOUR_SECRET"
+```
+
+Vercel Cron can call `/api/sync/bc-subscriptions/renew?forceRecreate=1` nightly and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
 Cron auth now protects `/api/sync/auto` and `/api/sync-folders-cron` as well, so include the same secret there.
 
 ## Notes

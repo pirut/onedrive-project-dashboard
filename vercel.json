@@ -15,8 +15,8 @@
             "schedule": "0 9 * * *"
         },
         {
-            "path": "/api/sync/bc-subscriptions/renew?cronSecret=YOUR_CRON_SECRET",
-            "schedule": "0 7 * * *"
+            "path": "/api/sync/bc-subscriptions/renew?forceRecreate=1&cronSecret=YOUR_CRON_SECRET",
+            "schedule": "0 0 * * *"
         },
         {
             "path": "/api/sync/bc-audit",

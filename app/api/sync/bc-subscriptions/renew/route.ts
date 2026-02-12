@@ -27,13 +27,22 @@ function isExpiringSoon(expirationDateTime: string | undefined | null, bufferMs 
     return expMs <= Date.now() + bufferMs;
 }
 
+function parseBool(value: unknown) {
+    if (value == null) return null;
+    if (typeof value === "boolean") return value;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return null;
+}
+
 async function handle(request: Request) {
     const startTime = Date.now();
     const url = new URL(request.url);
     const requestId = crypto.randomUUID();
 
     try {
-        let body: { entitySets?: string[] } | null = null;
+        let body: { entitySets?: string[]; forceRecreate?: unknown } | null = null;
         try {
             const bodyText = await request.text();
             if (bodyText) body = JSON.parse(bodyText);
@@ -45,6 +54,7 @@ async function handle(request: Request) {
         }
 
         const entitySets = Array.isArray(body?.entitySets) && body?.entitySets.length ? body.entitySets : DEFAULT_ENTITY_SETS;
+        const forceRecreate = parseBool(body?.forceRecreate ?? url.searchParams.get("forceRecreate")) === true;
         const expirationDateTime = buildExpirationDate();
         const bcClient = new BusinessCentralClient();
         const renewed: string[] = [];
@@ -61,7 +71,7 @@ async function handle(request: Request) {
                 process.env.BC_WEBHOOK_NOTIFICATION_URL ||
                 `${resolveBaseUrl(request)}/api/webhooks/bc`;
             const clientState = stored?.clientState || (process.env.BC_WEBHOOK_SHARED_SECRET || "").trim() || undefined;
-            if (stored?.expirationDateTime) {
+            if (!forceRecreate && stored?.expirationDateTime) {
                 const expMs = Date.parse(stored.expirationDateTime);
                 const bufferMs = RENEWAL_BUFFER_HOURS * 60 * 60 * 1000;
                 if (Number.isFinite(expMs) && expMs > Date.now() + bufferMs) {
@@ -71,7 +81,7 @@ async function handle(request: Request) {
             }
 
             try {
-                if (stored?.id) {
+                if (!forceRecreate && stored?.id) {
                     const updated = await bcClient.renewWebhookSubscription(stored.id, expirationDateTime);
                     await saveBcSubscription(normalized, {
                         ...stored,
@@ -136,6 +146,37 @@ async function handle(request: Request) {
                     const existing = list.find((item) =>
                         String(item?.resource || "").toLowerCase().includes(normalized.toLowerCase())
                     );
+                    if (forceRecreate && (existing as { id?: string })?.id) {
+                        const existingId = String((existing as { id?: string })?.id || "");
+                        if (existingId) {
+                            try {
+                                await bcClient.deleteWebhookSubscription(existingId);
+                            } catch (deleteError) {
+                                logger.warn("Failed to delete matching BC subscription before forced recreate", {
+                                    requestId,
+                                    entitySet: normalized,
+                                    subscriptionId: existingId,
+                                    error: deleteError instanceof Error ? deleteError.message : String(deleteError),
+                                });
+                            }
+                        }
+                        const recreated = await bcClient.createWebhookSubscription({
+                            entitySet: normalized,
+                            notificationUrl,
+                            clientState,
+                        });
+                        await saveBcSubscription(normalized, {
+                            id: recreated?.id || existingId,
+                            entitySet: normalized,
+                            resource: recreated?.resource || (existing as { resource?: string })?.resource,
+                            expirationDateTime: recreated?.expirationDateTime || expirationDateTime,
+                            createdAt: new Date().toISOString(),
+                            notificationUrl,
+                            clientState,
+                        });
+                        created.push(normalized);
+                        continue;
+                    }
                     if ((existing as { id?: string })?.id && !isExpiringSoon((existing as { expirationDateTime?: string })?.expirationDateTime)) {
                         await saveBcSubscription(normalized, {
                             id: String((existing as { id?: string }).id || ""),
@@ -156,7 +197,7 @@ async function handle(request: Request) {
 
         const duration = Date.now() - startTime;
         return new Response(
-            JSON.stringify({ ok: true, renewed, created, skipped, failed, requestId, duration }),
+            JSON.stringify({ ok: true, forceRecreate, renewed, created, skipped, failed, requestId, duration }),
             {
                 status: 200,
                 headers: { "Content-Type": "application/json", "X-Request-ID": requestId },
