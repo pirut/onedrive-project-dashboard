@@ -27,14 +27,16 @@ function isAuthorized(req) {
     const expected = (process.env.CRON_SECRET || "").trim();
     if (!expected) return true;
 
-    const fromQuery = req.query?.cronSecret;
-    const fromHeader =
-        req.headers["x-cron-secret"] ||
-        req.headers["x-vercel-cron-secret"] ||
-        (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
+    const candidates = [
+        req.query?.cronSecret,
+        req.headers["x-cron-secret"],
+        req.headers["x-vercel-cron-secret"],
+        (req.headers["authorization"] || "").replace(/^Bearer\s+/i, ""),
+    ]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
 
-    const provided = String(fromQuery || fromHeader || "").trim();
-    return provided === expected;
+    return candidates.includes(expected);
 }
 
 export default async function handler(req, res) {

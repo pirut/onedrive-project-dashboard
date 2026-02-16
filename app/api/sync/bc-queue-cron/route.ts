@@ -24,13 +24,16 @@ function isAuthorized(request: Request, url: URL) {
     const expected = (process.env.CRON_SECRET || "").trim();
     if (!expected) return true;
 
-    const provided =
-        url.searchParams.get("cronSecret") ||
-        request.headers.get("x-cron-secret") ||
-        request.headers.get("x-vercel-cron-secret") ||
-        (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    const candidates = [
+        url.searchParams.get("cronSecret"),
+        request.headers.get("x-cron-secret"),
+        request.headers.get("x-vercel-cron-secret"),
+        (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, ""),
+    ]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
 
-    return String(provided || "").trim() === expected;
+    return candidates.includes(expected);
 }
 
 async function handle(request: Request) {
