@@ -25,6 +25,27 @@ const FASTFIELD_AUTH_HEADER = readEnv("FASTFIELD_AUTH_HEADER", true); // Basic A
 const FASTFIELD_TABLE_ID = readEnv("FASTFIELD_TABLE_ID", true); // We need the table ID, not name
 const FASTFIELD_TABLE_NAME = readEnv("FASTFIELD_TABLE_NAME") || "Cornerstone Active Projects";
 
+function getCronSecretCandidates(req) {
+    return [
+        req.query?.cronSecret,
+        req.headers["x-cron-secret"],
+        req.headers["x-vercel-cron-secret"],
+        (req.headers["authorization"] || "").replace(/^Bearer\s+/i, ""),
+    ]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean);
+}
+
+function isCronRequest(req) {
+    return Boolean(req.headers["x-vercel-cron"] || getCronSecretCandidates(req).length > 0);
+}
+
+function isAuthorized(req) {
+    const expected = (process.env.CRON_SECRET || "").trim();
+    if (!expected) return true;
+    return getCronSecretCandidates(req).includes(expected);
+}
+
 const msalApp = new ConfidentialClientApplication({
     auth: {
         authority: `https://login.microsoftonline.com/${TENANT_ID}`,
@@ -538,6 +559,17 @@ async function syncToFastField(folders) {
 
 export default async function handler(req, res) {
     const requestId = Math.random().toString(36).slice(2, 12);
+    const cronRequest = isCronRequest(req);
+
+    if (!isAuthorized(req)) {
+        return res.status(401).json({
+            success: false,
+            error: "Unauthorized",
+            requestId,
+            timestamp: new Date().toISOString(),
+        });
+    }
+
     try {
         console.log(`[${new Date().toISOString()}] Starting folder sync to FastField...`);
 
@@ -616,7 +648,7 @@ export default async function handler(req, res) {
         console.log(`[${new Date().toISOString()}] Folder sync completed successfully. Synced ${folders.length} folders.`);
 
         // Return appropriate response based on how it was called
-        if (isCronRequest) {
+        if (cronRequest) {
             // For cron jobs, return minimal response
             return res.status(200).json({ ok: true, synced: folders.length, stagingProcessed: stagingResult.processed.length });
         } else {
@@ -633,7 +665,7 @@ export default async function handler(req, res) {
             error: error?.message || String(error),
         });
 
-        if (isCronRequest) {
+        if (cronRequest) {
             // For cron jobs, return error status
             return res.status(500).json({ error: error.message || String(error) });
         } else {
