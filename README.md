@@ -245,7 +245,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - Optional team auto-share:
   - Preferred: set `PLANNER_OWNER_TEAM_ID` to a Dataverse `teamid` so each new Premium project is owned by that team (this is the most reliable way to share access consistently).
   - Fallback: set `PLANNER_OWNER_TEAM_AAD_GROUP_ID` to resolve a Dataverse team from an Entra group object ID.
-  - If you want owner-team only behavior, set `PLANNER_OWNER_TEAM_ONLY=true` and leave `PLANNER_GROUP_ID`/`PLANNER_GROUP_RESOURCE_IDS` empty.
+  - If you want owner-team only behavior, set `PLANNER_OWNER_TEAM_ONLY=true` and leave `PLANNER_GROUP_ID`/`PLANNER_GROUP_RESOURCE_IDS`/`PLANNER_PRIMARY_RESOURCE_ID`/`PLANNER_PRIMARY_RESOURCE_NAME` empty.
   - Optional project-team membership: set `PLANNER_PRIMARY_RESOURCE_ID` / `PLANNER_PRIMARY_RESOURCE_NAME` and `PLANNER_GROUP_RESOURCE_IDS` if you also want explicit project team members added.
   - Optional reminder task: set `PLANNER_SHARE_REMINDER_TASK_ENABLED=true` to auto-create a `Share Project` task (title configurable with `PLANNER_SHARE_REMINDER_TASK_TITLE`), assigned to the primary resource when available.
 
@@ -357,6 +357,7 @@ BC webhooks let Business Central changes enqueue targeted BC → Premium sync jo
 
 Dataverse schedule API capacity handling:
 - `DATAVERSE_OPERATION_SET_CAPACITY_CLEANUP_MIN_AGE_MINUTES` (optional, default 0) controls how old completed operation sets must be before auto-cleanup on capacity errors.
+- Sync now also attempts to delete untouched operation sets created during a project run when no schedule writes were queued, to reduce leaked operation-set capacity.
 
 2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.
 

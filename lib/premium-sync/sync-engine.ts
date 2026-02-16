@@ -1453,11 +1453,11 @@ function resolveProjectAccessTargets(
         options.plannerOwnerTeamAadGroupId !== undefined
             ? options.plannerOwnerTeamAadGroupId.trim()
             : (syncConfig.plannerOwnerTeamAadGroupId || "").trim();
-    const plannerPrimaryResourceId =
+    let plannerPrimaryResourceId =
         options.plannerPrimaryResourceId !== undefined
             ? options.plannerPrimaryResourceId.trim()
             : (syncConfig.plannerPrimaryResourceId || "").trim();
-    const plannerPrimaryResourceName =
+    let plannerPrimaryResourceName =
         options.plannerPrimaryResourceName !== undefined
             ? options.plannerPrimaryResourceName.trim()
             : (syncConfig.plannerPrimaryResourceName || "").trim();
@@ -1472,6 +1472,8 @@ function resolveProjectAccessTargets(
     if (plannerOwnerTeamOnly) {
         plannerGroupId = "";
         plannerGroupResourceIds = [];
+        plannerPrimaryResourceId = "";
+        plannerPrimaryResourceName = "";
     }
     return {
         plannerGroupId,
@@ -2482,6 +2484,25 @@ async function cleanupOperationSet(
     } catch (error) {
         if (isOperationSetMissingError(error)) return;
         logger.warn("Dataverse operation set cleanup failed", {
+            operationSetId,
+            ...meta,
+            error: (error as Error)?.message,
+        });
+    }
+}
+
+async function cleanupUnusedOperationSet(
+    dataverse: DataverseClient,
+    operationSetId: string,
+    meta: Record<string, unknown> = {}
+) {
+    if (!operationSetId) return;
+    try {
+        const entitySet = await resolveOperationSetEntitySet(dataverse);
+        await dataverse.delete(entitySet, operationSetId);
+    } catch (error) {
+        if (isOperationSetMissingError(error)) return;
+        logger.warn("Dataverse unused operation set cleanup failed", {
             operationSetId,
             ...meta,
             error: (error as Error)?.message,
@@ -3888,6 +3909,9 @@ export async function syncBcToPremium(
                 });
             }
         } finally {
+            if (operationSetId && !operationSetTouched && !pendingUpdates.length) {
+                await cleanupUnusedOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
+            }
             await cleanupOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
         }
     }
