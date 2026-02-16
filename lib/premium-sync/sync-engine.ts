@@ -1426,6 +1426,7 @@ function resolveProjectAccessTargets(
         plannerGroupResourceIds?: string[];
         plannerOwnerTeamId?: string;
         plannerOwnerTeamAadGroupId?: string;
+        plannerOwnerTeamOnly?: boolean;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
         plannerShareReminderTaskEnabled?: boolean;
@@ -1433,9 +1434,13 @@ function resolveProjectAccessTargets(
     } = {}
 ) {
     const syncConfig = getPremiumSyncConfig();
-    const plannerGroupId =
+    const plannerOwnerTeamOnly =
+        options.plannerOwnerTeamOnly !== undefined
+            ? Boolean(options.plannerOwnerTeamOnly)
+            : Boolean(syncConfig.plannerOwnerTeamOnly);
+    let plannerGroupId =
         options.plannerGroupId !== undefined ? options.plannerGroupId.trim() : (syncConfig.plannerGroupId || "").trim();
-    const plannerGroupResourceIds =
+    let plannerGroupResourceIds =
         options.plannerGroupResourceIds !== undefined
             ? normalizePlannerGroupResourceIds(options.plannerGroupResourceIds)
             : normalizePlannerGroupResourceIds(syncConfig.plannerGroupResourceIds || []);
@@ -1463,11 +1468,16 @@ function resolveProjectAccessTargets(
         options.plannerShareReminderTaskTitle !== undefined
             ? options.plannerShareReminderTaskTitle.trim()
             : (syncConfig.plannerShareReminderTaskTitle || "").trim();
+    if (plannerOwnerTeamOnly) {
+        plannerGroupId = "";
+        plannerGroupResourceIds = [];
+    }
     return {
         plannerGroupId,
         plannerGroupResourceIds,
         plannerOwnerTeamId,
         plannerOwnerTeamAadGroupId,
+        plannerOwnerTeamOnly,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
         plannerShareReminderTaskEnabled,
@@ -1665,6 +1675,7 @@ export async function ensurePremiumProjectTeamAccess(
         plannerGroupResourceIds?: string[];
         plannerOwnerTeamId?: string;
         plannerOwnerTeamAadGroupId?: string;
+        plannerOwnerTeamOnly?: boolean;
         plannerPrimaryResourceId?: string;
         plannerPrimaryResourceName?: string;
         plannerShareReminderTaskEnabled?: boolean;
@@ -1679,6 +1690,7 @@ export async function ensurePremiumProjectTeamAccess(
         plannerGroupResourceIds,
         plannerOwnerTeamId,
         plannerOwnerTeamAadGroupId,
+        plannerOwnerTeamOnly,
         plannerPrimaryResourceId,
         plannerPrimaryResourceName,
         plannerShareReminderTaskEnabled,
@@ -1689,7 +1701,7 @@ export async function ensurePremiumProjectTeamAccess(
     const resourceNameCache = options.resourceNameCache || new Map<string, { id: string; name: string } | null>();
     const ownerTeamCache = options.ownerTeamCache || new Map<string, { id: string; name: string } | null>();
     const targetResourceIds = new Set<string>(plannerGroupResourceIds);
-    if (plannerPrimaryResourceId) {
+    if (!plannerOwnerTeamOnly && plannerPrimaryResourceId) {
         targetResourceIds.add(plannerPrimaryResourceId);
     }
     const result = {
@@ -1707,6 +1719,7 @@ export async function ensurePremiumProjectTeamAccess(
         plannerGroupResourceIds: Array.from(targetResourceIds),
         plannerOwnerTeamId: plannerOwnerTeamId || null,
         plannerOwnerTeamAadGroupId: plannerOwnerTeamAadGroupId || null,
+        plannerOwnerTeamOnly: Boolean(plannerOwnerTeamOnly),
         plannerPrimaryResourceId: plannerPrimaryResourceId || null,
         plannerPrimaryResourceName: plannerPrimaryResourceName || null,
         plannerPrimaryResolvedResourceId: null as string | null,

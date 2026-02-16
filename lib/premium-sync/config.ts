@@ -62,6 +62,7 @@ export function getPremiumSyncConfig() {
         plannerGroupResourceIds: readListEnv("PLANNER_GROUP_RESOURCE_IDS"),
         plannerOwnerTeamId: (readEnv("PLANNER_OWNER_TEAM_ID") || "").trim(),
         plannerOwnerTeamAadGroupId: (readEnv("PLANNER_OWNER_TEAM_AAD_GROUP_ID") || "").trim(),
+        plannerOwnerTeamOnly: readBoolEnv("PLANNER_OWNER_TEAM_ONLY", false),
         plannerPrimaryResourceId: (readEnv("PLANNER_PRIMARY_RESOURCE_ID") || "").trim(),
         plannerPrimaryResourceName: (readEnv("PLANNER_PRIMARY_RESOURCE_NAME") || "").trim(),
         plannerShareReminderTaskEnabled: readBoolEnv("PLANNER_SHARE_REMINDER_TASK_ENABLED", false),

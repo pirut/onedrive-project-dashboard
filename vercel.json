@@ -23,15 +23,11 @@
         },
         {
             "path": "/api/sync/bc-audit",
-            "schedule": "0 8 * * *"
-        },
-        {
-            "path": "/api/sync/auto?cronSecret=YOUR_CRON_SECRET",
-            "schedule": "*/10 * * * *"
+            "schedule": "0 8 * * 0"
         },
         {
             "path": "/api/sync/clear-operation-sets?olderThanMinutes=30&limit=250",
-            "schedule": "0 * * * *"
+            "schedule": "0 */6 * * *"
         },
         {
             "path": "/api/sync/bc-queue-cron?cronSecret=YOUR_CRON_SECRET",
