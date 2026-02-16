@@ -1,4 +1,3 @@
-import "isomorphic-fetch";
 import { ConfidentialClientApplication } from "@azure/msal-node";
 import { logSubmission } from "../lib/kv.js";
 import { processStagingJobWalks } from "../lib/process-staging.js";
@@ -25,9 +24,14 @@ const FASTFIELD_AUTH_HEADER = readEnv("FASTFIELD_AUTH_HEADER", true); // Basic A
 const FASTFIELD_TABLE_ID = readEnv("FASTFIELD_TABLE_ID", true); // We need the table ID, not name
 const FASTFIELD_TABLE_NAME = readEnv("FASTFIELD_TABLE_NAME") || "Cornerstone Active Projects";
 
-function getCronSecretCandidates(req) {
+function getRequestUrl(req) {
+    const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host || "localhost"}`;
+    return new URL(req.url || "", origin);
+}
+
+function getCronSecretCandidates(req, requestUrl) {
     return [
-        req.query?.cronSecret,
+        requestUrl.searchParams.get("cronSecret"),
         req.headers["x-cron-secret"],
         req.headers["x-vercel-cron-secret"],
         (req.headers["authorization"] || "").replace(/^Bearer\s+/i, ""),
@@ -36,14 +40,14 @@ function getCronSecretCandidates(req) {
         .filter(Boolean);
 }
 
-function isCronRequest(req) {
-    return Boolean(req.headers["x-vercel-cron"] || getCronSecretCandidates(req).length > 0);
+function isCronRequest(req, requestUrl) {
+    return Boolean(req.headers["x-vercel-cron"] || getCronSecretCandidates(req, requestUrl).length > 0);
 }
 
-function isAuthorized(req) {
+function isAuthorized(req, requestUrl) {
     const expected = (process.env.CRON_SECRET || "").trim();
     if (!expected) return true;
-    return getCronSecretCandidates(req).includes(expected);
+    return getCronSecretCandidates(req, requestUrl).includes(expected);
 }
 
 const msalApp = new ConfidentialClientApplication({
@@ -559,9 +563,10 @@ async function syncToFastField(folders) {
 
 export default async function handler(req, res) {
     const requestId = Math.random().toString(36).slice(2, 12);
-    const cronRequest = isCronRequest(req);
+    const requestUrl = getRequestUrl(req);
+    const cronRequest = isCronRequest(req, requestUrl);
 
-    if (!isAuthorized(req)) {
+    if (!isAuthorized(req, requestUrl)) {
         return res.status(401).json({
             success: false,
             error: "Unauthorized",
@@ -574,8 +579,8 @@ export default async function handler(req, res) {
         console.log(`[${new Date().toISOString()}] Starting folder sync to FastField...`);
 
         const accessToken = await getAppToken();
-        const siteUrl = req.query?.siteUrl || DEFAULT_SITE_URL;
-        const libraryPath = req.query?.libraryPath || DEFAULT_LIBRARY;
+        const siteUrl = requestUrl.searchParams.get("siteUrl") || DEFAULT_SITE_URL;
+        const libraryPath = requestUrl.searchParams.get("libraryPath") || DEFAULT_LIBRARY;
 
         console.log(`Fetching folders from ${siteUrl}/${libraryPath}...`);
         const folders = await fetchAllFolders(accessToken, siteUrl, libraryPath);
@@ -599,6 +604,14 @@ export default async function handler(req, res) {
                         filename: entry.filename,
                         folderName: entry.folderName,
                     });
+                } else if (entry.status === "skipped") {
+                    await logSubmission({
+                        ...base,
+                        status: "skipped",
+                        filename: entry.filename,
+                        reason: entry.reason || "",
+                        phase: entry.phase || "",
+                    });
                 } else {
                     await logSubmission({
                         ...base,
@@ -620,6 +633,9 @@ export default async function handler(req, res) {
         console.log(`   🗑️  Orphaned entries removed: ${fastFieldResult.orphanedRemovalResult.deleted} items`);
         console.log(`   📈 Total processed: ${fastFieldResult.totalProcessed} folders`);
         console.log(`   📦 Staging PDFs processed: ${stagingResult.processed.length}`);
+        if ((stagingResult.skipped || []).length) {
+            console.log(`   ⏭️  Staging skipped: ${stagingResult.skipped.length}`);
+        }
         if (stagingResult.errors.length) {
             console.log(`   ⚠️  Staging errors: ${stagingResult.errors.length}`);
         }

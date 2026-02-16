@@ -1,4 +1,3 @@
-import "isomorphic-fetch";
 import { processStagingJobWalks } from "../lib/process-staging.js";
 import { logSubmission } from "../lib/kv.js";
 
@@ -54,6 +53,15 @@ export default async function handler(req, res) {
                         source: "fastfield_move",
                         filename: entry.filename,
                         folderName: entry.folderName,
+                    });
+                } else if (entry.status === "skipped") {
+                    await logSubmission({
+                        ...base,
+                        status: "skipped",
+                        source: "fastfield_move",
+                        filename: entry.filename,
+                        reason: entry.reason || "",
+                        phase: entry.phase || "",
                     });
                 } else {
                     await logSubmission({

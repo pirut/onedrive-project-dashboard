@@ -7,6 +7,8 @@ async function main() {
         onResult: (entry) => {
             if (entry.status === "ok") {
                 console.log(`✅ ${entry.filename} -> ${entry.folderName}`);
+            } else if (entry.status === "skipped") {
+                console.log(`⏭️  ${entry.filename}: ${entry.reason || "skipped"}`);
             } else {
                 console.error(`❌ ${entry.filename}: ${entry.error || "unknown error"}`);
             }
@@ -18,7 +20,9 @@ async function main() {
         },
     });
 
-    console.log(`\nProcessed ${result.processed.length} file(s); ${result.errors.length} error(s); scanned ${result.filesScanned}.`);
+    console.log(
+        `\nProcessed ${result.processed.length} file(s); ${result.skipped.length} skipped; ${result.errors.length} error(s); scanned ${result.filesScanned}.`
+    );
     if (result.errors.length) process.exitCode = 1;
 }
 

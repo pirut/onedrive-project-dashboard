@@ -1,4 +1,3 @@
-import "isomorphic-fetch";
 import Busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -206,14 +205,7 @@ export async function getParentItemId(accessToken, driveId, subPathParts) {
 }
 
 async function ensureFolder(accessToken, driveId, parentItemId, targetFolderName) {
-    // list existing children
-    const children = await graphFetch(
-        parentItemId === "root" ? `/drives/${driveId}/root/children` : `/drives/${driveId}/items/${parentItemId}/children`,
-        accessToken
-    );
-    const existing = (children.value || []).find(
-        (it) => it.folder && (it.name || "").trim().toLowerCase() === String(targetFolderName).trim().toLowerCase()
-    );
+    const existing = await findFolder(accessToken, driveId, parentItemId, targetFolderName);
     if (existing) return { id: existing.id, created: false };
     // create
     const payload = {
@@ -230,15 +222,22 @@ async function ensureFolder(accessToken, driveId, parentItemId, targetFolderName
 }
 
 async function findFolder(accessToken, driveId, parentItemId, targetFolderName) {
-    const listPath =
+    let listPath =
         parentItemId === "root"
             ? `/drives/${driveId}/root/children`
             : `/drives/${driveId}/items/${parentItemId}/children`;
-    const children = await graphFetch(listPath, accessToken);
-    const match = (children.value || []).find(
-        (it) => it.folder && (it.name || "").trim().toLowerCase() === String(targetFolderName).trim().toLowerCase()
-    );
-    return match ? { id: match.id, name: match.name } : null;
+    const target = String(targetFolderName).trim().toLowerCase();
+
+    while (listPath) {
+        const children = await graphFetch(listPath, accessToken);
+        const match = (children.value || []).find(
+            (it) => it.folder && (it.name || "").trim().toLowerCase() === target
+        );
+        if (match) return { id: match.id, name: match.name };
+        const nextLink = children["@odata.nextLink"];
+        listPath = nextLink ? nextLink.replace("https://graph.microsoft.com/v1.0", "") : "";
+    }
+    return null;
 }
 
 async function ensureChildFolder(accessToken, driveId, parentItemId, childName) {
