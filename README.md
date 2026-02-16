@@ -352,7 +352,11 @@ BC webhooks let Business Central changes enqueue targeted BC → Premium sync jo
 - `BC_WEBHOOK_PROCESS_INLINE=true` (optional) to process jobs immediately in the webhook (no cron required).
 - `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, default 25) to cap inline processing.
 - `CRON_SECRET` (required for protected cron endpoints like queue sync, renewals, and folder sync).
+- `BC_QUEUE_CRON_LOCK_TTL_SECONDS` (optional, default 600) to prevent overlapping `/api/sync/bc-queue-cron` runs.
 - Ensure KV/Upstash (`KV_REST_API_URL`/`KV_REST_API_TOKEN`) is configured for durable queues.
+
+Dataverse schedule API capacity handling:
+- `DATAVERSE_OPERATION_SET_CAPACITY_CLEANUP_MIN_AGE_MINUTES` (optional, default 0) controls how old completed operation sets must be before auto-cleanup on capacity errors.
 
 2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.
 

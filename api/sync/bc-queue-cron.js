@@ -1,6 +1,7 @@
 import "../../lib/planner-sync/bootstrap.js";
 import { previewBcChanges, syncBcToPremium } from "../../lib/premium-sync/index.js";
 import { logger } from "../../lib/planner-sync/logger.js";
+import { acquireBcJobLock, releaseBcJobLock } from "../../lib/planner-sync/bc-webhook-store.js";
 
 async function readJsonBody(req) {
     const chunks = [];
@@ -21,6 +22,12 @@ function parseBool(value) {
     if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
     if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
     return null;
+}
+
+function parseNumber(value, fallback) {
+    if (value == null || value === "") return fallback;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
 }
 
 function isAuthorized(req) {
@@ -55,6 +62,16 @@ export default async function handler(req, res) {
     const body = req.method === "POST" ? await readJsonBody(req) : null;
     const requestId = body?.requestId ? String(body.requestId) : url.searchParams.get("requestId") || undefined;
     const dryRun = parseBool(body?.dryRun ?? url.searchParams.get("dryRun")) === true;
+    const lockTtlSeconds = Math.max(
+        60,
+        Math.floor(parseNumber(process.env.BC_QUEUE_CRON_LOCK_TTL_SECONDS, 600))
+    );
+
+    const lock = await acquireBcJobLock(lockTtlSeconds);
+    if (!lock) {
+        res.status(200).json({ ok: true, skipped: true, reason: "locked", requestId });
+        return;
+    }
 
     try {
         if (dryRun) {
@@ -73,5 +90,7 @@ export default async function handler(req, res) {
         const errorMessage = error?.message || String(error);
         logger.error("BC queue cron sync failed", { error: errorMessage, requestId });
         res.status(500).json({ ok: false, error: errorMessage, requestId });
+    } finally {
+        await releaseBcJobLock(lock);
     }
 }

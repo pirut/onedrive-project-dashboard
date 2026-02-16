@@ -1,5 +1,6 @@
 import { previewBcChanges, syncBcToPremium } from "../../../../../lib/premium-sync";
 import { logger } from "../../../../../lib/planner-sync/logger";
+import { acquireBcJobLock, releaseBcJobLock } from "../../../../../lib/planner-sync/bc-webhook-store";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,12 @@ function parseBool(value: unknown) {
     if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
     if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
     return null;
+}
+
+function parseNumber(value: unknown, fallback: number) {
+    if (value == null || value === "") return fallback;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
 }
 
 function isAuthorized(request: Request, url: URL) {
@@ -48,6 +55,17 @@ async function handle(request: Request) {
     const body = request.method === "POST" ? await readJsonBody(request) : null;
     const requestId = body?.requestId ? String(body.requestId) : url.searchParams.get("requestId") || undefined;
     const dryRun = parseBool(body?.dryRun ?? url.searchParams.get("dryRun")) === true;
+    const lockTtlSeconds = Math.max(
+        60,
+        Math.floor(parseNumber(process.env.BC_QUEUE_CRON_LOCK_TTL_SECONDS, 600))
+    );
+    const lock = await acquireBcJobLock(lockTtlSeconds);
+    if (!lock) {
+        return new Response(JSON.stringify({ ok: true, skipped: true, reason: "locked", requestId }, null, 2), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        });
+    }
 
     try {
         if (dryRun) {
@@ -74,6 +92,8 @@ async function handle(request: Request) {
             status: 500,
             headers: { "Content-Type": "application/json" },
         });
+    } finally {
+        await releaseBcJobLock(lock);
     }
 }
 

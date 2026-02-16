@@ -307,7 +307,8 @@ async function resolveOperationSetEntitySet(dataverse: DataverseClient) {
 
 async function clearCompletedOperationSetsForCapacity(dataverse: DataverseClient, meta: Record<string, unknown> = {}) {
     const entitySet = await resolveOperationSetEntitySet(dataverse);
-    const olderThanMinutes = 5;
+    const cleanupAgeRaw = Number(process.env.DATAVERSE_OPERATION_SET_CAPACITY_CLEANUP_MIN_AGE_MINUTES || 0);
+    const olderThanMinutes = Number.isFinite(cleanupAgeRaw) ? Math.max(0, Math.floor(cleanupAgeRaw)) : 0;
     const pageSize = 50;
     const maxPages = 10;
     const maxDelete = 250;
