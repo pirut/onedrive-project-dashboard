@@ -86,14 +86,14 @@ async function listOperationSets(dataverse, entitySet, pageSize, maxPages, limit
 }
 
 export default async function handler(req, res) {
-    if (req.method !== "POST") {
+    if (req.method !== "POST" && req.method !== "GET") {
         res.status(405).json({ ok: false, error: "Method not allowed" });
         return;
     }
 
     const origin = `${req.headers["x-forwarded-proto"] || "https"}://${req.headers.host || "localhost"}`;
     const url = new URL(req.url || "", origin);
-    const body = await readJsonBody(req);
+    const body = req.method === "POST" ? await readJsonBody(req) : null;
 
     const entitySetOverride = String(body?.entitySet || url.searchParams.get("entitySet") || "").trim();
     const pageSize = Math.max(1, Math.min(500, parseNumber(body?.pageSize ?? url.searchParams.get("pageSize"), 50)));

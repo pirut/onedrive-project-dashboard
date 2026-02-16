@@ -82,7 +82,7 @@ async function listOperationSets(dataverse: DataverseClient, entitySet: string, 
 
 async function handle(request: Request) {
     const url = new URL(request.url);
-    const body = await readJsonBody(request);
+    const body = request.method === "POST" ? await readJsonBody(request) : null;
 
     const entitySetOverride = String(body?.entitySet || url.searchParams.get("entitySet") || "").trim();
     const pageSize = Math.max(1, Math.min(500, parseNumber(body?.pageSize ?? url.searchParams.get("pageSize"), 50)));
@@ -154,5 +154,9 @@ async function handle(request: Request) {
 }
 
 export async function POST(request: Request) {
+    return handle(request);
+}
+
+export async function GET(request: Request) {
     return handle(request);
 }

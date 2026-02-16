@@ -62,7 +62,7 @@ export default async function handler(req, res) {
         "GET /api/sync/list-owner-teams": "List Dataverse teams for Premium owner-team sharing",
         "GET /api/sync/debug-operation-sets": "List Dataverse operation sets (schedule API)",
         "GET /api/sync/debug-pss-error-logs": "List Dataverse PSS error logs (schedule API)",
-        "POST /api/sync/clear-operation-sets": "Delete Dataverse operation sets (schedule API)",
+        "GET/POST /api/sync/clear-operation-sets": "Delete Dataverse operation sets (schedule API)",
         "GET /api/sync/debug-dataverse-webhook": "List Dataverse webhook endpoints + steps",
         "GET /api/sync/debug-dataverse-webhook-jobs": "List Dataverse webhook async jobs",
         "POST /api/sync/premium-change/poll": "Poll Premium changes via Dataverse delta (legacy)",
