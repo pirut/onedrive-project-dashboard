@@ -7,6 +7,9 @@
         },
         "api/sync/bc-audit.js": {
             "maxDuration": 300
+        },
+        "api/sync/bc-queue-cron.js": {
+            "maxDuration": 300
         }
     },
     "crons": [
@@ -29,6 +32,10 @@
         {
             "path": "/api/sync/clear-operation-sets?olderThanMinutes=30&limit=250",
             "schedule": "0 * * * *"
+        },
+        {
+            "path": "/api/sync/bc-queue-cron?cronSecret=YOUR_CRON_SECRET",
+            "schedule": "*/5 * * * *"
         }
     ],
     "headers": [

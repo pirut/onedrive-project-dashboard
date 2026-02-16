@@ -253,6 +253,7 @@ Preferred path is Dataverse change tracking (delta links). Optionally register D
 - `POST /api/sync/bc-to-premium` (optional JSON: `{ \"projectNo\": \"P-100\" }`, set `includePremiumChanges: true` to run both)
 - `POST /api/sync/premium-to-bc`
 - `POST /api/sync/auto` (decides direction by most recent changes)
+- `POST /api/sync/bc-queue-cron` (processes BC sync queue end-to-end; accepts `dryRun=1`)
 - `POST /api/sync/premium-change/poll` (legacy)
 - `GET /api/sync/projects` (list Premium projects + sync state)
 - `GET /api/sync/premium-project-link` (resolve a Premium plan link by projectNo/projectId)
@@ -286,6 +287,12 @@ curl -X POST https://your-domain.com/api/sync/premium-to-bc
 
 # Auto sync (decides by most recent changes)
 curl -X POST https://your-domain.com/api/sync/auto
+
+# Run BC queue cron handler now (syncs queue + clears successful entries)
+curl -X POST "https://your-domain.com/api/sync/bc-queue-cron?cronSecret=YOUR_SECRET"
+
+# Preview BC queue size without syncing
+curl -X GET "https://your-domain.com/api/sync/bc-queue-cron?dryRun=1&cronSecret=YOUR_SECRET"
 
 # Resolve Premium plan link for a BC project (JSON)
 curl -X GET \"https://your-domain.com/api/sync/premium-project-link?projectNo=P-100\"
@@ -343,7 +350,7 @@ BC webhooks let Business Central changes enqueue targeted BC → Premium sync jo
 - `BC_WEBHOOK_SHARED_SECRET` (optional) is sent as `clientState` and validated on receipt.
 - `BC_WEBHOOK_PROCESS_INLINE=true` (optional) to process jobs immediately in the webhook (no cron required).
 - `BC_WEBHOOK_INLINE_MAX_JOBS` (optional, default 25) to cap inline processing.
-- `CRON_SECRET` (only required if you use Vercel cron for renewals).
+- `CRON_SECRET` (required for protected cron endpoints like queue sync, renewals, and auto sync).
 - Ensure KV/Upstash (`KV_REST_API_URL`/`KV_REST_API_TOKEN`) is configured for durable queues.
 
 2) Expose locally (optional): use ngrok/cloudflared and set `BC_WEBHOOK_NOTIFICATION_URL` to the HTTPS tunnel URL.
@@ -380,8 +387,8 @@ Use `forceRecreate=1` to delete/recreate subscriptions on every run (useful if y
 curl -X POST "https://your-domain.com/api/sync/bc-subscriptions/renew?forceRecreate=1&cronSecret=YOUR_SECRET"
 ```
 
-Vercel Cron can call `/api/sync/bc-subscriptions/renew?forceRecreate=1` nightly and `/api/sync/bc-jobs/process` every few minutes. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
-Cron auth now protects `/api/sync/auto` and `/api/sync-folders-cron` as well, so include the same secret there.
+Vercel Cron can call `/api/sync/bc-subscriptions/renew?forceRecreate=1` nightly, `/api/sync/bc-jobs/process` every few minutes, and `/api/sync/bc-queue-cron` every 5 minutes as a webhook fallback that processes the BC sync queue and clears successful queue rows. If using Vercel Cron, append `?cronSecret=...` to the cron paths (or send the `x-cron-secret` header) to satisfy the auth check.
+Cron auth should be used for `/api/sync/auto` and `/api/sync-folders-cron` as well, using the same secret.
 
 ## Notes
 
