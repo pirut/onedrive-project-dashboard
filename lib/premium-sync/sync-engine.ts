@@ -3107,6 +3107,48 @@ async function resolveBcQueueTargets(
     };
 }
 
+function limitBcQueueTargets(
+    info: BcQueueTargetInfo,
+    maxProjectsPerRun: number
+): BcQueueTargetInfo {
+    const limit = Math.max(0, Math.floor(maxProjectsPerRun));
+    if (!limit || info.projectNos.length <= limit) {
+        return info;
+    }
+
+    const selectedProjects = info.projectNos.slice(0, limit);
+    const selectedSet = new Set(selectedProjects);
+    const taskSystemIdsByProject = new Map<string, Set<string>>();
+    const queueEntriesByProject = new Map<string, BcQueueEntryRef[]>();
+    const fullSyncProjects = new Set<string>();
+
+    for (const projectNo of selectedProjects) {
+        const taskIds = info.taskSystemIdsByProject.get(projectNo);
+        if (taskIds?.size) {
+            taskSystemIdsByProject.set(projectNo, new Set(taskIds));
+        }
+        const queueEntries = info.queueEntriesByProject.get(projectNo);
+        if (queueEntries?.length) {
+            queueEntriesByProject.set(projectNo, [...queueEntries]);
+        }
+        if (info.fullSyncProjects.has(projectNo)) {
+            fullSyncProjects.add(projectNo);
+        }
+    }
+
+    return {
+        ...info,
+        projectNos: selectedProjects,
+        queueEntries: info.queueEntries.filter((entry) => {
+            const projectNo = toTrimmedString(entry?.[BC_QUEUE_PROJECT_NO_FIELD]);
+            return projectNo ? selectedSet.has(projectNo) : true;
+        }),
+        taskSystemIdsByProject,
+        queueEntriesByProject,
+        fullSyncProjects,
+    };
+}
+
 async function markPremiumTaskWrite(taskId: string, meta: Record<string, unknown> = {}) {
     if (!taskId) return;
     try {
@@ -3174,11 +3216,22 @@ export async function syncBcToPremium(
 
     if (!projectNos.length && !taskSystemIdSet) {
         try {
-            const queueTargets = await resolveBcQueueTargets(bcClient, { requestId });
+            const queueTargets = limitBcQueueTargets(
+                await resolveBcQueueTargets(bcClient, { requestId }),
+                syncConfig.maxProjectsPerRun
+            );
             projectNos = queueTargets.projectNos;
             taskSystemIdsByProject = queueTargets.taskSystemIdsByProject;
             queueEntriesByProject = queueTargets.queueEntriesByProject;
             fullSyncProjects = queueTargets.fullSyncProjects;
+            if (syncConfig.maxProjectsPerRun > 0 && projectNos.length) {
+                logger.info("BC queue targets selected for this run", {
+                    requestId,
+                    projectCount: projectNos.length,
+                    maxProjectsPerRun: syncConfig.maxProjectsPerRun,
+                    projectNos,
+                });
+            }
         } catch (error) {
             logger.warn("BC queue load failed", {
                 requestId,
@@ -3277,6 +3330,14 @@ export async function syncBcToPremium(
         const projectCreatedStart = result.created;
         const projectUpdatedStart = result.updated;
         const projectSkippedStart = result.skipped;
+        let projectRecorded = false;
+
+        const recordProject = () => {
+            if (projectRecorded) return;
+            result.projects += 1;
+            result.projectNos.push(projNo);
+            projectRecorded = true;
+        };
 
         let tasks: BcProjectTask[] = [];
         let scopedTaskSystemIdSet =
@@ -3284,6 +3345,8 @@ export async function syncBcToPremium(
             (taskSystemIdsByProject && !fullSyncProjects?.has(projNo)
                 ? taskSystemIdsByProject.get(projNo) || null
                 : null);
+
+        try {
         try {
             if (scopedTaskSystemIdSet) {
                 const resolved: BcProjectTask[] = [];
@@ -3562,8 +3625,7 @@ export async function syncBcToPremium(
                     projectNo: projNo,
                 });
             }
-            result.projects += 1;
-            result.projectNos.push(projNo);
+            recordProject();
             continue;
         }
 
@@ -3891,8 +3953,7 @@ export async function syncBcToPremium(
                 }
             }
 
-            result.projects += 1;
-            result.projectNos.push(projNo);
+            recordProject();
             if (requestId) {
                 logger.info("BC -> Premium project sync summary", {
                     requestId,
@@ -3913,6 +3974,15 @@ export async function syncBcToPremium(
                 await cleanupUnusedOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
             }
             await cleanupOperationSet(dataverse, operationSetId, { projectId, projectNo: projNo });
+        }
+        } catch (error) {
+            result.errors += 1;
+            recordProject();
+            logger.error("BC -> Premium project sync failed", {
+                requestId,
+                projectNo: projNo,
+                error: (error as Error)?.message || String(error),
+            });
         }
     }
 

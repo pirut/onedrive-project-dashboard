@@ -43,6 +43,8 @@ function readNumberListEnv(name: string, fallback: number[]) {
 const DEFAULT_SYNC_TASK_NUMBERS: number[] = [];
 
 export function getPremiumSyncConfig() {
+    const maxProjectsPerRunRaw = readEnv("SYNC_MAX_PROJECTS_PER_RUN") || (process.env.VERCEL ? "50" : "0");
+    const maxProjectsPerRun = Number(maxProjectsPerRunRaw);
     return {
         preferBc: readBoolEnv("SYNC_PREFER_BC", true),
         bcModifiedGraceMs: readNumberEnv("SYNC_BC_MODIFIED_GRACE_MS", 2000),
@@ -51,7 +53,7 @@ export function getPremiumSyncConfig() {
         taskConcurrency: Math.max(1, Math.floor(readNumberEnv("SYNC_TASK_CONCURRENCY", 6))),
         projectConcurrency: Math.max(1, Math.floor(readNumberEnv("SYNC_PROJECT_CONCURRENCY", 2))),
         deleteBehavior: (readEnv("PREMIUM_DELETE_BEHAVIOR") || "clearLink") as PremiumDeleteBehavior,
-        maxProjectsPerRun: Math.max(0, Math.floor(readNumberEnv("SYNC_MAX_PROJECTS_PER_RUN", 0))),
+        maxProjectsPerRun: Number.isNaN(maxProjectsPerRun) ? 0 : Math.max(0, Math.floor(maxProjectsPerRun)),
         pollPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_PAGE_SIZE", 200))),
         pollMaxPages: Math.max(1, Math.floor(readNumberEnv("PREMIUM_POLL_MAX_PAGES", 10))),
         previewPageSize: Math.max(1, Math.floor(readNumberEnv("PREMIUM_PREVIEW_PAGE_SIZE", 50))),
